@@ -102,8 +102,6 @@ async def setup_bot_commands(bot):
             BotCommand("ban", "Ban a user (admin)"),
             BotCommand("unban", "Unban a user (admin)"),
             BotCommand("autodel", "Auto-delete settings (admin)"),
-            BotCommand("dl", "Enable or disable download links (admin)"),
-            BotCommand("stream", "Enable or disable streaming links (admin)"),
             BotCommand("ss", "Generate screenshots"),
             BotCommand("sv", "Generate sample video"),
             BotCommand("mi", "MediaInfo for a file"),
@@ -1238,43 +1236,6 @@ def register_handlers(bot):
             )
         except Exception:
             await message.reply("⚠️ **Usage:** `/unban USER_ID`")
-
-    async def _set_link_service_state(message: Message, service: str, enabled: bool):
-        """Persistently toggle a public link service; enforcement happens in HTTP routes."""
-        field = "downloads_enabled" if service == "download" else "streaming_enabled"
-        await db.site_settings.update_one(
-            {"_id": "runtime"},
-            {"$set": {field: enabled, "updated_at": datetime.datetime.utcnow(), "updated_by": message.from_user.id}},
-            upsert=True,
-        )
-        label = "Download links" if service == "download" else "Streaming links"
-        state = "ENABLED" if enabled else "DISABLED"
-        icon = "✅" if enabled else "🚫"
-        await message.reply(
-            f"{icon} **{label} {state}**\n\n"
-            + (f"> New and existing {service} links will work." if enabled else
-               f"> All existing and new {service} links are blocked until you enable them again with /{ 'dl' if service == 'download' else 'stream' } on.")
-        )
-
-    @bot.on_message(filters.command("dl"))
-    async def dl_toggle_handler(client, message: Message):
-        user = message.from_user
-        if not user or user.is_bot or not _is_admin_user(user.id):
-            return
-        args = (message.text or "").split()
-        if len(args) != 2 or args[1].lower() not in {"on", "off"}:
-            return await message.reply("⚙️ **Usage:** `/dl on` or `/dl off`\n\nControls all `/dl/` download URLs, including previously generated links.")
-        await _set_link_service_state(message, "download", args[1].lower() == "on")
-
-    @bot.on_message(filters.command("stream"))
-    async def stream_toggle_handler(client, message: Message):
-        user = message.from_user
-        if not user or user.is_bot or not _is_admin_user(user.id):
-            return
-        args = (message.text or "").split()
-        if len(args) != 2 or args[1].lower() not in {"on", "off"}:
-            return await message.reply("⚙️ **Usage:** `/stream on` or `/stream off`\n\nControls all `/stream/` and remux streaming URLs, including previously generated links.")
-        await _set_link_service_state(message, "streaming", args[1].lower() == "on")
 
     @bot.on_message(filters.command("autodel"))
     async def autodel_handler(client, message: Message):

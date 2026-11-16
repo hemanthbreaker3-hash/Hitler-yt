@@ -262,8 +262,6 @@ class SessionManager:
             BotCommand("ban", "Ban user (admin)"),
             BotCommand("unban", "Unban user (admin)"),
             BotCommand("autodel", "Auto-delete timer (admin)"),
-            BotCommand("dl", "Enable or disable download links (admin)"),
-            BotCommand("stream", "Enable or disable streaming links (admin)"),
         ]
         try:
             await self.bot_client.set_bot_commands(commands)

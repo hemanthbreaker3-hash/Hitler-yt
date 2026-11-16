@@ -511,7 +511,10 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0a0a0a">
   <meta name="description" content="HITLER YT · Movies & Series">
+  <meta name="google-adsense-account" content="ca-pub-6636601525186884">
   <title>${escapeHtml(title)}</title>
+  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6636601525186884"
+       crossorigin="anonymous"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <style>
     :root{
@@ -1950,6 +1953,29 @@ export default async function handler(req, res) {
     }
 
     const { pathname, search, searchParams } = getRequestPath(req);
+
+    if (pathname === '/ads.txt') {
+      const body = 'google.com, pub-6636601525186884, DIRECT, f08c47fec0942fa0\n';
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Length', Buffer.byteLength(body));
+      res.end(req.method === 'HEAD' ? undefined : body);
+      return;
+    }
+
+    if (pathname === '/robots.txt') {
+      const body = 'User-agent: *\nAllow: /\n';
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Length', Buffer.byteLength(body));
+      res.end(req.method === 'HEAD' ? undefined : body);
+      return;
+    }
+
 
     if (pathname === '/api/health' || pathname === '/health') {
       try {
