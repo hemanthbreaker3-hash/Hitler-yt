@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     SESSIONS: str = ""
     ADMIN_PANEL_TOKEN: str = ""
     TMDB_API_KEY: str = ""
+    OMDB_API_KEY: str = ""
     STREAM_CHUNK_SIZE: int = 4194304
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=True)
