@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#06060f">
+  <meta name="description" content="HITLER Telegram media streaming">
+  <title>{% block title %}HITLER{% endblock %}</title>
+  <style>
+    :root{
+      color-scheme:dark;
+      --bg:#06060f;
+      --bg2:#0a0a18;
+      --card:#0e0e1c;
+      --card2:#12122a;
+      --line:#1e1e3a;
+      --line2:#2a2a4a;
+      --text:#eef0ff;
+      --muted:#8b8db0;
+      --blue:#3b82f6;
+      --blue-glow:#60a5fa;
+      --red:#3b82f6;
+      --red-glow:#93c5fd;
+      --accent:#2563eb;
+      --neon-blue:0 0 12px rgba(59,130,246,.55),0 0 28px rgba(59,130,246,.25);
+      --neon-red:0 0 12px rgba(59,130,246,.55),0 0 28px rgba(59,130,246,.25);
+      --radius:14px;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;
+      background:radial-gradient(1200px 600px at 10% -10%,rgba(59,130,246,.12),transparent 55%),
+                 radial-gradient(900px 500px at 100% 0%,rgba(59,130,246,.10),transparent 50%),
+                 var(--bg);
+      color:var(--text);
+      font:400 15px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      min-height:100vh;
+    }
+    a{color:inherit;text-decoration:none}
+    button,input,select{font:inherit}
+    .wrap{width:min(100% - 24px,980px);margin:auto}
+    .topbar{
+      height:60px;
+      display:flex;
+      align-items:center;
+      border-bottom:1px solid var(--line);
+      position:sticky;
+      top:0;
+      background:rgba(6,6,15,.94);
+      backdrop-filter:blur(12px);
+      z-index:20;
+    }
+    .topbar-inner{
+      width:min(100% - 24px,980px);
+      margin:auto;
+      display:grid;
+      grid-template-columns:auto 1fr auto;
+      align-items:center;
+      gap:12px;
+    }
+    .topbar-logo{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex-shrink:0;
+    }
+    .topbar-logo img{
+      width:38px;
+      height:38px;
+      border-radius:10px;
+      object-fit:cover;
+      border:1px solid rgba(59,130,246,.35);
+      box-shadow:0 0 12px rgba(59,130,246,.35);
+    }
+    .topbar-title{
+      text-align:center;
+      font-weight:800;
+      font-size:15px;
+      letter-spacing:.4px;
+      color:var(--text);
+      line-height:1.2;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .topbar-title span{
+      color:var(--blue-glow);
+      text-shadow:var(--neon-red);
+    }
+    .brand-link{
+      color:var(--muted);
+      font-size:13px;
+      transition:color .2s;
+      flex-shrink:0;
+      justify-self:end;
+    }
+    .brand-link:hover{color:var(--blue-glow)}
+    .card{
+      background:linear-gradient(160deg,var(--card),var(--card2));
+      border:1px solid var(--line);
+      border-radius:var(--radius);
+      box-shadow:0 4px 24px rgba(0,0,0,.35);
+    }
+    .muted{color:var(--muted)}
+    .btn{
+      display:inline-flex;align-items:center;justify-content:center;
+      min-height:42px;padding:0 16px;
+      border:1px solid var(--line2);
+      border-radius:11px;
+      background:linear-gradient(180deg,#16162e,#101022);
+      color:#fff;cursor:pointer;
+      transition:border-color .2s,box-shadow .2s,transform .15s;
+    }
+    .btn:hover{border-color:var(--blue);box-shadow:var(--neon-blue);transform:translateY(-1px)}
+    .btn:active{transform:translateY(0)}
+    .accent{
+      background:linear-gradient(135deg,#2563eb,#1d4ed8);
+      border-color:var(--blue-glow);
+      box-shadow:var(--neon-red);
+    }
+    .accent:hover{border-color:var(--red-glow);box-shadow:0 0 16px rgba(59,130,246,.7)}
+    main{padding:28px 0 100px}
+    .footer{text-align:center;color:#555;font-size:12px;padding:28px 0 80px;border-top:1px solid var(--line)}
+    img,video,iframe{max-width:100%}
+    button,a{-webkit-tap-highlight-color:transparent}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important}}
+    @media(max-width:600px){
+      main{padding-top:18px}
+      .wrap{width:min(100% - 16px,980px)}
+      .topbar-inner{width:min(100% - 16px,980px)}
+      .topbar-title{font-size:13px}
+      .topbar-logo img{width:34px;height:34px}
+    }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="topbar-logo" href="/" title="HITLER">
+      <img src="/static/images/logo.jpg" alt="HITLER logo" width="38" height="38" loading="eager" decoding="async">
+    </a>
+    <div class="topbar-title"><strong>HITLER YT</strong></div>
+    <a class="brand-link" href="https://t.me/HiTLERYT" target="_blank" rel="noopener">@hitleryt</a>
+  </div>
+</header>
+<main><div class="wrap">{% block content %}{% endblock %}</div></main>
+<footer class="footer"><a href="https://t.me/HiTLERYT" target="_blank" rel="noopener">HITLER YT · @hitleryt</a></footer>
+</body>
+</html>
