@@ -30,3 +30,12 @@ The endpoint retains attachment disposition for `/dl/`, inline disposition for `
 - Synthetic Telegram streamer test: verified exact byte output across chunk boundaries and successful retry after a simulated connection interruption.
 
 A live Telegram/Cloudflare end-to-end throughput test still requires deployment with the project's actual WZGram credentials and helper bots.
+
+## Admin link controls
+
+The bot owner and configured admins can globally control public link types:
+
+- `/dl off` blocks every existing and newly generated `/dl/{short_code}` URL with HTTP 403. `/dl on` re-enables them.
+- `/stream off` blocks every existing and newly generated `/stream/{short_code}` URL and remux stream endpoints with HTTP 403. `/stream on` re-enables them.
+
+These switches are stored in MongoDB (`site_settings`, `_id: runtime`) and survive restarts. They do not delete files or revoke short codes; re-enabling restores access to the same links. The download and streaming switches are independent. The controls are restricted to the configured owner/admin IDs.

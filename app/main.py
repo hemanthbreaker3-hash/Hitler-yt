@@ -291,7 +291,7 @@ async def get_tracks(short_code: str):
 async def remux_file(request: Request, short_code: str, audio: int = 0, aac: int = 1):
     """Browser-friendly fragmented MP4; AAC by default for universal audio."""
     if (await get_settings()).get("streaming_enabled") is False:
-        raise HTTPException(status_code=403, detail="Streaming is currently disabled")
+        raise HTTPException(status_code=403, detail="Streaming is currently disabled by the administrator")
     file_data = await files_col.find_one({"short_code": short_code})
     if not file_data:
         raise HTTPException(status_code=404, detail="File not found")

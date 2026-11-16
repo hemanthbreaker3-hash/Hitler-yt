@@ -1,6 +1,23 @@
 {% extends "base.html" %}
 {% block title %}HITLER YT · Movies & Series{% endblock %}
+{% block head %}
+<style>
+.home-hero{position:relative;display:flex;align-items:center;justify-content:space-between;gap:20px;min-height:190px;margin:4px 0 22px;padding:30px clamp(20px,5vw,46px);overflow:hidden;border:1px solid rgba(70,174,239,.2);border-radius:20px;background:radial-gradient(circle at 82% 48%,rgba(40,155,229,.2),transparent 26%),linear-gradient(115deg,#101e31,#0b1423 70%,#101726);box-shadow:0 16px 38px rgba(0,0,0,.2)}
+.home-hero:after{content:"";position:absolute;width:250px;height:250px;right:7%;top:-120px;border:1px solid rgba(79,190,255,.16);border-radius:50%;box-shadow:0 0 0 24px rgba(79,190,255,.025),0 0 0 48px rgba(79,190,255,.02)}
+.hero-copy{position:relative;z-index:1;max-width:650px}.hero-kicker{display:inline-flex;align-items:center;gap:8px;color:#75d1ff;font-size:10px;font-weight:800;letter-spacing:.16em}.hero-copy h1{margin:10px 0 7px;font-size:clamp(27px,5vw,43px);line-height:1.12;letter-spacing:-.045em;color:#f4f8ff}.hero-copy h1 span{color:#58c5ff}.hero-copy p{max-width:540px;color:#a5b5c9;font-size:14px}.hero-mark{position:relative;z-index:1;display:grid;place-items:center;flex:0 0 76px;width:76px;height:76px;border:1px solid rgba(89,199,255,.35);border-radius:24px;background:rgba(53,183,255,.1);color:#74d4ff;font-size:25px;box-shadow:0 0 35px rgba(53,183,255,.12)}
+@media(max-width:600px){.home-hero{min-height:166px;padding:23px 19px;border-radius:16px}.hero-mark{width:52px;height:52px;flex-basis:52px;border-radius:17px;font-size:18px}.hero-copy p{font-size:12px}.hero-kicker{font-size:9px}}
+</style>
+{% endblock %}
 {% block content %}
+
+<section class="home-hero" aria-label="Welcome">
+  <div class="hero-copy">
+    <span class="hero-kicker"><i class="fa-solid fa-sparkles"></i> YOUR ENTERTAINMENT HUB</span>
+    <h1>Find your next <span>favorite</span>.</h1>
+    <p>Explore movies and series, then stream or download with a smooth experience on any screen.</p>
+  </div>
+  <div class="hero-mark" aria-hidden="true"><i class="fa-solid fa-play"></i></div>
+</section>
 
 <!-- Trending / Top row (horizontal) -->
 <div id="trending-row" class="trending-row" style="display:none"></div>
