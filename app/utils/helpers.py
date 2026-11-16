@@ -38,6 +38,8 @@ def normalize_public_base_url(value: str) -> str:
     host = (parsed.hostname or "").lower().rstrip(".")
     if not host or host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
         raise ValueError("BASE_URL must be publicly reachable; localhost/private URLs cannot be Telegram buttons.")
+    if host.endswith(".trycloudflare.com"):
+        raise ValueError("Quick Tunnel URLs (trycloudflare.com) are temporary. Use a stable named Cloudflare Tunnel hostname or your permanent Vercel website URL for BASE_URL.")
 
     try:
         port = parsed.port

@@ -76,7 +76,19 @@ templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "HITLER"}
+    mongo_status = "ok"
+    try:
+        await mongo_client.admin.command("ping")
+    except Exception as exc:
+        mongo_status = f"error:{type(exc).__name__}"
+    sessions = len(session_manager.get_all_clients())
+    return {
+        "status": "ok" if mongo_status == "ok" else "degraded",
+        "service": "HITLER",
+        "database": mongo_status,
+        "telegram_sessions": sessions,
+        "download_ready": mongo_status == "ok" and sessions > 0,
+    }
 
 @app.get("/")
 async def index(request: Request):

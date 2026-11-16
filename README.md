@@ -10,6 +10,8 @@ A Telegram media-link bot and responsive OTT-style website. The VPS runs the Tel
 - **Cloudflare Pages:** optional alternate website gateway in `cloudflare/pages`. It proxies all routes to the same FastAPI backend, so the pages and content match the Vercel website.
 - **Cloudflare Tunnel:** exposes the VPS backend over HTTPS. Use a stable named tunnel hostname in production.
 
+**Important:** `trycloudflare.com` Quick Tunnel hostnames are temporary and can change when the tunnel restarts. Do not use a Quick Tunnel URL as the permanent `BASE_URL` or `BACKEND_URL`. Create a named Cloudflare Tunnel with a fixed hostname (or use a stable VPS domain), set that hostname as `BACKEND_URL`, and set the public Vercel/Pages domain as `BASE_URL`. Old links pointing directly to an expired Quick Tunnel hostname cannot be repaired by application code; they must be reissued on the stable website domain.
+
 A download/watch link has no application-level expiry by default. It remains usable while its MongoDB record exists, the original Telegram message/file remains accessible, the Telegram session is authorized, and the VPS backend is online. This cannot protect against deletion of the source media or an upstream Telegram/account outage.
 
 ## 1. Configure the VPS
@@ -41,7 +43,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-For Docker, configure `.env` and run `docker compose up -d --build`. Check `https://YOUR_BACKEND/health` returns `{"status":"ok","service":"HITLER"}`.
+For Docker, configure `.env` and run `docker compose up -d --build`. Check `https://YOUR_BACKEND/health` returns database and Telegram session status. Do not use a `trycloudflare.com` Quick Tunnel as a permanent URL; the application now rejects it for `BASE_URL` because it can expire or change after a restart.
 
 ## 2. Deploy to Vercel
 

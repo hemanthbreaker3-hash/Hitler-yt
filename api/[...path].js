@@ -57,11 +57,23 @@ async function syncVercelWebsiteUrls(req, db) {
   ];
   const urls = [...new Set(candidates.map(validPublicUrl).filter(Boolean))];
   for (const url of urls) {
-    await db.collection('settings').updateOne(
-      { key: 'website_urls' },
-      { $addToSet: { value: url }, $set: { updated_at: new Date() } },
-      { upsert: true },
-    );
+    try {
+      const settings = db.collection('settings');
+      const existing = await settings.findOne({ key: 'website_urls' }, { projection: { value: 1 } });
+      // Older deployments may have stored a scalar value here. Normalize it before $addToSet.
+      if (existing && !Array.isArray(existing.value)) {
+        const legacy = existing.value ? [String(existing.value)] : [];
+        await settings.updateOne({ key: 'website_urls' }, { $set: { value: legacy, updated_at: new Date() } });
+      }
+      await settings.updateOne(
+        { key: 'website_urls' },
+        { $addToSet: { value: url }, $set: { updated_at: new Date() } },
+        { upsert: true },
+      );
+    } catch (error) {
+      // URL discovery must never take down public catalog reads.
+      console.warn('Could not synchronize website URL:', error?.message || error);
+    }
   }
   const productionCandidate = process.env.WEBSITE_URL ||
     (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` :
@@ -143,7 +155,8 @@ async function handleMongoPublicApi(req, res, pathname, search) {
     console.error('Vercel MongoDB public API error:', error);
     sendJson(res, 503, {
       error: 'Shared MongoDB unavailable',
-      message: 'Check that Vercel MONGODB_URI and DATABASE_NAME exactly match the VPS values and that MongoDB Atlas allows Vercel connections.',
+      message: 'Catalog database query failed. Check Vercel function logs, MONGODB_URI, DATABASE_NAME, Atlas Network Access, and read permissions.',
+      diagnostic: String(error?.message || 'Unknown MongoDB error').slice(0, 300),
     });
     return true;
   }

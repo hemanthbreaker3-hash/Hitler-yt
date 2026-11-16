@@ -137,8 +137,11 @@
       }
     } catch (e) {
       const message = (e && e.message) ? e.message : 'Catalog request failed';
-      document.getElementById('catalog-grid').innerHTML = '<p class="muted" style="grid-column:1/-1;padding:40px 0;text-align:center">Unable to load titles right now. ' + String(message).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c])) + '</p>';
-      document.getElementById('result-count').textContent = 'Error';
+      const grid = document.getElementById('catalog-grid');
+      const safeMessage = String(message).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
+      grid.innerHTML = '<div style="grid-column:1/-1;padding:38px 16px;text-align:center;background:#141414;border:1px solid #333;border-radius:14px"><strong style="display:block;font-size:17px;color:#fff;margin-bottom:8px">Catalog temporarily unavailable</strong><p class="muted" style="margin-bottom:14px">' + safeMessage + '</p><button class="btn-yellow" type="button" id="catalog-retry">Try again</button></div>';
+      document.getElementById('catalog-retry')?.addEventListener('click', load);
+      document.getElementById('result-count').textContent = 'Unavailable';
     }
   }
   await load();

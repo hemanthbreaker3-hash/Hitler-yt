@@ -81,11 +81,16 @@ async def public_categories():
 
 @router.get('/api/catalog')
 async def catalog(category: str | None = None, q: str | None = None):
-    query = {'published':True}
+    query = {'published': True}
     if category: query['category_slugs'] = category
-    if q: query['title'] = {'$regex':re.escape(q[:100]),'$options':'i'}
-    rows = await pages.find(query, {'_id':0}).sort('created_at',-1).to_list(100)
-    return {'items':rows}
+    if q: query['title'] = {'$regex': re.escape(q[:100]), '$options': 'i'}
+    try:
+        rows = await pages.find(query, {'_id': 0}).sort('created_at', -1).to_list(100)
+        return {'items': rows}
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).exception('Catalog API query failed')
+        raise HTTPException(status_code=503, detail=f'Catalog database unavailable: {type(exc).__name__}') from exc
 
 
 @router.get('/search', response_class=HTMLResponse)

@@ -38,7 +38,7 @@
     .wrap{width:min(100% - 16px,1100px);margin:auto}
     /* Top bar */
     .topbar{
-      height:52px;
+      min-height:76px;
       display:flex;
       align-items:center;
       background:#0d0d0d;
@@ -59,15 +59,22 @@
       display:flex;
       align-items:center;
       gap:8px;
-      font-weight:800;
-      font-size:16px;
-      letter-spacing:.3px;
+      font-family:Inter,Arial,Helvetica,sans-serif;
+      font-weight:950;
+      font-size:25px;
+      letter-spacing:.65px;
+      line-height:1;
+      text-transform:uppercase;
+      text-shadow:0 2px 18px rgba(250,204,21,.12);
     }
     .topbar-logo img{
-      width:34px;height:34px;border-radius:8px;object-fit:cover;
-      border:1px solid rgba(250,204,21,.4);
+      width:52px;height:52px;border-radius:12px;object-fit:cover;
+      border:2px solid rgba(250,204,21,.65);
+      box-shadow:0 0 18px rgba(250,204,21,.18);
     }
-    .topbar-logo span{color:var(--yellow)}
+    .topbar-logo span{color:var(--yellow);font-weight:1000}
+    .topbar-logo .brand-yt{color:#fff;font-weight:900;margin-left:-5px}
+    @media(min-width:700px){.topbar-logo{font-size:29px;gap:10px}.topbar-logo img{width:58px;height:58px}}
     .topbar-links{display:flex;gap:10px;align-items:center}
     .topbar-links a{
       color:var(--muted);font-size:13px;padding:6px 10px;border-radius:6px;
@@ -182,7 +189,7 @@
       .topbar-links{gap:2px}
       .topbar-links a{padding:6px 7px;font-size:12px}
       .poster-grid{grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:12px}
-      .topbar-logo{font-size:14px}
+      .topbar-logo{font-size:19px;gap:7px}.topbar-logo img{width:44px;height:44px}
       .section-head h2{font-size:15px}
     }
   </style>
@@ -192,8 +199,8 @@
 <header class="topbar">
   <div class="topbar-inner">
     <a class="topbar-logo" href="/" title="HITLER YT">
-      <img src="/static/images/logo.jpg" alt="Logo" width="34" height="34" loading="eager">
-      <span>HITLER</span> YT
+      <img src="/static/images/logo.jpg" alt="HITLER YT logo" width="52" height="52" loading="eager">
+      <span>HITLER</span><span class="brand-yt">YT</span>
     </a>
     <div class="topbar-links">
       <a href="/">Home</a>
@@ -209,7 +216,7 @@
   </div>
 </main>
 <footer class="footer">
-  <a href="https://t.me/HiTLERYT" target="_blank" rel="noopener">HITLER YT · @hitleryt</a>
+  <a href="https://t.me/HiTLERYT" target="_blank" rel="noopener"><strong>HITLER YT</strong> · @hitleryt</a>
 </footer>
 </body>
 </html>
