@@ -47,20 +47,21 @@ if ! docker info >/dev/null 2>&1; then
   fi
 fi
 
-if "${DOCKER[@]}" compose version >/dev/null 2>&1; then
-  COMPOSE=("${DOCKER[@]}" compose)
-elif command -v docker-compose >/dev/null 2>&1; then
-  if [[ "${DOCKER[0]}" == sudo ]]; then COMPOSE=(sudo docker-compose); else COMPOSE=(docker-compose); fi
-else
-  warn "Docker Compose plugin missing; attempting package installation..."
+# Docker Compose v1 (the standalone Python `docker-compose` command) is
+# incompatible with newer Docker image metadata and can fail with
+# KeyError: 'ContainerConfig'. Require the supported Compose v2 plugin.
+if ! "${DOCKER[@]}" compose version >/dev/null 2>&1; then
+  warn "Docker Compose v2 plugin missing; installing it..."
   if command -v apt-get >/dev/null 2>&1; then
     run_root apt-get update -qq
-    run_root apt-get install -y docker-compose-plugin
+    run_root apt-get install -y docker-compose-plugin || true
   elif command -v dnf >/dev/null 2>&1; then
-    run_root dnf install -y docker-compose-plugin
+    run_root dnf install -y docker-compose-plugin || true
   fi
-  if "${DOCKER[@]}" compose version >/dev/null 2>&1; then COMPOSE=("${DOCKER[@]}" compose); else die "Docker Compose is unavailable. Install the Docker Compose plugin and rerun."; fi
 fi
+"${DOCKER[@]}" compose version >/dev/null 2>&1 || die "Docker Compose v2 is required. The legacy docker-compose v1 is not supported. Install the Docker Compose plugin (docker-compose-plugin), then rerun ./deploy.vps."
+COMPOSE=("${DOCKER[@]}" compose)
+info "Using $(${COMPOSE[@]} version --short 2>/dev/null || ${COMPOSE[@]} version | head -n 1)"
 
 # Build .env without sourcing/evaluating user-controlled shell text.
 if [[ ! -f .env ]]; then
@@ -146,8 +147,12 @@ PY
 
 info "Validating Docker Compose configuration..."
 "${COMPOSE[@]}" config --quiet || die "Compose configuration is invalid. Check .env and docker-compose.yml."
-info "Building and starting File2link..."
-"${COMPOSE[@]}" up -d --build --remove-orphans
+info "Building and starting File2link with Docker Compose v2..."
+if ! "${COMPOSE[@]}" up -d --build --remove-orphans; then
+  warn "Compose update failed. Removing only the old web container (named volumes and MongoDB data are not touched), then retrying..."
+  "${COMPOSE[@]}" rm -sf web || true
+  "${COMPOSE[@]}" up -d --build --remove-orphans || die "Compose v2 could not start the web service. Check: docker compose logs --tail=200 web"
+fi
 
 PORT_VALUE="$(python3 - <<'PY'
 import json, pathlib
