@@ -16,7 +16,8 @@
     }
   ],
   "rewrites": [
-    { "source": "/", "destination": "/api/index" },
-    { "source": "/(.*)", "destination": "/api/$1" }
+    { "source": "/", "destination": "/api/index?__path=/" },
+    { "source": "/api/(.*)", "destination": "/api/index?__path=/api/$1" },
+    { "source": "/((?!api/|static/).*)", "destination": "/api/index?__path=/$1" }
   ]
 }

@@ -22,9 +22,9 @@
 {% endblock %}
 {% block content %}
 <article class="detail">
-  <img src="{% if page.poster_path.startswith('http') %}{{ page.poster_path }}{% elif page.poster_path %}https://image.tmdb.org/t/p/w500{{ page.poster_path }}{% else %}/static/images/poster.jpg{% endif %}" alt="{{ page.title }} poster">
+  <img src="{% if page.poster_path and page.poster_path.startswith('http') %}{{ page.poster_path }}{% elif page.poster_path %}https://image.tmdb.org/t/p/w500{{ page.poster_path }}{% else %}/static/images/poster.jpg{% endif %}" alt="{{ page.title }} poster">
   <div>
-    <div class="eyebrow">HITLER YT · {{ page.media_type|upper }}</div>
+    <div class="eyebrow">HITLER YT · {{ (page.media_type or 'movie')|upper }}</div>
     <h1>{{ page.title }}</h1>
     <div class="meta">
       <span>{{ page.release_date or 'Release date unavailable' }}</span>
@@ -48,7 +48,7 @@
         <h3>{{ group.name }}</h3>
         <div class="tools">
           {% for button in group.buttons or [] %}
-          <a class="btn-yellow" href="{{ button.url }}" rel="noopener" target="_blank">{{ button.name }}</a>
+          <a class="btn-yellow cf-media-btn" href="{{ button.url }}" data-raw-url="{{ button.url }}" rel="noopener" target="_blank">{{ button.name }}</a>
           {% endfor %}
         </div>
       </div>
@@ -59,4 +59,42 @@
     {% endfor %}
   </div>
 </article>
+<script>
+(async () => {
+  let cfBase = {{ (cloudflare_url if cloudflare_url is defined else '')|tojson }};
+  function rewriteToCloudflare(rawHref, baseOrigin) {
+    if (!rawHref || !baseOrigin) return rawHref;
+    const cleanBase = String(baseOrigin).trim().replace(/\/+$/, '');
+    if (!cleanBase.startsWith('http://') && !cleanBase.startsWith('https://')) return rawHref;
+    if (rawHref.startsWith('/')) return cleanBase + rawHref;
+    try {
+      const u = new URL(rawHref, window.location.origin);
+      const cf = new URL(cleanBase);
+      if (u.protocol === 'http:' || u.protocol === 'https:') {
+        u.protocol = cf.protocol;
+        u.host = cf.host;
+        return u.toString();
+      }
+    } catch (_) {}
+    return rawHref;
+  }
+  function applyCloudflareButtons(baseOrigin) {
+    if (!baseOrigin) return;
+    document.querySelectorAll('a.cf-media-btn').forEach(a => {
+      const raw = a.getAttribute('data-raw-url') || a.getAttribute('href') || '';
+      const updated = rewriteToCloudflare(raw, baseOrigin);
+      if (updated) a.setAttribute('href', updated);
+    });
+  }
+  if (cfBase) applyCloudflareButtons(cfBase);
+  try {
+    const r = await fetch('/api/site-settings', { cache: 'no-store' });
+    if (r.ok) {
+      const s = await r.json();
+      const latestCf = s.cloudflare_url || s.backend_url || cfBase;
+      if (latestCf) applyCloudflareButtons(latestCf);
+    }
+  } catch (_) {}
+})();
+</script>
 {% endblock %}

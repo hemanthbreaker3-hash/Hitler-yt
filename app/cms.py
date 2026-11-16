@@ -5,17 +5,28 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
-from app.database.connection import db, settings, settings_col
+from app.database.connection import (
+    db,
+    settings,
+    settings_col,
+    get_active_cloudflare_url,
+    get_active_website_url,
+)
 from app.admin.auth import require_panel_admin
+from app.utils.helpers import (
+    is_trycloudflare_url,
+    normalize_public_base_url,
+    rewrite_page_groups_to_cloudflare,
+)
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(__import__('pathlib').Path(__file__).resolve().parent / 'templates'))
 pages = db.catalog_pages
 categories = db.catalog_categories
 site_settings = db.site_settings
+
 
 class SettingsUpdate(BaseModel):
     downloads_enabled: bool | None = None
@@ -25,9 +36,12 @@ class SettingsUpdate(BaseModel):
     access_mode: str | None = Field(default=None, pattern='^(all|admins|owners)$')
     backend_url: str | None = Field(default=None, max_length=500)
     base_url: str | None = Field(default=None, max_length=500)
+    cloudflare_url: str | None = Field(default=None, max_length=500)
+
 
 class CategoryInput(BaseModel):
     name: str = Field(min_length=1, max_length=50)
+
 
 class PageInput(BaseModel):
     title: str = Field(min_length=1, max_length=180)
@@ -47,50 +61,171 @@ class PageInput(BaseModel):
     @classmethod
     def validate_groups(cls, groups):
         for group in groups:
-            if not isinstance(group, dict) or not str(group.get('name', '')).strip(): raise ValueError('Each group needs a name')
-            if group.get('box', 'watch') not in ('watch', 'download'): raise ValueError('Group box must be watch or download')
+            if not isinstance(group, dict) or not str(group.get('name', '')).strip():
+                raise ValueError('Each group needs a name')
+            if group.get('box', 'watch') not in ('watch', 'download'):
+                raise ValueError('Group box must be watch or download')
             buttons = group.get('buttons', [])
-            if not isinstance(buttons, list): raise ValueError('Invalid group buttons')
+            if not isinstance(buttons, list):
+                raise ValueError('Invalid group buttons')
             for button in buttons:
-                if not isinstance(button, dict) or not str(button.get('name', '')).strip(): raise ValueError('Each button needs a name')
+                if not isinstance(button, dict) or not str(button.get('name', '')).strip():
+                    raise ValueError('Each button needs a name')
                 target = str(button.get('url', '')).strip()
                 parsed = urlparse(target)
-                if not target or (parsed.scheme and parsed.scheme not in ('http', 'https')) or (parsed.scheme and not parsed.netloc) or (parsed.netloc and not parsed.scheme) or (not parsed.scheme and not target.startswith('/')): raise ValueError('Button URLs must be relative paths or HTTP(S) URLs')
+                if (
+                    not target
+                    or (parsed.scheme and parsed.scheme not in ('http', 'https'))
+                    or (parsed.scheme and not parsed.netloc)
+                    or (parsed.netloc and not parsed.scheme)
+                    or (not parsed.scheme and not target.startswith('/'))
+                ):
+                    raise ValueError('Button URLs must be relative paths or HTTP(S) URLs')
         return groups
+
 
 async def admin_auth(_: bool = Depends(require_panel_admin)):
     return True
 
+
+def serialize_catalog_doc(doc: dict, cloudflare_base: str | None = None) -> dict:
+    """Safely serialize a MongoDB catalog_pages document for JSON/templates and rewrite all button URLs to Cloudflare."""
+    if not isinstance(doc, dict):
+        return {}
+    out = {}
+    for k, v in doc.items():
+        if k == '_id':
+            continue
+        if isinstance(v, datetime):
+            out[k] = v.isoformat()
+        elif isinstance(v, float) and (v != v or v in (float('inf'), float('-inf'))):
+            out[k] = None
+        else:
+            out[k] = v
+    out['groups'] = rewrite_page_groups_to_cloudflare(out.get('groups', []), cloudflare_base)
+    return out
+
+
+async def rewrite_all_stored_catalog_buttons(cloudflare_base: str | None) -> int:
+    """Update all stored button URLs in catalog_pages so their domain uses the active Cloudflare try URL."""
+    if not cloudflare_base:
+        return 0
+    try:
+        cf_base = normalize_public_base_url(cloudflare_base)
+    except ValueError:
+        return 0
+    updated_count = 0
+    cursor = pages.find({'groups.0': {'$exists': True}}, {'_id': 1, 'slug': 1, 'groups': 1})
+    async for doc in cursor:
+        old_groups = doc.get('groups') or []
+        new_groups = rewrite_page_groups_to_cloudflare(old_groups, cf_base)
+        if new_groups != old_groups:
+            await pages.update_one(
+                {'_id': doc['_id']},
+                {'$set': {'groups': new_groups, 'updated_at': datetime.now(timezone.utc)}},
+            )
+            updated_count += 1
+    return updated_count
+
+
 async def get_settings():
-    doc = await site_settings.find_one({'_id':'runtime'}) or {}
-    urls = {x['key']: x.get('value', '') for x in await settings_col.find({'key': {'$in': ['base_url', 'backend_url', 'vercel_url', 'website_urls']}}, {'key': 1, 'value': 1}).to_list(4)}
-    return { 'downloads_enabled': doc.get('downloads_enabled', True), 'streaming_enabled': doc.get('streaming_enabled', True), 'built_in_player_enabled': doc.get('built_in_player_enabled', True), 'auto_player_redirect': doc.get('auto_player_redirect', False), 'access_mode': doc.get('access_mode', 'all'), 'base_url': urls.get('base_url', settings.BASE_URL), 'backend_url': urls.get('backend_url', settings.BACKEND_URL or ''), 'vercel_url': urls.get('vercel_url', os.getenv('WEBSITE_URL', '')), 'website_urls': urls.get('website_urls', []) }
+    doc = await site_settings.find_one({'_id': 'runtime'}) or {}
+    rows = await settings_col.find(
+        {'key': {'$in': ['base_url', 'backend_url', 'cloudflare_url', 'vercel_url', 'website_urls']}},
+        {'key': 1, 'value': 1},
+    ).to_list(10)
+    urls = {x['key']: x.get('value', '') for x in rows if isinstance(x, dict) and 'key' in x}
+    cf_url = await get_active_cloudflare_url() or ''
+    web_url = await get_active_website_url() or ''
+    website_urls = urls.get('website_urls', [])
+    if not isinstance(website_urls, list):
+        website_urls = [str(website_urls)] if website_urls else []
+    website_urls = [u for u in website_urls if not is_trycloudflare_url(str(u))]
+    return {
+        'downloads_enabled': doc.get('downloads_enabled', True),
+        'streaming_enabled': doc.get('streaming_enabled', True),
+        'built_in_player_enabled': doc.get('built_in_player_enabled', True),
+        'auto_player_redirect': doc.get('auto_player_redirect', False),
+        'access_mode': doc.get('access_mode', 'all'),
+        'base_url': cf_url or urls.get('base_url') or settings.BASE_URL,
+        'backend_url': cf_url or urls.get('backend_url') or (settings.BACKEND_URL or ''),
+        'cloudflare_url': cf_url,
+        'vercel_url': urls.get('vercel_url') or os.getenv('WEBSITE_URL', '') or (web_url if not is_trycloudflare_url(web_url) else ''),
+        'website_urls': website_urls,
+    }
+
 
 async def seed_categories():
     await pages.create_index('slug', unique=True)
     await categories.create_index('slug', unique=True)
-    for name, slug in [('Movies','movies'),('Web Series','web-series')]:
-        await categories.update_one({'slug':slug},{'$setOnInsert':{'name':name,'slug':slug,'created_at':datetime.now(timezone.utc)}},upsert=True)
+    for name, slug in [('Movies', 'movies'), ('Web Series', 'web-series')]:
+        await categories.update_one(
+            {'slug': slug},
+            {'$setOnInsert': {'name': name, 'slug': slug, 'created_at': datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+
 
 @router.get('/api/site-settings')
-async def public_settings(): return await get_settings()
+async def public_settings():
+    return await get_settings()
+
 
 @router.get('/api/categories')
 async def public_categories():
-    return {'items': await categories.find({}, {'_id':0}).sort('name',1).to_list(None)}
+    try:
+        raw = await categories.find({}, {'_id': 0}).sort('name', 1).to_list(None)
+        items = []
+        for c in raw:
+            item = dict(c)
+            if isinstance(item.get('created_at'), datetime):
+                item['created_at'] = item['created_at'].isoformat()
+            items.append(item)
+        if not items:
+            items = [
+                {'name': 'Movies', 'slug': 'movies'},
+                {'name': 'Web Series', 'slug': 'web-series'},
+            ]
+        return {'items': items}
+    except Exception:
+        return {
+            'items': [
+                {'name': 'Movies', 'slug': 'movies'},
+                {'name': 'Web Series', 'slug': 'web-series'},
+            ]
+        }
+
 
 @router.get('/api/catalog')
 async def catalog(category: str | None = None, q: str | None = None):
-    query = {'published': True}
-    if category: query['category_slugs'] = category
-    if q: query['title'] = {'$regex': re.escape(q[:100]), '$options': 'i'}
+    query: dict = {'published': True}
+    if category and category.strip():
+        query['category_slugs'] = category.strip()[:60]
+    if q and q.strip():
+        safe = re.escape(q.strip()[:100])
+        query['$or'] = [
+            {'title': {'$regex': safe, '$options': 'i'}},
+            {'overview': {'$regex': safe, '$options': 'i'}},
+            {'genres': {'$regex': safe, '$options': 'i'}},
+        ]
     try:
+        cf_base = await get_active_cloudflare_url()
         rows = await pages.find(query, {'_id': 0}).sort('created_at', -1).to_list(100)
-        return {'items': rows}
+        items = [serialize_catalog_doc(row, cf_base) for row in rows]
+        return {'items': items, 'cloudflare_url': cf_base or ''}
     except Exception as exc:
         import logging
         logging.getLogger(__name__).exception('Catalog API query failed')
         raise HTTPException(status_code=503, detail=f'Catalog database unavailable: {type(exc).__name__}') from exc
+
+
+@router.get('/api/public/title/{slug}')
+async def public_title(slug: str):
+    cf_base = await get_active_cloudflare_url()
+    page = await pages.find_one({'slug': slug, 'published': True}, {'_id': 0})
+    if not page:
+        raise HTTPException(404, 'Title not found')
+    return serialize_catalog_doc(page, cf_base)
 
 
 @router.get('/search', response_class=HTMLResponse)
@@ -102,7 +237,6 @@ async def search_page(
     genre: str = '',
     category: str = '',
 ):
-    """Server-side search matching Movieszoneflix behaviour: title/overview/genres filters + type/year."""
     q = (q or '').strip()[:100]
     type_filter = type if type in ('', 'movie', 'tv') else ''
     year = (year or '').strip()[:4]
@@ -111,7 +245,6 @@ async def search_page(
 
     query: dict = {'published': True}
     if type_filter:
-        # map tv -> series-like values stored in media_type
         if type_filter == 'tv':
             query['media_type'] = {'$in': ['tv', 'series', 'web-series']}
         else:
@@ -130,10 +263,11 @@ async def search_page(
             {'genres': {'$regex': safe, '$options': 'i'}},
         ]
 
-    rows = await pages.find(query, {'_id': 0}).sort('created_at', -1).to_list(100)
+    cf_base = await get_active_cloudflare_url()
+    raw_rows = await pages.find(query, {'_id': 0}).sort('created_at', -1).to_list(100)
+    rows = [serialize_catalog_doc(r, cf_base) for r in raw_rows]
     cats = await categories.find({}, {'_id': 0}).sort('name', 1).to_list(None)
 
-    # collect unique genres from catalog for filter dropdown
     all_genres: set[str] = set()
     async for doc in pages.find({'published': True, 'genres': {'$exists': True}}, {'genres': 1}):
         for g in (doc.get('genres') or []):
@@ -156,29 +290,34 @@ async def search_page(
         },
     )
 
+
 @router.get('/title/{slug}', response_class=HTMLResponse)
 async def title_page(request: Request, slug: str):
-    page = await pages.find_one({'slug':slug,'published':True},{'_id':0})
-    if not page: raise HTTPException(404,'Title not found')
-    # Canonicalize internal links to the currently configured public domain.
-    internal_prefixes = ('/title/', '/watch/', '/stream/', '/dl/', '/remux/', '/panel')
-    forwarded_host = request.headers.get('x-forwarded-host', '').split(',')[0].strip()
-    forwarded_proto = request.headers.get('x-forwarded-proto', 'https').split(',')[0].strip().lower()
-    public_base = settings.BASE_URL.rstrip('/')
-    if forwarded_host and forwarded_proto in ('http', 'https') and not any(c in forwarded_host for c in '/\\@\r\n'):
-        public_base = f'{forwarded_proto}://{forwarded_host}'
-    for group in page.get('groups', []):
-        for button in group.get('buttons', []):
-            target = str(button.get('url', '')).strip()
-            parsed = urlparse(target)
-            if parsed.path.startswith(internal_prefixes):
-                button['url'] = public_base + parsed.path + (('?' + parsed.query) if parsed.query else '') + (('#' + parsed.fragment) if parsed.fragment else '')
-    return templates.TemplateResponse(request=request,name='title.html',context={'request':request,'page':page})
+    raw_page = await pages.find_one({'slug': slug, 'published': True}, {'_id': 0})
+    if not raw_page:
+        raise HTTPException(404, 'Title not found')
+    cf_base = await get_active_cloudflare_url() or settings.BASE_URL.rstrip('/')
+    page = serialize_catalog_doc(raw_page, cf_base)
+    return templates.TemplateResponse(
+        request=request,
+        name='title.html',
+        context={
+            'request': request,
+            'page': page,
+            'cloudflare_url': cf_base,
+        },
+    )
+
 
 @router.get('/panel', response_class=HTMLResponse)
 @router.get('/admin/panel', response_class=HTMLResponse)
 async def panel(request: Request, _: bool = Depends(admin_auth)):
-    return templates.TemplateResponse(request=request,name='admin/panel.html',context={'request':request,'settings':await get_settings()})
+    return templates.TemplateResponse(
+        request=request,
+        name='admin/panel.html',
+        context={'request': request, 'settings': await get_settings()},
+    )
+
 
 @router.get('/api/admin/settings')
 async def read_admin_settings(_: bool = Depends(admin_auth)):
@@ -188,94 +327,204 @@ async def read_admin_settings(_: bool = Depends(admin_auth)):
 @router.put('/api/admin/settings')
 async def update_settings(data: SettingsUpdate, _: bool = Depends(admin_auth)):
     values = data.model_dump(exclude_none=True)
-    url_values = {key: values.pop(key) for key in ('base_url', 'backend_url') if key in values}
+    url_values = {key: values.pop(key) for key in ('base_url', 'backend_url', 'cloudflare_url') if key in values}
     if values:
-        await site_settings.update_one({'_id':'runtime'},{'$set':values},upsert=True)
+        await site_settings.update_one({'_id': 'runtime'}, {'$set': values}, upsert=True)
+
+    now = datetime.now(timezone.utc)
+    cf_target: str | None = None
     for key, candidate in url_values.items():
-        candidate = candidate.strip().rstrip('/')
-        parsed = urlparse(candidate)
-        if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise HTTPException(400, f'{key} must be a valid public HTTP(S) URL without credentials, query or fragment')
-        host = (parsed.hostname or '').lower()
-        if host in ('localhost', '127.0.0.1', '0.0.0.0') or host.endswith(('.local', '.internal')):
-            raise HTTPException(400, f'{key} must use a publicly reachable hostname')
-        await settings_col.update_one({'key':key},{'$set':{'value':candidate,'updated_at':datetime.now(timezone.utc)}},upsert=True)
+        candidate = candidate.strip()
+        if not candidate:
+            continue
+        try:
+            candidate = normalize_public_base_url(candidate)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        await settings_col.update_one(
+            {'key': key},
+            {'$set': {'value': candidate, 'updated_at': now}},
+            upsert=True,
+        )
         if key == 'base_url':
-            await settings_col.update_one({'key':'website_urls'},{'$addToSet':{'value':candidate},'$set':{'updated_at':datetime.now(timezone.utc)}},upsert=True)
+            if not is_trycloudflare_url(candidate):
+                await settings_col.update_one(
+                    {'key': 'website_urls'},
+                    {'$addToSet': {'value': candidate}, '$set': {'updated_at': now}},
+                    upsert=True,
+                )
             settings.BASE_URL = candidate
             os.environ['BASE_URL'] = candidate
-        else:
+            if is_trycloudflare_url(candidate):
+                cf_target = candidate
+                settings.BACKEND_URL = candidate
+                await settings_col.update_one(
+                    {'key': 'backend_url'},
+                    {'$set': {'value': candidate, 'updated_at': now}},
+                    upsert=True,
+                )
+                await settings_col.update_one(
+                    {'key': 'cloudflare_url'},
+                    {'$set': {'value': candidate, 'updated_at': now}},
+                    upsert=True,
+                )
+        elif key in ('backend_url', 'cloudflare_url'):
             settings.BACKEND_URL = candidate
+            cf_target = candidate
+            await settings_col.update_one(
+                {'key': 'backend_url'},
+                {'$set': {'value': candidate, 'updated_at': now}},
+                upsert=True,
+            )
+            await settings_col.update_one(
+                {'key': 'cloudflare_url'},
+                {'$set': {'value': candidate, 'updated_at': now}},
+                upsert=True,
+            )
+
+    if cf_target:
+        await rewrite_all_stored_catalog_buttons(cf_target)
+
     return await get_settings()
+
 
 @router.get('/api/admin/categories')
 async def list_categories(_: bool = Depends(admin_auth)):
-    return {'items':await categories.find({}, {'_id':0}).sort('name',1).to_list(None)}
+    return await public_categories()
+
 
 @router.post('/api/admin/categories')
 async def add_category(data: CategoryInput, _: bool = Depends(admin_auth)):
-    name=data.name.strip(); slug=re.sub(r'[^a-z0-9]+','-',name.lower()).strip('-')
-    if not slug: raise HTTPException(400,'Invalid category name')
-    if await categories.find_one({'slug':slug}): raise HTTPException(409,'Category already exists')
-    await categories.insert_one({'name':name,'slug':slug,'created_at':datetime.now(timezone.utc)})
-    return {'name':name,'slug':slug}
+    name = data.name.strip()
+    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+    if not slug:
+        raise HTTPException(400, 'Invalid category name')
+    if await categories.find_one({'slug': slug}):
+        raise HTTPException(409, 'Category already exists')
+    await categories.insert_one({'name': name, 'slug': slug, 'created_at': datetime.now(timezone.utc)})
+    return {'name': name, 'slug': slug}
+
 
 @router.delete('/api/admin/categories/{slug}')
 async def remove_category(slug: str, _: bool = Depends(admin_auth)):
-    if slug in ('movies','web-series'): raise HTTPException(400,'Default categories cannot be deleted')
-    await categories.delete_one({'slug':slug}); return {'ok':True}
+    if slug in ('movies', 'web-series'):
+        raise HTTPException(400, 'Default categories cannot be deleted')
+    await categories.delete_one({'slug': slug})
+    return {'ok': True}
+
 
 @router.get('/api/admin/tmdb-search')
 async def tmdb_search(q: str, media_type: str = 'multi', _: bool = Depends(admin_auth)):
-    key=settings.TMDB_API_KEY
-    if not key: raise HTTPException(503,'TMDB_API_KEY is not configured')
-    if media_type not in ('movie','tv','multi'): raise HTTPException(400,'Invalid media type')
+    key = settings.TMDB_API_KEY
+    if not key:
+        doc = await settings_col.find_one({'key': 'tmdb_api_key'}, {'value': 1})
+        key = str(doc.get('value', '')).strip() if doc else ''
+    if not key:
+        raise HTTPException(503, 'TMDB_API_KEY is not configured')
+    if media_type not in ('movie', 'tv', 'multi'):
+        raise HTTPException(400, 'Invalid media type')
     async with httpx.AsyncClient(timeout=15) as client:
-        r=await client.get(f'https://api.themoviedb.org/3/search/{media_type}',params={'api_key':key,'query':q,'include_adult':'false'})
-        r.raise_for_status(); payload=r.json()
-    return {'items':[{'id':x['id'],'media_type':x.get('media_type',media_type if media_type!='multi' else 'movie'),'title':x.get('title') or x.get('name'),'overview':x.get('overview',''),'poster_path':x.get('poster_path'),'release_date':x.get('release_date') or x.get('first_air_date',''),'rating':x.get('vote_average')} for x in payload.get('results',[])[:20]]}
+        r = await client.get(
+            f'https://api.themoviedb.org/3/search/{media_type}',
+            params={'api_key': key, 'query': q, 'include_adult': 'false'},
+        )
+        r.raise_for_status()
+        payload = r.json()
+    return {
+        'items': [
+            {
+                'id': x['id'],
+                'media_type': x.get('media_type', media_type if media_type != 'multi' else 'movie'),
+                'title': x.get('title') or x.get('name'),
+                'overview': x.get('overview', ''),
+                'poster_path': x.get('poster_path'),
+                'release_date': x.get('release_date') or x.get('first_air_date', ''),
+                'rating': x.get('vote_average'),
+            }
+            for x in payload.get('results', [])[:20]
+        ]
+    }
+
 
 @router.get('/api/admin/pages')
 async def list_pages(q: str | None = None, _: bool = Depends(admin_auth)):
     query = {}
     if q and q.strip():
-        query = {'$or': [{'title': {'$regex': re.escape(q.strip()[:100]), '$options': 'i'}}, {'slug': {'$regex': re.escape(q.strip()[:100]), '$options': 'i'}}]}
-    return {'items': await pages.find(query, {'_id':0}).sort('created_at',-1).to_list(300)}
+        query = {
+            '$or': [
+                {'title': {'$regex': re.escape(q.strip()[:100]), '$options': 'i'}},
+                {'slug': {'$regex': re.escape(q.strip()[:100]), '$options': 'i'}},
+            ]
+        }
+    cf_base = await get_active_cloudflare_url()
+    rows = await pages.find(query, {'_id': 0}).sort('created_at', -1).to_list(300)
+    return {'items': [serialize_catalog_doc(r, cf_base) for r in rows]}
+
 
 @router.get('/api/admin/pages/{slug}')
 async def get_page(slug: str, _: bool = Depends(admin_auth)):
-    page = await pages.find_one({'slug':slug}, {'_id':0})
-    if not page: raise HTTPException(404,'Page not found')
-    return page
+    page = await pages.find_one({'slug': slug}, {'_id': 0})
+    if not page:
+        raise HTTPException(404, 'Page not found')
+    cf_base = await get_active_cloudflare_url()
+    return serialize_catalog_doc(page, cf_base)
+
 
 @router.post('/api/admin/pages')
 async def create_page(data: PageInput, _: bool = Depends(admin_auth)):
-    slug=re.sub(r'[^a-z0-9]+','-',data.title.lower()).strip('-') or secrets.token_hex(5)
-    base=slug; i=2
-    while await pages.find_one({'slug':slug}): slug=f'{base}-{i}'; i+=1
-    cats=await categories.find({'slug':{'$in':data.category_ids}}).to_list(100)
-    doc=data.model_dump(); doc.update({'slug':slug,'category_slugs':[x['slug'] for x in cats],'published':True,'created_at':datetime.now(timezone.utc)})
+    slug = re.sub(r'[^a-z0-9]+', '-', data.title.lower()).strip('-') or secrets.token_hex(5)
+    base = slug
+    i = 2
+    while await pages.find_one({'slug': slug}):
+        slug = f'{base}-{i}'
+        i += 1
+    cats = await categories.find({'slug': {'$in': data.category_ids}}).to_list(100)
+    cf_base = await get_active_cloudflare_url()
+    doc = data.model_dump()
+    doc['groups'] = rewrite_page_groups_to_cloudflare(doc.get('groups', []), cf_base)
+    doc.update(
+        {
+            'slug': slug,
+            'category_slugs': [x['slug'] for x in cats] if cats else [x for x in data.category_ids if x],
+            'published': True,
+            'created_at': datetime.now(timezone.utc),
+        }
+    )
     if data.tmdb_id and settings.TMDB_API_KEY:
-        async with httpx.AsyncClient(timeout=15) as client:
-            endpoint = 'tv' if data.media_type == 'tv' else 'movie'
-            detail = await client.get(f'https://api.themoviedb.org/3/{endpoint}/{data.tmdb_id}', params={'api_key':settings.TMDB_API_KEY,'append_to_response':'external_ids'})
-            detail.raise_for_status(); meta=detail.json()
-        doc['genres']=[g.get('name','') for g in meta.get('genres',[]) if g.get('name')]
-        doc['imdb_id']=(meta.get('external_ids') or {}).get('imdb_id') or meta.get('imdb_id','')
-        doc['runtime']=meta.get('runtime') or (meta.get('episode_run_time') or [None])[0]
-        doc['tagline']=meta.get('tagline','')
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                endpoint = 'tv' if data.media_type == 'tv' else 'movie'
+                detail = await client.get(
+                    f'https://api.themoviedb.org/3/{endpoint}/{data.tmdb_id}',
+                    params={'api_key': settings.TMDB_API_KEY, 'append_to_response': 'external_ids'},
+                )
+                detail.raise_for_status()
+                meta = detail.json()
+            doc['genres'] = [g.get('name', '') for g in meta.get('genres', []) if g.get('name')]
+            doc['imdb_id'] = (meta.get('external_ids') or {}).get('imdb_id') or meta.get('imdb_id', '')
+            doc['runtime'] = meta.get('runtime') or (meta.get('episode_run_time') or [None])[0]
+            doc['tagline'] = meta.get('tagline', '')
+        except Exception:
+            pass
     doc['updated_at'] = doc['created_at']
     await pages.insert_one(doc)
-    return {'slug':slug,'url':f"{settings.BASE_URL.rstrip('/')}/title/{slug}"}
+    web_base = (await get_active_website_url()) or settings.BASE_URL.rstrip('/')
+    return {'slug': slug, 'url': f"{web_base.rstrip('/')}/title/{slug}"}
+
 
 @router.put('/api/admin/pages/{slug}')
 async def edit_page(slug: str, data: PageInput, _: bool = Depends(admin_auth)):
-    cats=await categories.find({'slug':{'$in':data.category_ids}}).to_list(100)
-    doc=data.model_dump(); doc['category_slugs']=[x['slug'] for x in cats]
+    cats = await categories.find({'slug': {'$in': data.category_ids}}).to_list(100)
+    cf_base = await get_active_cloudflare_url()
+    doc = data.model_dump()
+    doc['groups'] = rewrite_page_groups_to_cloudflare(doc.get('groups', []), cf_base)
+    doc['category_slugs'] = [x['slug'] for x in cats] if cats else [x for x in data.category_ids if x]
     doc['updated_at'] = datetime.now(timezone.utc)
-    result=await pages.update_one({'slug':slug},{'$set':doc})
-    if not result.matched_count: raise HTTPException(404,'Page not found')
-    return {'ok':True}
+    result = await pages.update_one({'slug': slug}, {'$set': doc})
+    if not result.matched_count:
+        raise HTTPException(404, 'Page not found')
+    return {'ok': True}
 
 
 @router.delete('/api/admin/pages/{slug}')

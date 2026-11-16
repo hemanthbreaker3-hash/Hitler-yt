@@ -7,7 +7,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg mediainfo ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg mediainfo ca-certificates curl && \
+    ARCH="$(dpkg --print-architecture)" && \
+    case "$ARCH" in \
+      amd64) CF_ARCH="amd64" ;; \
+      arm64) CF_ARCH="arm64" ;; \
+      *) CF_ARCH="amd64" ;; \
+    esac && \
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}" -o /usr/local/bin/cloudflared && \
+    chmod +x /usr/local/bin/cloudflared && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip && python -m pip install -r /app/requirements.txt
@@ -18,6 +27,6 @@ RUN mkdir -p /app/app/static && python -m compileall -q /app/app
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3   CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --loop asyncio"]

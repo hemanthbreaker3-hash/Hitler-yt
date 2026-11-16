@@ -13,10 +13,25 @@ from wzgram import filters
 from wzgram.enums import ParseMode
 from wzgram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery, BotCommand
 
-from app.database.connection import files_col, users_col, settings_col, settings, db
+from app.database.connection import (
+    files_col,
+    users_col,
+    settings_col,
+    settings,
+    db,
+    get_active_cloudflare_url,
+    get_active_website_url,
+)
 from app.admin.auth import make_password_hash
+from app.cms import rewrite_all_stored_catalog_buttons
 from app.models.schemas import FileMetadata, User
-from app.utils.helpers import generate_short_code, format_bytes, normalize_public_base_url
+from app.utils.cloudflare_tunnel import _extract_tunnel_url_from_logs, apply_auto_cloudflare_url
+from app.utils.helpers import (
+    generate_short_code,
+    format_bytes,
+    is_trycloudflare_url,
+    normalize_public_base_url,
+)
 from app.utils.fsub import is_user_fsubbed
 from app.utils.rate_limit import check_rate_limit
 from app.utils.media_tools import (
@@ -58,7 +73,6 @@ async def is_access_allowed(user_id: int) -> bool:
     return True
 
 
-
 async def setup_bot_commands(bot):
     """Register all bot commands in the Telegram menu so they appear under the / button."""
     try:
@@ -69,7 +83,7 @@ async def setup_bot_commands(bot):
             BotCommand("username", "Set website panel username (admin)"),
             BotCommand("password", "Set website panel password (admin)"),
             BotCommand("backendurl", "Set backend / Cloudflare URL (admin)"),
-            BotCommand("baseurl", "Set primary website URL (admin)"),
+            BotCommand("baseurl", "Set primary / Cloudflare URL (admin)"),
             BotCommand("categories", "Manage categories (admin)"),
             BotCommand("edit", "Open page editor (admin)"),
             BotCommand("search", "Search catalog (admin)"),
@@ -227,7 +241,6 @@ def register_handlers(bot):
             mime_type = ani.mime_type or "video/mp4"
             file_id = ani.file_id
         elif message.photo:
-            # wzgram/pyrogram: photo may be a list of sizes or the largest PhotoSize
             photo = message.photo[-1] if isinstance(message.photo, (list, tuple)) else message.photo
             file_name = f"photo_{getattr(photo, 'file_unique_id', 'img')}.jpg"
             file_size = getattr(photo, "file_size", 0) or 0
@@ -246,16 +259,6 @@ def register_handlers(bot):
             mime_type = "video/mp4"
             file_id = vn.file_id
         else:
-            logger.warning("Unsupported media from user %s: media types present = %s", user.id, {
-                "document": bool(message.document),
-                "video": bool(message.video),
-                "audio": bool(message.audio),
-                "animation": bool(message.animation),
-                "photo": bool(message.photo),
-                "voice": bool(message.voice),
-                "video_note": bool(message.video_note),
-                "sticker": bool(getattr(message, "sticker", None)),
-            })
             return await detecting_msg.edit_text(
                 "❌ **Error:** Unsupported media type.\n\n"
                 "Supported: documents, videos, audio, GIFs/animations, photos, voice notes, video notes."
@@ -275,18 +278,27 @@ def register_handlers(bot):
             short_code=short_code,
             chat_id=message.chat.id,
             message_id=message.id,
-            # Public media links are permanent; do not assign an expiry timestamp.
             expiry_time=None,
         )
         await files_col.insert_one(file_meta.dict())
 
-        try:
-            base_url = normalize_public_base_url(settings.BASE_URL)
+        # Check live cloudflared log first, then MongoDB, so auto-set Cloudflare Try URL is always used
+        log_cf = _extract_tunnel_url_from_logs()
+        if log_cf:
+            await apply_auto_cloudflare_url(log_cf, source="media-upload-check")
+
+        media_base = await get_active_cloudflare_url()
+        if media_base:
+            base_url = media_base
             links_ready = True
-        except ValueError as exc:
-            logger.warning("Public BASE_URL not configured: %s", exc)
-            base_url = None
-            links_ready = False
+        else:
+            try:
+                base_url = normalize_public_base_url(settings.BASE_URL)
+                links_ready = True
+            except ValueError as exc:
+                logger.warning("Public BASE_URL not configured: %s", exc)
+                base_url = None
+                links_ready = False
 
         formatted_size = format_bytes(file_size) if file_size else "N/A"
         safe_name = html.escape(file_name)
@@ -319,8 +331,8 @@ def register_handlers(bot):
                 f"📂 <b>File Name:</b> <code>{safe_name}</code>\n"
                 f"📦 <b>File Size:</b> <code>{html.escape(formatted_size)}</code>\n"
                 f"⚙️ <b>MIME Type:</b> <code>{safe_mime}</code>\n\n"
-                "⚠️ <b>Public links are not active yet.</b>\n"
-                "The administrator must configure the public Base URL.\n\n"
+                "⚠️ <b>Public links are initializing...</b>\n"
+                "The Cloudflare Quick Tunnel URL is being auto-detected. Try again in a few seconds or use `/baseurl https://your-tunnel.trycloudflare.com`.\n\n"
                 f"📢 <a href=\"{html.escape(settings.UPDATE_CHANNEL_URL, quote=True)}\">Updates Channel</a>"
             )
             user_buttons = _kb([[InlineKeyboardButton("📢 Updates Channel", url=settings.UPDATE_CHANNEL_URL)], [InlineKeyboardButton("🗑️ Delete Link", callback_data=f"del_{short_code}")]])
@@ -372,8 +384,6 @@ def register_handlers(bot):
         else:
             await callback.answer("🚫 You are not authorized to delete this link.", show_alert=True)
 
-    # Admin-only website CMS search. Supports /search <query>, /search movie <query>,
-    # and /search tv <query>; all selected results are stored before publishing.
     @bot.on_message(filters.command("search"))
     async def cms_search_handler(client, message: Message):
         user = message.from_user
@@ -384,21 +394,20 @@ def register_handlers(bot):
         parts = raw.split(maxsplit=1)
         if len(parts) < 2 or not parts[1].strip():
             return await message.reply(
-                "🔎 **TMDB Catalog Search**\\n\\n"
-                "> `/search movie name` — search movies and series\\n"
-                "> `/search movie movie name` — movies only\\n"
+                "🔎 **TMDB Catalog Search**\n\n"
+                "> `/search movie name` — search movies and series\n"
+                "> `/search movie movie name` — movies only\n"
                 "> `/search tv series name` — TV series only"
             )
 
         query_text = parts[1].strip()
         media_filter = "multi"
-        # Optional explicit media type; otherwise search both movies and TV.
-        typed = re.match(r"^(movie|movies|tv|series)\\s*:\\s*(.+)$", query_text, re.I)
+        typed = re.match(r"^(movie|movies|tv|series)\s*:\s*(.+)$", query_text, re.I)
         if typed:
             media_filter = "movie" if typed.group(1).lower() in ("movie", "movies") else "tv"
             query_text = typed.group(2).strip()
         else:
-            typed = re.match(r"^(movie|movies|tv|series)\\s+(.+)$", query_text, re.I)
+            typed = re.match(r"^(movie|movies|tv|series)\s+(.+)$", query_text, re.I)
             if typed:
                 media_filter = "movie" if typed.group(1).lower() in ("movie", "movies") else "tv"
                 query_text = typed.group(2).strip()
@@ -408,7 +417,7 @@ def register_handlers(bot):
         api_key = (getattr(settings, "TMDB_API_KEY", "") or os.getenv("TMDB_API_KEY", "")).strip()
         if not api_key:
             return await message.reply(
-                "⚠️ **TMDB API key is not configured.**\\n"
+                "⚠️ **TMDB API key is not configured.**\n"
                 "Add `TMDB_API_KEY` to the bot backend environment and restart the bot."
             )
 
@@ -462,13 +471,13 @@ def register_handlers(bot):
 
             if not rows:
                 return await status.edit_text(
-                    f"🔎 No movie or TV results found for **{html.escape(query_text[:100])}**.\\n"
+                    f"🔎 No movie or TV results found for **{html.escape(query_text[:100])} and try again**.\n"
                     "Try a different spelling or use `/search movie: name` / `/search tv: name`."
                 )
             await status.edit_text(
-                f"🎬 **TMDB Search Results**\\n"
-                f"> Query: `{html.escape(query_text[:100])}`\\n"
-                f"> Matches: `{len(rows)}`\\n\\n"
+                f"🎬 **TMDB Search Results**\n"
+                f"> Query: `{html.escape(query_text[:100])}`\n"
+                f"> Matches: `{len(rows)}`\n\n"
                 "Select a result to publish its catalog page:",
                 reply_markup=_kb(rows),
             )
@@ -500,25 +509,52 @@ def register_handlers(bot):
         pending = await db.cms_pending.find_one({"_id": pending_id}) if pending_id else None
         if not pending or pending.get("media_type") not in ("movie", "tv") or not pending.get("tmdb_id"):
             return await callback.answer("Search result expired. Run /search again.", show_alert=True)
-        from app.database.connection import settings as app_settings
         slug = re.sub(r"[^a-z0-9]+", "-", pending["title"].lower()).strip("-") or secrets.token_hex(5)
         base, n = slug, 2
         while await db.catalog_pages.find_one({"slug": slug}):
-            slug = f"{base}-{n}"; n += 1
+            slug = f"{base}-{n}"
+            n += 1
         category = "web-series" if pending["media_type"] == "tv" else "movies"
         extra = {"genres": [], "imdb_id": "", "runtime": None, "tagline": ""}
         if settings.TMDB_API_KEY:
             try:
                 endpoint = "tv" if pending["media_type"] == "tv" else "movie"
                 async with httpx.AsyncClient(timeout=15) as http:
-                    detail = await http.get(f"https://api.themoviedb.org/3/{endpoint}/{pending['tmdb_id']}", params={"api_key": settings.TMDB_API_KEY, "append_to_response": "external_ids"})
-                    detail.raise_for_status(); metadata = detail.json()
-                extra = {"genres": [g.get("name", "") for g in metadata.get("genres", [])], "imdb_id": (metadata.get("external_ids") or {}).get("imdb_id") or metadata.get("imdb_id", ""), "runtime": metadata.get("runtime") or (metadata.get("episode_run_time") or [None])[0], "tagline": metadata.get("tagline", "")}
+                    detail = await http.get(
+                        f"https://api.themoviedb.org/3/{endpoint}/{pending['tmdb_id']}",
+                        params={"api_key": settings.TMDB_API_KEY, "append_to_response": "external_ids"},
+                    )
+                    detail.raise_for_status()
+                    metadata = detail.json()
+                extra = {
+                    "genres": [g.get("name", "") for g in metadata.get("genres", [])],
+                    "imdb_id": (metadata.get("external_ids") or {}).get("imdb_id") or metadata.get("imdb_id", ""),
+                    "runtime": metadata.get("runtime") or (metadata.get("episode_run_time") or [None])[0],
+                    "tagline": metadata.get("tagline", ""),
+                }
             except Exception:
                 logger.exception("TMDB details lookup failed; publishing search metadata only")
-        await db.catalog_pages.insert_one({"slug": slug, "title": pending["title"], "overview": pending.get("overview", ""), "poster_path": pending.get("poster_path", ""), "release_date": pending.get("release_date", ""), "rating": pending.get("rating"), "media_type": pending["media_type"], "category_slugs": [category], "groups": [], "published": True, "created_at": datetime.datetime.utcnow(), "updated_at": datetime.datetime.utcnow(), **extra})
+        await db.catalog_pages.insert_one({
+            "slug": slug,
+            "title": pending["title"],
+            "overview": pending.get("overview", ""),
+            "poster_path": pending.get("poster_path", ""),
+            "release_date": pending.get("release_date", ""),
+            "rating": pending.get("rating"),
+            "media_type": pending["media_type"],
+            "category_slugs": [category],
+            "groups": [],
+            "published": True,
+            "created_at": datetime.datetime.utcnow(),
+            "updated_at": datetime.datetime.utcnow(),
+            **extra,
+        })
         await db.cms_pending.delete_one({"_id": pending_id})
-        await callback.message.edit_text(f"✅ Page created: {app_settings.BASE_URL.rstrip('/')}/title/{slug}\nUse /edit while replying with this link, or open /panel to manage page groups and buttons.")
+        web_base = (await get_active_website_url()) or settings.BASE_URL.rstrip("/")
+        await callback.message.edit_text(
+            f"✅ Page created: {web_base.rstrip('/')}/title/{slug}\n"
+            "Use /edit while replying with this link, or open /panel to manage page groups and buttons."
+        )
         await callback.answer("Published")
 
     @bot.on_callback_query(filters.regex(r"^cmscat:"))
@@ -530,7 +566,10 @@ def register_handlers(bot):
         pending = await db.cms_pending.find_one({"_id": pending_id, "action": "category"})
         if not pending:
             return await callback.answer("Selection expired", show_alert=True)
-        await db.catalog_pages.update_one({"slug": pending["page_slug"]}, {"$addToSet": {"category_slugs": pending["category_slug"]}, "$set": {"updated_at": datetime.datetime.utcnow()}})
+        await db.catalog_pages.update_one(
+            {"slug": pending["page_slug"]},
+            {"$addToSet": {"category_slugs": pending["category_slug"]}, "$set": {"updated_at": datetime.datetime.utcnow()}},
+        )
         await db.cms_pending.delete_one({"_id": pending_id})
         await callback.message.edit_text("✅ Page category updated. The website catalog is updated automatically.")
         await callback.answer("Category assigned")
@@ -561,7 +600,6 @@ def register_handlers(bot):
                 await settings_col.update_one({"key": "panel_password_hash"}, {"$set": {"value": digest, "updated_by": user.id, "updated_at": now}}, upsert=True)
                 reply = "✅ Panel password updated. The password is stored as a salted hash and will not be shown again."
         finally:
-            # The command contains the secret; remove it from the chat when Telegram permits.
             try:
                 await message.delete()
             except Exception:
@@ -573,8 +611,8 @@ def register_handlers(bot):
         user = message.from_user
         if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
             return await message.reply("🚫 Admins only.")
-        base = (await settings_col.find_one({"key": "base_url"}) or {}).get("value") or settings.BASE_URL
-        base = str(base).rstrip("/")
+        web_base = (await get_active_website_url()) or settings.BASE_URL
+        base = str(web_base).rstrip("/")
         cmd = (message.text or "").split(maxsplit=1)[0].split("@")[0].lower()
         if cmd == "/categories":
             reply = getattr(message, "reply_to_message", None)
@@ -595,9 +633,15 @@ def register_handlers(bot):
                 return await message.reply("Choose a category for this page:", reply_markup=_kb(rows))
             cats = await db.catalog_categories.find({}, {"_id": 0}).to_list(None)
             names = "\n".join(f"• {c['name']}" for c in cats) or "No categories created yet."
-            return await message.reply(f"🗂️ **Categories**\n\n{names}\n\nCreate or manage unlimited categories in the dashboard.", reply_markup=_kb([[InlineKeyboardButton("➕ Create / Manage Categories", url=f"{base}/panel")]]))
+            return await message.reply(
+                f"🗂️ **Categories**\n\n{names}\n\nCreate or manage unlimited categories in the dashboard.",
+                reply_markup=_kb([[InlineKeyboardButton("➕ Create / Manage Categories", url=f"{base}/panel")]]),
+            )
         if cmd == "/edit":
-            return await message.reply("✏️ Page editor\n\nEdit page metadata, poster, categories, unlimited groups and buttons in the dashboard.", reply_markup=_kb([[InlineKeyboardButton("✏️ Open Page Editor", url=f"{base}/panel")]]))
+            return await message.reply(
+                "✏️ Page editor\n\nEdit page metadata, poster, categories, unlimited groups and buttons in the dashboard.",
+                reply_markup=_kb([[InlineKeyboardButton("✏️ Open Page Editor", url=f"{base}/panel")]]),
+            )
         if cmd == "/manage":
             target = (message.text or "").split(maxsplit=1)[1].strip() if len((message.text or "").split(maxsplit=1)) > 1 else ""
             match = re.search(r"/title/([a-z0-9-]+)", target, re.I)
@@ -606,33 +650,40 @@ def register_handlers(bot):
                 if not page:
                     return await message.reply("❌ Page link not found in the shared catalog.")
                 panel_url = f"{base}/panel?page={match.group(1).lower()}"
-                return await message.reply(f"✏️ **Editing: {page.get('title', match.group(1))}**", reply_markup=_kb([[InlineKeyboardButton("Open selected page editor", url=panel_url)]]))
+                return await message.reply(
+                    f"✏️ **Editing: {page.get('title', match.group(1))}**",
+                    reply_markup=_kb([[InlineKeyboardButton("Open selected page editor", url=panel_url)]]),
+                )
             if target:
                 safe = re.escape(target[:100])
                 page = await db.catalog_pages.find_one({"title": {"$regex": safe, "$options": "i"}}, {"_id": 0, "slug": 1, "title": 1})
                 if page:
-                    return await message.reply(f"✏️ **Editing: {page['title']}**", reply_markup=_kb([[InlineKeyboardButton("Open selected page editor", url=f"{base}/panel?page={page['slug']}")]]))
-            return await message.reply("🛠️ **Manage website & bot**\nUse `/manage page name` or `/manage https://your-site/title/page-slug` to open a selected page. Open the dashboard for all settings and pages.", reply_markup=_kb([[InlineKeyboardButton("🛠️ Open Manage Panel", url=f"{base}/panel")]]))
-        current_backend = (await settings_col.find_one({"key": "backend_url"}) or {}).get("value") or settings.BACKEND_URL or "Not configured"
-        current_base = (await settings_col.find_one({"key": "base_url"}) or {}).get("value") or settings.BASE_URL
-        vercel_url = (await settings_col.find_one({"key": "vercel_url"}) or {}).get("value") or "Detected automatically after first Vercel request"
+                    return await message.reply(
+                        f"✏️ **Editing: {page['title']}**",
+                        reply_markup=_kb([[InlineKeyboardButton("Open selected page editor", url=f"{base}/panel?page={page['slug']}")]]),
+                    )
+            return await message.reply(
+                "🛠️ **Manage website & bot**\nUse `/manage page name` or `/manage https://your-site/title/page-slug` to open a selected page. Open the dashboard for all settings and pages.",
+                reply_markup=_kb([[InlineKeyboardButton("🛠️ Open Manage Panel", url=f"{base}/panel")]]),
+            )
+        current_cf = (await get_active_cloudflare_url()) or "Auto-detecting..."
+        vercel_url = (await settings_col.find_one({"key": "vercel_url"}) or {}).get("value") or "Detected automatically on first Vercel visit"
         website_doc = await settings_col.find_one({"key": "website_urls"}) or {}
         website_urls = website_doc.get("value", [])
-        website_lines = "\n".join(f"• `{url}`" for url in website_urls) or "Not registered yet"
+        if not isinstance(website_urls, list):
+            website_urls = [str(website_urls)] if website_urls else []
+        website_urls = [u for u in website_urls if not is_trycloudflare_url(str(u))]
+        website_lines = "\n".join(f"• `{url}`" for url in website_urls) or "Waiting for first Vercel visit"
         return await message.reply(
             "🔐 **HITLER YT · Control Panel**\n\n"
-            f"> 🌐 **Primary Website URL:** `{current_base}`\n"
-            f"> ☁️ **Cloudflare Backend URL:** `{current_backend}`\n"
-            f"> ▲ **Vercel Website URL:** `{vercel_url}`\n\n"
-            f"**Registered website domains**\n{website_lines}\n\n"
+            f"> ☁️ **Auto Cloudflare Stream/Download/Button URL:** `{current_cf}`\n"
+            f"> ▲ **Vercel Website URL (Website Only):** `{vercel_url}`\n\n"
+            f"**Registered Vercel website domains**\n{website_lines}\n\n"
             "**Panel login management**\n"
             "• `/username new_username` — change the website panel username\n"
             "• `/password new_password` — change the website panel password (10+ characters)\n\n"
-            "**URL management**\n"
-            "• `/baseurl https://your-public-site.com` — set the primary website URL\n"
-            "• `/backendurl https://your-tunnel.trycloudflare.com` — set the VPS backend URL\n\n"
-            "The VPS deployment automatically sets Cloudflare as the primary website and backend URL. Vercel registers its own production/custom domains automatically when first opened. Both domains remain valid website entry points.",
-            reply_markup=_kb([[InlineKeyboardButton("Open HITLER YT Website Panel", url=f"{base}/panel")]])
+            "The Cloudflare `trycloudflare.com` URL is auto-detected and automatically replaces all button URL domains and generates all download & stream links, while Vercel serves the website.",
+            reply_markup=_kb([[InlineKeyboardButton("Open HITLER YT Website Panel", url=f"{base}/panel")]]),
         )
 
     @bot.on_message(filters.command("backendurl"))
@@ -641,31 +692,43 @@ def register_handlers(bot):
         if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
             return await message.reply("🚫 **Unauthorized Access**")
         args = (message.text or "").split(maxsplit=1)
-        current = (await settings_col.find_one({"key": "backend_url"}) or {}).get("value") or settings.BACKEND_URL or "Not configured"
+        current = (await get_active_cloudflare_url()) or settings.BACKEND_URL or "Auto-detecting"
         if len(args) < 2:
             return await message.reply(
-                "☁️ **Backend URL (Cloudflare Tunnel)**\n\n"
-                f"> Current: `{current}`\n\n"
+                "☁️ **Cloudflare Tunnel URL**\n\n"
+                f"> Current Auto Cloudflare URL: `{current}`\n\n"
                 "Usage: `/backendurl https://your-tunnel.trycloudflare.com`\n"
-                "Use the HTTPS Cloudflare public URL that forwards to the VPS backend port. "
-                "The VPS deployment normally detects and saves this URL automatically; you only need this command to override it."
+                "This URL is auto-detected by the VPS and automatically used for all download links, stream links, and button URLs."
             )
         candidate = args[1].strip()
-        if not candidate.startswith(("http://", "https://")):
-            candidate = "https://" + candidate
         try:
             candidate = normalize_public_base_url(candidate)
+            now = datetime.datetime.utcnow()
             await settings_col.update_one(
                 {"key": "backend_url"},
-                {"$set": {"value": candidate, "updated_by": user.id, "updated_at": datetime.datetime.utcnow()}},
+                {"$set": {"value": candidate, "updated_by": user.id, "updated_at": now}},
                 upsert=True,
             )
+            await settings_col.update_one(
+                {"key": "cloudflare_url"},
+                {"$set": {"value": candidate, "updated_by": user.id, "updated_at": now}},
+                upsert=True,
+            )
+            if is_trycloudflare_url(candidate) or settings.BASE_URL.startswith(("http://localhost", "http://127.0.0.1")) or is_trycloudflare_url(settings.BASE_URL):
+                await settings_col.update_one(
+                    {"key": "base_url"},
+                    {"$set": {"value": candidate, "updated_by": user.id, "updated_at": now}},
+                    upsert=True,
+                )
+                settings.BASE_URL = candidate
+                os.environ["BASE_URL"] = candidate
             settings.BACKEND_URL = candidate
+            rewritten = await rewrite_all_stored_catalog_buttons(candidate)
             await message.reply(
-                "✅ **Backend URL saved to MongoDB**\n\n"
-                f"> ☁️ Backend: `{candidate}`\n\n"
-                "Vercel's API gateway will read this URL from the same MongoDB database. "
-                "Make sure `MONGODB_URI` and `DATABASE_NAME` are configured in Vercel too."
+                "✅ **Cloudflare URL Saved & Synced!**\n\n"
+                f"> ☁️ **Cloudflare URL:** `{candidate}`\n"
+                f"> 🔄 **Catalog Pages Rewritten:** `{rewritten}`\n\n"
+                "All download links (`/dl/`), stream links (`/watch/`, `/stream/`), and website button URLs now use this Cloudflare URL."
             )
         except ValueError as exc:
             await message.reply(f"❌ Invalid backend URL: `{html.escape(str(exc))}`")
@@ -685,15 +748,14 @@ def register_handlers(bot):
             )
         args = (message.text or "").split(maxsplit=1)
         if len(args) < 2:
+            current_cf = (await get_active_cloudflare_url()) or settings.BASE_URL
             return await message.reply(
-                "🌐 **Base URL Management**\n\n"
-                f"> 🔗 **Current Base URL:** `{settings.BASE_URL}`\n"
+                "🌐 **Cloudflare / Base URL Management**\n\n"
+                f"> 🔗 **Current Active Cloudflare URL:** `{current_cf}`\n"
                 f"> 📢 **Updates Channel:** `{settings.UPDATE_CHANNEL_URL}`\n\n"
-                "⚠️ **Usage:** `/baseurl https://your-public-domain.com`"
+                "*(Cloudflare Try URL is set automatically on startup, or override with `/baseurl https://name.trycloudflare.com`)*"
             )
         new_url = args[1].strip()
-        if not new_url.startswith(("http://", "https://")):
-            new_url = f"https://{new_url}"
         try:
             new_url = normalize_public_base_url(new_url)
         except ValueError as exc:
@@ -703,22 +765,40 @@ def register_handlers(bot):
                 "Use your public URL, for example: `/baseurl https://name.trycloudflare.com`"
             )
         try:
+            now = datetime.datetime.utcnow()
             await settings_col.update_one(
                 {"key": "base_url"},
-                {"$set": {"value": new_url, "updated_by": user.id, "updated_at": datetime.datetime.utcnow()}},
+                {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}},
                 upsert=True,
             )
             settings.BASE_URL = new_url
-            await settings_col.update_one(
-                {"key": "website_urls"},
-                {"$addToSet": {"value": new_url}, "$set": {"updated_at": datetime.datetime.utcnow()}},
-                upsert=True,
-            )
+            os.environ["BASE_URL"] = new_url
+            rewritten = 0
+            if is_trycloudflare_url(new_url) or not settings.BACKEND_URL or is_trycloudflare_url(settings.BACKEND_URL):
+                settings.BACKEND_URL = new_url
+                await settings_col.update_one(
+                    {"key": "backend_url"},
+                    {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}},
+                    upsert=True,
+                )
+                await settings_col.update_one(
+                    {"key": "cloudflare_url"},
+                    {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}},
+                    upsert=True,
+                )
+                rewritten = await rewrite_all_stored_catalog_buttons(new_url)
+            else:
+                await settings_col.update_one(
+                    {"key": "website_urls"},
+                    {"$addToSet": {"value": new_url}, "$set": {"updated_at": now}},
+                    upsert=True,
+                )
             await message.reply(
                 "🌐 **Base URL Updated Successfully!**\n\n"
-                f"> 🔗 **New Base URL:** `{new_url}`\n"
+                f"> 🔗 **New URL:** `{new_url}`\n"
+                f"> 🔄 **Catalog Pages Rewritten:** `{rewritten}`\n"
                 f"> 👤 **Updated By:** `{user.id}`\n\n"
-                "✨ *All newly generated stream & download links will now use this updated Base URL.*"
+                "✨ *All download links, stream links, and website button URLs now use this Cloudflare URL.*"
             )
         except Exception as e:
             logger.error("Error updating baseurl: %s", e)
@@ -829,7 +909,6 @@ def register_handlers(bot):
         except Exception:
             await message.reply("⚠️ **Usage:** `/autodel 24h` or `/autodel off`")
 
-
     def _is_media_message(msg: Message) -> bool:
         if not msg:
             return False
@@ -840,7 +919,6 @@ def register_handlers(bot):
 
     @bot.on_message(filters.command("ss"))
     async def ss_command(client, message: Message):
-        """Reply to a video/file then choose screenshot count."""
         user = message.from_user
         if not user or user.is_bot:
             return
@@ -880,7 +958,6 @@ def register_handlers(bot):
 
     @bot.on_message(filters.command("sv"))
     async def sv_command(client, message: Message):
-        """Reply to a video/file then choose sample duration."""
         user = message.from_user
         if not user or user.is_bot:
             return
@@ -941,13 +1018,11 @@ def register_handlers(bot):
             if not src_msg or not _is_media_message(src_msg):
                 return await status.edit_text("❌ Media not found or no longer available.")
 
-            # Stream URL — ffmpeg seeks via Range, no full download
             source = local_tg_stream_url(chat_id, msg_id)
             work = make_work_dir("ss_")
             await status.edit_text(f"🖼️ Random frames from stream (anywhere)…")
             shots = await generate_screenshots(source, count, os.path.join(work, "out"), region="anywhere")
             if not shots:
-                # fallback: full download once
                 await status.edit_text("⬇️ Stream seek failed — downloading once…")
                 media_path = os.path.join(work, "input.bin")
                 await download_message_media(client, src_msg, media_path)
@@ -1028,7 +1103,6 @@ def register_handlers(bot):
 
     @bot.on_message(filters.command("mi"))
     async def mi_command(client, message: Message):
-        """Reply to media -> MediaInfo via stream URL (no full download)."""
         user = message.from_user
         if not user or user.is_bot:
             return

@@ -1,2 +1,4 @@
-import proxy from './[...path].js';
-export default proxy;
+import handler, { config } from './[...path].js';
+
+export { config };
+export default handler;
