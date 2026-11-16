@@ -14,6 +14,7 @@ from wzgram.enums import ParseMode
 from wzgram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery, BotCommand
 
 from app.database.connection import files_col, users_col, settings_col, settings, db
+from app.admin.auth import make_password_hash
 from app.models.schemas import FileMetadata, User
 from app.utils.helpers import generate_short_code, format_bytes, normalize_public_base_url
 from app.utils.fsub import is_user_fsubbed
@@ -64,6 +65,8 @@ async def setup_bot_commands(bot):
         commands = [
             BotCommand("start", "Start / help"),
             BotCommand("panel", "Open control panel (admin)"),
+            BotCommand("username", "Set website panel username (admin)"),
+            BotCommand("password", "Set website panel password (admin)"),
             BotCommand("backendurl", "Set backend / Cloudflare URL (admin)"),
             BotCommand("baseurl", "Set primary website URL (admin)"),
             BotCommand("categories", "Manage categories (admin)"),
@@ -534,6 +537,39 @@ def register_handlers(bot):
         await callback.message.edit_text("✅ Page category updated. The website catalog is updated automatically.")
         await callback.answer("Category assigned")
 
+    @bot.on_message(filters.command(["username", "password"]))
+    async def panel_credentials_handler(client, message: Message):
+        user = message.from_user
+        if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
+            return await message.reply("🚫 Admins only.")
+        parts = (message.text or "").split(maxsplit=1)
+        command = parts[0].split("@")[0].lower() if parts else ""
+        if len(parts) < 2 or not parts[1].strip():
+            usage = "/username your_new_username" if command == "/username" else "/password your_new_password"
+            return await message.reply(f"Usage: `{usage}`")
+        value = parts[1].strip()
+        try:
+            if command == "/username":
+                if not re.fullmatch(r"[A-Za-z0-9_.-]{3,64}", value):
+                    return await message.reply("Username must be 3–64 characters and use only letters, numbers, dot, underscore or hyphen.")
+                await settings_col.update_one({"key": "panel_username"}, {"$set": {"value": value, "updated_by": user.id, "updated_at": datetime.datetime.utcnow()}}, upsert=True)
+                reply = f"✅ Panel username updated to `{value}`."
+            else:
+                if len(value) < 10 or len(value) > 256:
+                    return await message.reply("Password must be 10–256 characters. Choose a strong, unique password.")
+                salt, digest = make_password_hash(value)
+                now = datetime.datetime.utcnow()
+                await settings_col.update_one({"key": "panel_password_salt"}, {"$set": {"value": salt, "updated_by": user.id, "updated_at": now}}, upsert=True)
+                await settings_col.update_one({"key": "panel_password_hash"}, {"$set": {"value": digest, "updated_by": user.id, "updated_at": now}}, upsert=True)
+                reply = "✅ Panel password updated. The password is stored as a salted hash and will not be shown again."
+        finally:
+            # The command contains the secret; remove it from the chat when Telegram permits.
+            try:
+                await message.delete()
+            except Exception:
+                pass
+        return await message.reply(reply + "\n\nOpen `/panel` and sign in with your configured credentials.")
+
     @bot.on_message(filters.command(["categories", "edit", "panel"]))
     async def cms_admin_commands(client, message: Message):
         user = message.from_user
@@ -576,6 +612,9 @@ def register_handlers(bot):
             f"> ☁️ **Cloudflare Backend URL:** `{current_backend}`\n"
             f"> ▲ **Vercel Website URL:** `{vercel_url}`\n\n"
             f"**Registered website domains**\n{website_lines}\n\n"
+            "**Panel login management**\n"
+            "• `/username new_username` — change the website panel username\n"
+            "• `/password new_password` — change the website panel password (10+ characters)\n\n"
             "**URL management**\n"
             "• `/baseurl https://your-public-site.com` — set the primary website URL\n"
             "• `/backendurl https://your-tunnel.trycloudflare.com` — set the VPS backend URL\n\n"

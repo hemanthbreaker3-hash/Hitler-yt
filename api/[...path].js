@@ -2,6 +2,9 @@ import http from 'node:http';
 import https from 'node:https';
 import { MongoClient } from 'mongodb';
 
+// Preserve streaming request bodies for proxied CMS/admin POST and PUT requests.
+export const config = { api: { bodyParser: false } };
+
 // Vercel reads the same MongoDB settings collection as the VPS bot.
 // Keep the client warm between serverless invocations when the runtime is reused.
 let mongoClientPromise;
@@ -101,13 +104,17 @@ export default async function handler(req, res) {
 
   const incomingUrl = new URL(req.url || '/', 'http://vercel.local');
   const routeSegments = req.query && req.query.path;
-  let routedPath;
-  if (Array.isArray(routeSegments)) routedPath = '/' + routeSegments.join('/');
-  else if (routeSegments === 'index') routedPath = '/';
-  else if (typeof routeSegments === 'string') routedPath = '/' + routeSegments;
-  else if (incomingUrl.pathname === '/api/index') routedPath = '/';
-  else if (incomingUrl.pathname.startsWith('/api/')) routedPath = incomingUrl.pathname.slice(4);
-  else routedPath = incomingUrl.pathname || '/';
+  let routedPath = incomingUrl.pathname || '/';
+  if (Array.isArray(routeSegments) && routeSegments.length) {
+    routedPath = '/' + routeSegments.map((part) => encodeURIComponent(String(part))).join('/');
+  } else if (typeof routeSegments === 'string' && routeSegments) {
+    routedPath = routeSegments === 'index' ? '/' : '/' + routeSegments.split('/').map(encodeURIComponent).join('/');
+  } else if (incomingUrl.pathname === '/api/index') {
+    routedPath = '/';
+  } else if (incomingUrl.pathname.startsWith('/api/')) {
+    routedPath = incomingUrl.pathname.slice(4);
+  }
+  // Keep the original query string; Vercel rewrites may expose the path in req.query.
   const requestPath = routedPath + incomingUrl.search;
 
   // Large media responses go directly to the VPS/Cloudflare endpoint to avoid Vercel limits.
@@ -121,11 +128,19 @@ export default async function handler(req, res) {
   const transport = targetUrl.protocol === 'https:' ? https : http;
   const headers = { ...req.headers, host: targetUrl.host };
   delete headers['content-length'];
+  delete headers['accept-encoding'];
   headers['x-forwarded-host'] = req.headers.host || '';
   headers['x-forwarded-proto'] = 'https';
+  headers['x-forwarded-for'] = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '';
 
   const clientReq = transport.request(targetUrl, { method: req.method, headers }, (backendRes) => {
-    res.writeHead(backendRes.statusCode || 502, backendRes.headers);
+    const responseHeaders = { ...backendRes.headers };
+    // Catalog, settings and rendered pages must always reflect the latest MongoDB writes.
+    if (!requestPath.startsWith('/stream/') && !requestPath.startsWith('/dl/') && !requestPath.startsWith('/remux/')) {
+      responseHeaders['cache-control'] = 'no-store, no-cache, must-revalidate, max-age=0';
+      responseHeaders.pragma = 'no-cache';
+    }
+    res.writeHead(backendRes.statusCode || 502, responseHeaders);
     backendRes.pipe(res);
   });
   clientReq.setTimeout(30000, () => clientReq.destroy(new Error('Backend request timed out')));

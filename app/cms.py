@@ -5,17 +5,17 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.security import HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 from app.database.connection import db, settings, settings_col
+from app.admin.auth import require_panel_admin
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(__import__('pathlib').Path(__file__).resolve().parent / 'templates'))
 pages = db.catalog_pages
 categories = db.catalog_categories
 site_settings = db.site_settings
-security = HTTPBasic(auto_error=False)
 
 class SettingsUpdate(BaseModel):
     downloads_enabled: bool | None = None
@@ -57,10 +57,7 @@ class PageInput(BaseModel):
                 if not target or (parsed.scheme and parsed.scheme not in ('http', 'https')) or (parsed.scheme and not parsed.netloc) or (parsed.netloc and not parsed.scheme) or (not parsed.scheme and not target.startswith('/')): raise ValueError('Button URLs must be relative paths or HTTP(S) URLs')
         return groups
 
-async def admin_auth(credentials: HTTPBasicCredentials | None = Depends(security)):
-    token = settings.ADMIN_PANEL_TOKEN or os.getenv('ADMIN_PANEL_TOKEN', '')
-    if not token or credentials is None or not secrets.compare_digest(credentials.username, 'admin') or not secrets.compare_digest(credentials.password, token):
-        raise HTTPException(401, 'Admin authentication required', headers={'WWW-Authenticate':'Basic'})
+async def admin_auth(_: bool = Depends(require_panel_admin)):
     return True
 
 async def get_settings():

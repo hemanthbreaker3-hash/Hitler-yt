@@ -7,8 +7,12 @@ FILE2LINK — SINGLE VPS DEPLOYMENT
 3) It clones to ~/file2link, generates a strong ADMIN_PANEL_TOKEN if needed,
    writes a private .env file, and runs deploy.vps.
 
-The admin dashboard is available at /panel (username: admin). Retrieve its
-password from the private backend .env file using: grep '^ADMIN_PANEL_TOKEN=' .env
+The admin dashboard is available at /panel. For first login, use username `admin`
+and the ADMIN_PANEL_TOKEN from the private backend .env file. After the bot starts,
+set your own browser login directly in Telegram using `/username new_username`
+and `/password a_strong_password` (minimum 10 characters). The bot deletes each
+credential command message when Telegram permits it; use these commands in a
+private chat with the bot. The password is stored as a salted hash in MongoDB.
 
 
 No script can guarantee 100% success: GitHub access, VPS DNS/network, Atlas IP

@@ -1,24 +1,15 @@
 from fastapi import APIRouter, Request, HTTPException, Depends
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-import secrets
+from fastapi.security import HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
-from app.database.connection import files_col, users_col, logs_col, settings
+from app.database.connection import files_col, users_col, logs_col
+from app.admin.auth import require_panel_admin
 import psutil
 import time
 
 router = APIRouter(prefix="/admin")
 templates = Jinja2Templates(directory=str(__import__("pathlib").Path(__file__).resolve().parents[1] / "templates"))
 
-security = HTTPBasic(auto_error=False)
-
-async def is_admin(credentials: HTTPBasicCredentials | None = Depends(security)):
-    token = settings.ADMIN_PANEL_TOKEN
-    if not token or credentials is None:
-        raise HTTPException(status_code=401, detail="Admin authentication required", headers={"WWW-Authenticate": "Basic"})
-    valid_user = secrets.compare_digest(credentials.username, "admin")
-    valid_token = secrets.compare_digest(credentials.password, token)
-    if not (valid_user and valid_token):
-        raise HTTPException(status_code=401, detail="Invalid admin credentials", headers={"WWW-Authenticate": "Basic"})
+async def is_admin(_: bool = Depends(require_panel_admin)):
     return True
 
 @router.get("/")

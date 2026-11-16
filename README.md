@@ -36,7 +36,7 @@ ADMIN_PANEL_TOKEN=use-a-long-random-secret
 TMDB_API_KEY=your_tmdb_v3_api_key
 ```
 
-`ADMIN_PANEL_TOKEN` protects the website dashboard using HTTP Basic authentication (username: `admin`). The VPS deploy script generates a strong token if one is not set; retrieve it from the private backend `.env` file. Never commit `.env` or expose the token in client-side code. TMDB search is disabled until `TMDB_API_KEY` is configured.
+`ADMIN_PANEL_TOKEN` is the first-login fallback for the website dashboard (username: `admin`). After the bot starts, an authorized Telegram owner/admin can run `/username your_name` and `/password your_strong_password` to set panel credentials directly. Passwords are stored in MongoDB as salted PBKDF2 hashes, and the command message is deleted when Telegram allows it. Both the VPS and Vercel panel use the same MongoDB credentials. Never commit `.env` or expose secrets in client-side code. TMDB search is disabled until `TMDB_API_KEY` is configured.
 
 Optional settings are documented in `.env.example`. MongoDB must be reachable from the backend host. Redis is optional for deployments that do not use the cache integration.
 
@@ -63,6 +63,8 @@ Alternatively, install Python dependencies and run `uvicorn app.main:app --host 
 
 ## 3. Deploy the website gateway to Vercel (repository root)
 
+See [VERCEL-DEPLOYMENT.md](VERCEL-DEPLOYMENT.md) for the updated deployment checklist, bundled logo/static assets, live MongoDB synchronization behavior, and troubleshooting.
+
 1. Import this repository at [Vercel](https://vercel.com/new).
 2. Set **Root Directory** to the repository root (do not select `vercel/`).
 3. Add `MONGODB_URI` and `DATABASE_NAME` to Vercel, using exactly the same MongoDB URI and database name as the VPS bot. This is the only required Vercel configuration for URL discovery; the Vercel gateway reads the Cloudflare `backend_url` from MongoDB.
@@ -75,7 +77,7 @@ The Vercel gateway reads `settings.backend_url` from the shared MongoDB database
 
 ## 4. Admin dashboard and commands
 
-Open `https://your-project.vercel.app/panel` and authenticate with username `admin` and the `ADMIN_PANEL_TOKEN` password from the VPS `.env`. Vercel must have the same `MONGODB_URI` and `DATABASE_NAME` as the VPS; Vercel cannot discover the generated tunnel URL without access to that shared database. The URL card in the dashboard can also update both MongoDB URL settings.
+Open `https://your-project.vercel.app/panel` and authenticate using the credentials configured with the Telegram `/username` and `/password` commands. For first login before setting custom credentials, use username `admin` and the `ADMIN_PANEL_TOKEN` password from the VPS `.env`. Vercel must have the same `MONGODB_URI` and `DATABASE_NAME` as the VPS; Vercel cannot discover the generated tunnel URL without access to that shared database. The URL card in the dashboard can also update both MongoDB URL settings.
 
 - Toggle downloads and streaming independently.
 - Toggle the built-in watch-page player.
@@ -131,6 +133,6 @@ For a local backend, set the environment variables above before starting the app
 - Keep bot tokens, API hashes, database URIs, TMDB keys and admin secrets in environment variables.
 - Use HTTPS for both Vercel and the backend.
 - Restrict backend ingress to trusted infrastructure where possible.
-- Use a strong `ADMIN_PANEL_TOKEN`; rotate it if it has ever been shared.
+- Use a strong `ADMIN_PANEL_TOKEN` for first login; set a unique panel password with `/password` and change it if it has ever been shared.
 - Configure `ADMINS` and `OWNER_ID` with numeric Telegram IDs.
 - TMDB metadata is provided by TMDB; attribution and applicable TMDB terms should be followed.
