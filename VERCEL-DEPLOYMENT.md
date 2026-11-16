@@ -16,7 +16,7 @@ MONGODB_URI=mongodb+srv://...
 DATABASE_NAME=tg_media_bot
 ```
 
-`MONGODB_URI` and `DATABASE_NAME` must exactly match the VPS bot/backend values. Do not put Telegram tokens, API hashes, or panel passwords in Vercel frontend variables.
+`MONGODB_URI` and `DATABASE_NAME` must exactly match the VPS bot/backend values. Do not put Telegram tokens, API hashes, or panel passwords in Vercel frontend variables. The Vercel gateway reads public catalog data directly from this shared database. For rendered HTML pages, the admin panel, and Telegram media routes, a reachable public VPS/Cloudflare backend URL must also be saved in MongoDB as the `backend_url` setting (or supplied as the optional `BACKEND_URL` Vercel environment variable).
 
 ## Deploy
 
@@ -29,7 +29,7 @@ DATABASE_NAME=tg_media_bot
 
 ## Live content sync
 
-Publish or edit catalog pages using Telegram `/search` or the website `/panel`. Both write to the same MongoDB `catalog_pages` collection. Category edits use `catalog_categories`. The website reads the catalog from MongoDB through the FastAPI backend; refresh the page to see the latest saved content. Do not use a different MongoDB database on Vercel.
+Publish or edit catalog pages using Telegram `/search` or the website `/panel`. Both write to the same MongoDB `catalog_pages` collection. Category edits use `catalog_categories`. The Vercel catalog endpoints read directly from MongoDB; the VPS FastAPI site reads the same collections. Refresh the page to see the latest saved content. Do not use a different MongoDB database on Vercel.
 
 ## Troubleshooting
 
@@ -42,6 +42,6 @@ Publish or edit catalog pages using Telegram `/search` or the website `/panel`. 
 
 Catalog pages are stored in the MongoDB collection `catalog_pages` in the database selected by `DATABASE_NAME` (default: `tg_media_bot`). The Telegram bot's `/search` publish action and the web panel's create/edit/delete actions write to this same collection. Public catalog, search, and title routes read from that collection on each request; the Vercel gateway disables caching for proxied HTML/API responses. Therefore a page created or edited through Telegram, the VPS website, or the Vercel website is shared automatically without a Vercel redeploy.
 
-For this to work, the VPS and Vercel must use the exact same `MONGODB_URI` and `DATABASE_NAME`, and Vercel's `BACKEND_URL`/MongoDB-backed backend setting must point to the currently reachable VPS/Cloudflare backend. If separate MongoDB databases or Atlas clusters are configured, the sites will not share page changes. Vercel requests are proxied to the configured backend, so the backend must remain online.
+For this to work, the VPS and Vercel must use the exact same `MONGODB_URI` and `DATABASE_NAME`. The Vercel public catalog endpoints (`/api/catalog`, `/api/categories`, `/api/site-settings`, `/api/public/title/{slug}`) read MongoDB directly, so title listing does not depend on the VPS proxy. The homepage, rendered `/title/{slug}` and `/search` HTML, and admin panel still use the VPS backend proxy. The rest of the rendered website, admin operations, and Telegram media streaming use the VPS/Cloudflare backend URL stored as `settings.key=backend_url`; keep that backend online and publicly reachable. If separate MongoDB databases or Atlas clusters are configured, page changes will not be shared.
 
 The panel supports page creation, editing metadata/groups/buttons, and deleting pages. Page writes include `updated_at` timestamps. The Telegram bot's page publish and category assignment actions also update the shared collection.

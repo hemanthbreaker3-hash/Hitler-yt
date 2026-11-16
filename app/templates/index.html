@@ -81,8 +81,9 @@
       const params = new URLSearchParams();
       if (q) params.set('q', q);
       if (category) params.set('category', category);
-      const r = await fetch('/api/catalog?' + params.toString());
-      const d = await r.json();
+      const r = await fetch('/api/catalog?' + params.toString(), { cache: 'no-store' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.message || d.detail || ('Catalog API returned HTTP ' + r.status));
       const el = document.getElementById('catalog-grid');
       const countEl = document.getElementById('result-count');
       el.innerHTML = '';
@@ -135,7 +136,8 @@
         el.append(a);
       }
     } catch (e) {
-      document.getElementById('catalog-grid').innerHTML = '<p class="muted" style="grid-column:1/-1;padding:40px 0;text-align:center">Unable to load titles right now.</p>';
+      const message = (e && e.message) ? e.message : 'Catalog request failed';
+      document.getElementById('catalog-grid').innerHTML = '<p class="muted" style="grid-column:1/-1;padding:40px 0;text-align:center">Unable to load titles right now. ' + String(message).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c])) + '</p>';
       document.getElementById('result-count').textContent = 'Error';
     }
   }

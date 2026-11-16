@@ -67,7 +67,7 @@ See [VERCEL-DEPLOYMENT.md](VERCEL-DEPLOYMENT.md) for the updated deployment chec
 
 1. Import this repository at [Vercel](https://vercel.com/new).
 2. Set **Root Directory** to the repository root (do not select `vercel/`).
-3. Add `MONGODB_URI` and `DATABASE_NAME` to Vercel, using exactly the same MongoDB URI and database name as the VPS bot. This is the only required Vercel configuration for URL discovery; the Vercel gateway reads the Cloudflare `backend_url` from MongoDB.
+3. Add `MONGODB_URI` and `DATABASE_NAME` to Vercel, using exactly the same MongoDB URI and database name as the VPS bot. The Vercel gateway reads the Cloudflare `backend_url` from MongoDB for rendered pages and admin/media operations; public catalog APIs read the shared MongoDB database directly. Keep the VPS/Cloudflare backend online.
 4. Deploy. No custom build command is required; the root `vercel.json` routes requests through the Node.js proxy in `api/[...path].js`.
 5. On VPS deployment, the Cloudflare Quick Tunnel service automatically detects its generated HTTPS URL and saves it as both `base_url` and `backend_url` in MongoDB. You do not need to run `/backendurl` manually. When the Vercel website is first opened, it automatically registers its production and custom domains in MongoDB. `/panel` displays the detected domains. `/backendurl` is only an optional manual override.
 
