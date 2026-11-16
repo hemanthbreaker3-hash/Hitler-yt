@@ -51,6 +51,14 @@ nano .env
 docker compose up -d --build
 ```
 
+Use **Docker Compose v2** (`docker compose`, with a space). The old Python-based `docker-compose` v1 is not supported because it can crash with `KeyError: 'ContainerConfig'` on newer Docker images. If an existing VPS shows that error, upload this updated project and run:
+
+```bash
+sudo bash fix-docker-compose.sh
+```
+
+This removes and recreates only the `web` container. It does **not** run `down -v`, delete named volumes, or delete your external MongoDB database.
+
 Check the backend:
 
 ```bash
