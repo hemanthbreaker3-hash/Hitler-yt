@@ -48,6 +48,7 @@ class PageInput(BaseModel):
     def validate_groups(cls, groups):
         for group in groups:
             if not isinstance(group, dict) or not str(group.get('name', '')).strip(): raise ValueError('Each group needs a name')
+            if group.get('box', 'watch') not in ('watch', 'download'): raise ValueError('Group box must be watch or download')
             buttons = group.get('buttons', [])
             if not isinstance(buttons, list): raise ValueError('Invalid group buttons')
             for button in buttons:

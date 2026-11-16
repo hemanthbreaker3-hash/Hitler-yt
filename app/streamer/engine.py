@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 # FileToLink CHUNK_SIZE
 TG_CHUNK = 1024 * 1024
 DEFAULT_CHUNK = 4 * TG_CHUNK
-MAX_PARALLEL_PARTS = 12
+MAX_PARALLEL_PARTS = 16
 MIN_PART_BYTES = 2 * 1024 * 1024
-MAX_CONCURRENT_PER_CLIENT = 8
+MAX_CONCURRENT_PER_CLIENT = 16
 
 # Per-client in-flight counters (workload balancing like FileToLink work_loads)
 _work_loads: dict[int, int] = {}
@@ -164,7 +164,7 @@ async def _stream_file_chunks(
     Yields raw 1MiB-oriented chunks from Telegram.
     """
     chunk_offset = offset // TG_CHUNK
-    chunk_limit = (limit + TG_CHUNK - 1) // TG_CHUNK if limit > 0 else 0
+    chunk_limit = ((offset % TG_CHUNK) + limit + TG_CHUNK - 1) // TG_CHUNK if limit > 0 else 0
 
     for attempt in range(4):
         try:
@@ -233,7 +233,7 @@ async def media_streamer(
     # FileToLink-style: sequential for seek/buffer ranges (fast TTFB).
     # Parallel only for large sequential downloads (>= 16 MiB).
     SEEK_FAST_MAX = 16 * 1024 * 1024
-    n = min(len(live), MAX_PARALLEL_PARTS)
+    n = min(MAX_PARALLEL_PARTS, max(1, len(live) * 4))
     if total <= SEEK_FAST_MAX:
         n = 1
     elif total < MIN_PART_BYTES * 2:
@@ -260,29 +260,53 @@ async def media_streamer(
         if cursor > end:
             break
 
-    async def fetch_part(p_start: int, p_end: int) -> bytes:
-        client, msg = await _acquire_message_client(live, chat_id, message_id)
-        try:
-            buf = bytearray()
-            async for chunk in _download_byte_range(client, msg, p_start, p_end):
-                buf.extend(chunk)
-            return bytes(buf)
-        finally:
-            await _release_client(client)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=max(8, n * 4))
+    sentinel = object()
 
-    tasks = [asyncio.create_task(fetch_part(r0, r1)) for r0, r1 in ranges]
+    async def produce_part(index: int, p_start: int, p_end: int):
+        client = None
+        try:
+            client, msg = await _acquire_message_client(live, chat_id, message_id)
+            async for chunk in _download_byte_range(client, msg, p_start, p_end):
+                await queue.put((index, bytes(chunk), False))
+            await queue.put((index, sentinel, True))
+        except Exception as exc:
+            await queue.put((index, exc, True))
+        finally:
+            if client is not None:
+                await _release_client(client)
+
+    tasks = [
+        asyncio.create_task(produce_part(index, p_start, p_end))
+        for index, (p_start, p_end) in enumerate(ranges)
+    ]
+    pending: dict[int, list[bytes]] = {}
+    completed: set[int] = set()
+    next_index = 0
     try:
-        for task in tasks:
-            data = await task
-            view = memoryview(data)
-            step = max(chunk_size, 256 * 1024)
-            for off in range(0, len(view), step):
-                yield bytes(view[off : off + step])
-    except Exception:
+        while next_index < len(ranges):
+            index, payload, is_end = await queue.get()
+            if is_end:
+                if isinstance(payload, Exception):
+                    raise payload
+                completed.add(index)
+            else:
+                pending.setdefault(index, []).append(payload)
+
+            # Emit only the next contiguous part, preserving byte order for clients.
+            while next_index in completed:
+                for buffered in pending.pop(next_index, []):
+                    yield buffered
+                completed.remove(next_index)
+                next_index += 1
+    except BaseException:
         for task in tasks:
             if not task.done():
                 task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         raise
+    else:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def get_streaming_response(
