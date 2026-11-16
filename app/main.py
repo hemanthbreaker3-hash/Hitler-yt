@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, PlainTextResponse
 from app.database.connection import (
     settings,
     files_col,
@@ -69,6 +69,24 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="HITLER Media Link Service", lifespan=lifespan)
+
+@app.get("/ads.txt", include_in_schema=False)
+async def ads_txt():
+    """Google AdSense authorized-seller declaration served at the domain root."""
+    return PlainTextResponse(
+        "google.com, pub-6636601525186884, DIRECT, f08c47fec0942fa0\n",
+        media_type="text/plain",
+    )
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    """Permit public crawler access while keeping the admin area out of crawler results."""
+    return PlainTextResponse(
+        "User-agent: *\nAllow: /\nDisallow: /admin\n",
+        media_type="text/plain",
+    )
+
 
 
 @app.middleware("http")
