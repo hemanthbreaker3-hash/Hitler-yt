@@ -5,20 +5,12 @@
 <!-- Trending / Top row (horizontal) -->
 <div id="trending-row" class="trending-row" style="display:none"></div>
 
-<!-- Search bar (same place as image) -->
-<form class="search-bar" action="/search" method="get" style="margin:10px 0 6px">
+<!-- Search bar -->
+<form class="search-bar" action="/search" method="get">
   <i class="fa-solid fa-magnifying-glass" style="color:#6b7280;font-size:14px"></i>
-  <input name="q" value="{{ request.query_params.get('q','') }}" placeholder="Search here..." autocomplete="off">
+  <input name="q" value="{{ request.query_params.get('q','') }}" placeholder="Search movies & series..." autocomplete="off">
   <button type="submit">Search</button>
 </form>
-
-<!-- Announcement banners (same style as image) -->
-<div class="announce announce-red">
-  <strong>⚠ ALERT:</strong> We change our sites in 2 days. Port to Jio/Airtel & tell Vi to fuck-off. All users, use Cloudflare DNS & restart Chrome. Watch: Android · Desktop · iOS
-</div>
-<div class="announce announce-dark">
-  ✕ Avoid <strong>FAKE</strong> Copies of HDHub4u on Google. Always use <a href="/search">HITLER YT</a> · VPN to get Official Domain & Follow us on WhatsApp For Latest Updates
-</div>
 
 <!-- Category chips -->
 <div class="section-head" id="catalog">

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}{% if query %}Search: {{ query }}{% else %}Search{% endif %} · HITLER YT{% endblock %}
+{% block content %}
+
+<!-- Search bar (same place / style as image) -->
+<form class="search-bar" action="/search" method="get" style="margin:10px 0 6px">
+  <i class="fa-solid fa-magnifying-glass" style="color:#6b7280;font-size:14px"></i>
+  <input name="q" value="{{ query }}" placeholder="Search here..." autocomplete="off" maxlength="100">
+  <button type="submit">Search</button>
+</form>
+
+<!-- Announcement banners (same as image) -->
+<div class="announce announce-red">
+  <strong>⚠ ALERT:</strong> We change our sites in 2 days. Port to Jio/Airtel & tell Vi to fuck-off. All users, use Cloudflare DNS & restart Chrome. Watch: Android · Desktop · iOS
+</div>
+<div class="announce announce-dark">
+  ✕ Avoid <strong>FAKE</strong> Copies of HDHub4u on Google. Always use <a href="/">HITLER YT</a> · VPN to get Official Domain & Follow us on WhatsApp For Latest Updates
+</div>
+
+<!-- Filters (Movieszoneflix-style: type / year / genre) -->
+<form action="/search" method="get" class="filters" style="margin:14px 0 6px">
+  {% if query %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
+  <div class="cat-nav" style="margin-bottom:10px">
+    <select name="type" class="chip" style="appearance:auto;cursor:pointer;padding:7px 12px" onchange="this.form.submit()">
+      <option value="">All Types</option>
+      <option value="movie" {% if type_filter == 'movie' %}selected{% endif %}>Movies</option>
+      <option value="tv" {% if type_filter == 'tv' %}selected{% endif %}>Web Series</option>
+    </select>
+
+    <select name="year" class="chip" style="appearance:auto;cursor:pointer;padding:7px 12px" onchange="this.form.submit()">
+      <option value="">All Years</option>
+      {% for y in range(2026, 1990, -1) %}
+      <option value="{{ y }}" {% if year_filter == y|string %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+
+    {% if genres %}
+    <select name="genre" class="chip" style="appearance:auto;cursor:pointer;padding:7px 12px" onchange="this.form.submit()">
+      <option value="">All Genres</option>
+      {% for g in genres %}
+      <option value="{{ g }}" {% if genre_filter == g %}selected{% endif %}>{{ g }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+
+    {% if categories %}
+    <select name="category" class="chip" style="appearance:auto;cursor:pointer;padding:7px 12px" onchange="this.form.submit()">
+      <option value="">All Categories</option>
+      {% for c in categories %}
+      <option value="{{ c.slug }}" {% if category_filter == c.slug %}selected{% endif %}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+
+    <button type="submit" class="btn-yellow" style="padding:7px 14px;font-size:12px">Apply</button>
+    {% if query or type_filter or year_filter or genre_filter or category_filter %}
+    <a href="/search" class="chip">Clear</a>
+    {% endif %}
+  </div>
+</form>
+
+<div class="section-head" id="catalog">
+  <h2>
+    {% if query %}Results for “{{ query }}”{% else %}Browse Library{% endif %}
+  </h2>
+  <span class="chip">{{ results|length }} titles</span>
+</div>
+
+<!-- Poster grid (same layout as image) -->
+<div class="poster-grid">
+  {% for p in results %}
+  <a class="poster-card" href="/title/{{ p.slug }}">
+    <img
+      src="{% if p.poster_path and p.poster_path.startswith('http') %}{{ p.poster_path }}{% elif p.poster_path %}https://image.tmdb.org/t/p/w500{{ p.poster_path }}{% else %}/static/images/poster.jpg{% endif %}"
+      alt="{{ p.title }}"
+      loading="lazy"
+    >
+    <div class="info">
+      <div class="title">{{ p.title }}{% if p.release_date %} ({{ p.release_date[:4] }}){% endif %}</div>
+      <div class="meta">
+        {% if p.media_type %}{{ p.media_type|upper }} · {% endif %}
+        {% if p.genres %}{{ p.genres[:2]|join(', ') }}{% else %}WEB-DL · 1080p 720p &amp; 480p{% endif %}
+      </div>
+    </div>
+  </a>
+  {% else %}
+  <p class="muted" style="grid-column:1/-1;padding:48px 0;text-align:center">
+    No titles matching your filters were found.<br>
+    <a href="/search" style="color:var(--yellow);margin-top:10px;display:inline-block">Clear all filters</a>
+  </p>
+  {% endfor %}
+</div>
+
+{% endblock %}

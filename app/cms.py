@@ -89,6 +89,70 @@ async def catalog(category: str | None = None, q: str | None = None):
     rows = await pages.find(query, {'_id':0}).sort('created_at',-1).to_list(100)
     return {'items':rows}
 
+
+@router.get('/search', response_class=HTMLResponse)
+async def search_page(
+    request: Request,
+    q: str = '',
+    type: str = '',
+    year: str = '',
+    genre: str = '',
+    category: str = '',
+):
+    """Server-side search matching Movieszoneflix behaviour: title/overview/genres filters + type/year."""
+    q = (q or '').strip()[:100]
+    type_filter = type if type in ('', 'movie', 'tv') else ''
+    year = (year or '').strip()[:4]
+    genre = (genre or '').strip()[:40]
+    category = (category or '').strip()[:40]
+
+    query: dict = {'published': True}
+    if type_filter:
+        # map tv -> series-like values stored in media_type
+        if type_filter == 'tv':
+            query['media_type'] = {'$in': ['tv', 'series', 'web-series']}
+        else:
+            query['media_type'] = 'movie'
+    if category:
+        query['category_slugs'] = category
+    if year and year.isdigit():
+        query['release_date'] = {'$regex': f'^{year}'}
+    if genre:
+        query['genres'] = {'$regex': re.escape(genre), '$options': 'i'}
+    if q:
+        safe = re.escape(q)
+        query['$or'] = [
+            {'title': {'$regex': safe, '$options': 'i'}},
+            {'overview': {'$regex': safe, '$options': 'i'}},
+            {'genres': {'$regex': safe, '$options': 'i'}},
+        ]
+
+    rows = await pages.find(query, {'_id': 0}).sort('created_at', -1).to_list(100)
+    cats = await categories.find({}, {'_id': 0}).sort('name', 1).to_list(None)
+
+    # collect unique genres from catalog for filter dropdown
+    all_genres: set[str] = set()
+    async for doc in pages.find({'published': True, 'genres': {'$exists': True}}, {'genres': 1}):
+        for g in (doc.get('genres') or []):
+            if isinstance(g, str) and g.strip():
+                all_genres.add(g.strip())
+
+    return templates.TemplateResponse(
+        request=request,
+        name='search.html',
+        context={
+            'request': request,
+            'results': rows,
+            'query': q,
+            'type_filter': type_filter,
+            'year_filter': year,
+            'genre_filter': genre,
+            'category_filter': category,
+            'categories': cats or [],
+            'genres': sorted(all_genres),
+        },
+    )
+
 @router.get('/title/{slug}', response_class=HTMLResponse)
 async def title_page(request: Request, slug: str):
     page = await pages.find_one({'slug':slug,'published':True},{'_id':0})

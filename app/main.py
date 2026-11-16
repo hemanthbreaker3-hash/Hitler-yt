@@ -82,11 +82,6 @@ async def health():
 async def index(request: Request):
     return templates.TemplateResponse(request=request, name="index.html", context={"request": request})
 
-@app.get("/search")
-async def search_page(request: Request):
-    # Same UI as home — search is handled via ?q= query param on the catalog
-    return templates.TemplateResponse(request=request, name="index.html", context={"request": request})
-
 @app.get("/watch/{short_code}")
 async def watch_page(request: Request, short_code: str):
     file_data = await files_col.find_one({"short_code": short_code})
