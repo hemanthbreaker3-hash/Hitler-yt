@@ -51,39 +51,34 @@ async def _release_client(client: Client) -> None:
 
 
 def parse_range_header(request: Request, file_size: int) -> tuple[int, int, bool]:
-    """Parse HTTP Range header for Chrome, 1DM, ADM, IDM, and video players."""
-    header = (request.headers.get("range") or request.headers.get("Range") or "").strip()
+    """Parse one RFC 7233 byte range. Multiple/invalid ranges are rejected safely."""
+    header = (request.headers.get("range") or "").strip()
     if not header:
         return 0, max(file_size - 1, 0), False
-
-    match = re.search(r"bytes=(?P<start>\d*)-(?P<end>\d*)", header, flags=re.I)
-    if not match or file_size <= 0:
-        return 0, max(file_size - 1, 0), False
-
-    start_s, end_s = match.group("start"), match.group("end")
-    if start_s == "" and end_s == "":
-        return 0, max(file_size - 1, 0), False
-
-    if start_s == "":
-        suffix = int(end_s or 0)
+    if file_size <= 0 or not header.lower().startswith("bytes="):
+        raise HTTPException(status_code=416, detail="Requested range is not satisfiable",
+                            headers={"Content-Range": f"bytes */{file_size}"})
+    spec = header[6:].strip()
+    if "," in spec or not re.fullmatch(r"\d*-\d*", spec):
+        raise HTTPException(status_code=416, detail="Multiple or invalid byte ranges are not supported",
+                            headers={"Content-Range": f"bytes */{file_size}"})
+    start_s, end_s = spec.split("-", 1)
+    if not start_s and not end_s:
+        raise HTTPException(status_code=416, detail="Requested range is not satisfiable",
+                            headers={"Content-Range": f"bytes */{file_size}"})
+    if not start_s:
+        suffix = int(end_s)
         if suffix <= 0:
-            raise HTTPException(
-                status_code=416,
-                detail="Requested range is not satisfiable",
-                headers={"Content-Range": f"bytes */{file_size}"},
-            )
+            raise HTTPException(status_code=416, detail="Requested range is not satisfiable",
+                                headers={"Content-Range": f"bytes */{file_size}"})
         start, end = max(file_size - suffix, 0), file_size - 1
     else:
         start = int(start_s)
         end = int(end_s) if end_s else file_size - 1
         if start >= file_size or end < start:
-            raise HTTPException(
-                status_code=416,
-                detail="Requested range is not satisfiable",
-                headers={"Content-Range": f"bytes */{file_size}"},
-            )
+            raise HTTPException(status_code=416, detail="Requested range is not satisfiable",
+                                headers={"Content-Range": f"bytes */{file_size}"})
         end = min(end, file_size - 1)
-
     return start, end, True
 
 
@@ -230,17 +225,35 @@ async def _stream_file_chunks(
     raise HTTPException(status_code=502, detail="Telegram stream failed after retries")
 
 
-async def _fetch_single_tg_chunk(client: Client, media_target, chunk_index: int) -> bytes:
-    """Fetch a single 1 MiB Telegram chunk at `chunk_index` using `client`."""
-    await _acquire_client([client])
-    try:
+async def _fetch_single_tg_chunk(client: Client, media_target, chunk_index: int,
+                                 expected_size: int) -> bytes:
+    """Fetch and validate one Telegram chunk, retrying without duplicating output."""
+    last_error = None
+    for attempt in range(5):
+        await _acquire_client([client])
         parts = []
-        async for chunk in client.stream_media(media_target, offset=chunk_index, limit=1):
-            if chunk:
-                parts.append(bytes(chunk))
-        return b"".join(parts)
-    finally:
-        await _release_client(client)
+        received = 0
+        try:
+            async for chunk in client.stream_media(media_target, offset=chunk_index, limit=1):
+                if chunk:
+                    data = bytes(chunk)
+                    parts.append(data)
+                    received += len(data)
+            result = b"".join(parts)
+            if len(result) == expected_size:
+                return result
+            raise IOError(f"Telegram returned {len(result)} bytes; expected {expected_size}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            if attempt < 4:
+                delay = min(0.5 * (2 ** attempt), 8.0)
+                logger.warning("Chunk %d retry %d/5 after %s", chunk_index, attempt + 1, exc)
+                await asyncio.sleep(delay)
+        finally:
+            await _release_client(client)
+    raise HTTPException(status_code=502, detail=f"Unable to retrieve complete download chunk: {last_error}")
 
 
 async def _download_byte_range(client: Client, media_target, start: int, end: int):
@@ -318,91 +331,61 @@ async def media_streamer(
     primary_target,
     start: int,
     end: int,
+    file_size: int,
     all_clients: list[Client] | None = None,
     chat_id: int | None = None,
     message_id: int | None = None,
     storage_chat_id: int | None = None,
     storage_message_id: int | None = None,
 ):
-    """
-    Stream bytes [start, end]:
-    - If multiple helper bots/sessions are available and the request is >= 4 MiB, uses a sliding-window
-      parallel 1 MiB chunk prefetcher across all capable bots (instant <0.3s TTFB + multi-bot speed boost!).
-    - Otherwise streams directly from primary_client.
-    """
+    """Deliver an exact byte range in order; retries each chunk before emitting it."""
     total = end - start + 1
     try:
-        # Check if we can use multi-bot sliding-window parallel striping (for downloads/streams >= 4 MiB)
+        capable = [(primary_client, primary_target)]
         if all_clients and len(all_clients) > 1 and total >= 4 * TG_CHUNK:
-            capable = await _discover_multi_bot_targets(
-                clients=all_clients,
-                primary_client=primary_client,
-                primary_target=primary_target,
-                chat_id=chat_id,
-                message_id=message_id,
-                storage_chat_id=storage_chat_id,
-                storage_message_id=storage_message_id,
-            )
-            if len(capable) > 1:
-                first_chunk_idx = start // TG_CHUNK
-                last_chunk_idx = end // TG_CHUNK
-                total_chunks = last_chunk_idx - first_chunk_idx + 1
-                window_size = min(MAX_PARALLEL_STRIPES, len(capable) * 2, total_chunks)
+            discovered = await _discover_multi_bot_targets(
+                clients=all_clients, primary_client=primary_client,
+                primary_target=primary_target, chat_id=chat_id, message_id=message_id,
+                storage_chat_id=storage_chat_id, storage_message_id=storage_message_id)
+            if len(discovered) > 1:
+                capable = discovered[:MAX_PARALLEL_STRIPES]
 
-                bytes_to_skip = start % TG_CHUNK
-                bytes_sent = 0
-                in_flight: dict[int, asyncio.Task] = {}
+        first_idx, last_idx = start // TG_CHUNK, end // TG_CHUNK
+        window = max(1, min(MAX_PARALLEL_STRIPES, len(capable) * 2))
+        pending: dict[int, asyncio.Task] = {}
+        next_schedule = first_idx
 
-                def schedule_chunk(c_idx: int):
-                    pair_client, pair_target = capable[(c_idx - first_chunk_idx) % len(capable)]
-                    in_flight[c_idx] = asyncio.create_task(
-                        _fetch_single_tg_chunk(pair_client, pair_target, c_idx)
-                    )
+        def schedule(idx: int):
+            client, target = capable[(idx - first_idx) % len(capable)]
+            expected = min(TG_CHUNK, file_size - idx * TG_CHUNK)
+            pending[idx] = asyncio.create_task(
+                _fetch_single_tg_chunk(client, target, idx, expected))
 
-                for c_idx in range(first_chunk_idx, min(first_chunk_idx + window_size, last_chunk_idx + 1)):
-                    schedule_chunk(c_idx)
-
-                next_to_schedule = first_chunk_idx + window_size
-                try:
-                    for current_idx in range(first_chunk_idx, last_chunk_idx + 1):
-                        task = in_flight.pop(current_idx)
-                        chunk = await task
-                        if next_to_schedule <= last_chunk_idx:
-                            schedule_chunk(next_to_schedule)
-                            next_to_schedule += 1
-
-                        if not chunk:
-                            break
-                        if bytes_to_skip > 0:
-                            if len(chunk) <= bytes_to_skip:
-                                bytes_to_skip -= len(chunk)
-                                continue
-                            chunk = chunk[bytes_to_skip:]
-                            bytes_to_skip = 0
-
-                        remaining = total - bytes_sent
-                        if len(chunk) > remaining:
-                            chunk = chunk[:remaining]
-                        if chunk:
-                            yield chunk
-                            bytes_sent += len(chunk)
-                        if bytes_sent >= total:
-                            break
-                    return
-                finally:
-                    for t in in_flight.values():
-                        if not t.done():
-                            t.cancel()
-                    if in_flight:
-                        await asyncio.gather(*in_flight.values(), return_exceptions=True)
-
-        # Standard single-client immediate streaming
-        async for chunk in _download_byte_range(primary_client, primary_target, start, end):
-            yield chunk
+        try:
+            while next_schedule <= last_idx and len(pending) < window:
+                schedule(next_schedule)
+                next_schedule += 1
+            for idx in range(first_idx, last_idx + 1):
+                task = pending.pop(idx)
+                chunk = await task
+                if next_schedule <= last_idx:
+                    schedule(next_schedule)
+                    next_schedule += 1
+                left = start % TG_CHUNK if idx == first_idx else 0
+                right = (end % TG_CHUNK) + 1 if idx == last_idx else len(chunk)
+                piece = chunk[left:right]
+                if piece:
+                    yield piece
+        finally:
+            for task in pending.values():
+                if not task.done():
+                    task.cancel()
+            if pending:
+                await asyncio.gather(*pending.values(), return_exceptions=True)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.error("Error during media_streamer byte transfer: %s", exc)
+        logger.error("Download aborted before complete delivery: %s", exc)
         raise
     finally:
         await _release_client(primary_client)
@@ -491,6 +474,7 @@ async def get_streaming_response(
             primary_target=media_target,
             start=start,
             end=end,
+            file_size=file_size,
             all_clients=clients,
             chat_id=chat_id,
             message_id=message_id,
