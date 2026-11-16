@@ -436,7 +436,61 @@ def register_handlers(bot):
             return await message.reply(f"🗂️ **Categories**\n\n{names}\n\nCreate or manage unlimited categories in the dashboard.", reply_markup=_kb([[InlineKeyboardButton("➕ Create / Manage Categories", url=f"{base}/panel")]]))
         if cmd == "/edit":
             return await message.reply("✏️ Page editor\n\nEdit page metadata, poster, categories, unlimited groups and buttons in the dashboard.", reply_markup=_kb([[InlineKeyboardButton("✏️ Open Page Editor", url=f"{base}/panel")]]))
-        return await message.reply("🔐 Admin dashboard", reply_markup=_kb([[InlineKeyboardButton("Open HITLER YT Panel", url=f"{base}/panel")]]))
+        current_backend = (await settings_col.find_one({"key": "backend_url"}) or {}).get("value") or settings.BACKEND_URL or "Not configured"
+        current_base = (await settings_col.find_one({"key": "base_url"}) or {}).get("value") or settings.BASE_URL
+        vercel_url = (await settings_col.find_one({"key": "vercel_url"}) or {}).get("value") or "Detected automatically after first Vercel request"
+        website_doc = await settings_col.find_one({"key": "website_urls"}) or {}
+        website_urls = website_doc.get("value", [])
+        website_lines = "\n".join(f"• `{url}`" for url in website_urls) or "Not registered yet"
+        return await message.reply(
+            "🔐 **HITLER YT · Control Panel**\n\n"
+            f"> 🌐 **Primary Website URL:** `{current_base}`\n"
+            f"> ☁️ **Cloudflare Backend URL:** `{current_backend}`\n"
+            f"> ▲ **Vercel Website URL:** `{vercel_url}`\n\n"
+            f"**Registered website domains**\n{website_lines}\n\n"
+            "**URL management**\n"
+            "• `/baseurl https://your-public-site.com` — set the primary website URL\n"
+            "• `/backendurl https://your-tunnel.trycloudflare.com` — set the VPS backend URL\n\n"
+            "The VPS deployment automatically sets Cloudflare as the primary website and backend URL. Vercel registers its own production/custom domains automatically when first opened. Both domains remain valid website entry points.",
+            reply_markup=_kb([[InlineKeyboardButton("Open HITLER YT Website Panel", url=f"{base}/panel")]])
+        )
+
+    @bot.on_message(filters.command("backendurl"))
+    async def backendurl_handler(client, message: Message):
+        user = message.from_user
+        if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
+            return await message.reply("🚫 **Unauthorized Access**")
+        args = (message.text or "").split(maxsplit=1)
+        current = (await settings_col.find_one({"key": "backend_url"}) or {}).get("value") or settings.BACKEND_URL or "Not configured"
+        if len(args) < 2:
+            return await message.reply(
+                "☁️ **Backend URL (Cloudflare Tunnel)**\n\n"
+                f"> Current: `{current}`\n\n"
+                "Usage: `/backendurl https://your-tunnel.trycloudflare.com`\n"
+                "Use the HTTPS Cloudflare public URL that forwards to the VPS backend port."
+            )
+        candidate = args[1].strip()
+        if not candidate.startswith(("http://", "https://")):
+            candidate = "https://" + candidate
+        try:
+            candidate = normalize_public_base_url(candidate)
+            await settings_col.update_one(
+                {"key": "backend_url"},
+                {"$set": {"value": candidate, "updated_by": user.id, "updated_at": datetime.datetime.utcnow()}},
+                upsert=True,
+            )
+            settings.BACKEND_URL = candidate
+            await message.reply(
+                "✅ **Backend URL saved to MongoDB**\n\n"
+                f"> ☁️ Backend: `{candidate}`\n\n"
+                "Vercel's API gateway will read this URL from the same MongoDB database. "
+                "Make sure `MONGODB_URI` and `DATABASE_NAME` are configured in Vercel too."
+            )
+        except ValueError as exc:
+            await message.reply(f"❌ Invalid backend URL: `{html.escape(str(exc))}`")
+        except Exception:
+            logger.exception("Failed to save backend URL")
+            await message.reply("❌ Could not save backend URL. Check the MongoDB connection.")
 
     @bot.on_message(filters.command("baseurl"))
     async def baseurl_handler(client, message: Message):
@@ -474,6 +528,11 @@ def register_handlers(bot):
                 upsert=True,
             )
             settings.BASE_URL = new_url
+            await settings_col.update_one(
+                {"key": "website_urls"},
+                {"$addToSet": {"value": new_url}, "$set": {"updated_at": datetime.datetime.utcnow()}},
+                upsert=True,
+            )
             await message.reply(
                 "🌐 **Base URL Updated Successfully!**\n\n"
                 f"> 🔗 **New Base URL:** `{new_url}`\n"

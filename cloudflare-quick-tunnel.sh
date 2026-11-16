@@ -62,6 +62,7 @@ fi
 log "Generated public URL: $TUNNEL_URL"
 
 # Update .env without sourcing it as shell code; preserve all other settings.
+# Cloudflare is both the VPS backend endpoint and the primary public website domain.
 python3 - "$SCRIPT_DIR/.env" "$TUNNEL_URL" <<'PY'
 import json, pathlib, re, sys
 path = pathlib.Path(sys.argv[1])
@@ -74,10 +75,14 @@ for line in lines:
         if not found:
             new_lines.append('BASE_URL=' + json.dumps(url))
             found = True
+    elif re.match(r'^\s*BACKEND_URL\s*=', line):
+        new_lines.append('BACKEND_URL=' + json.dumps(url))
     else:
         new_lines.append(line)
 if not found:
     new_lines.append('BASE_URL=' + json.dumps(url))
+if not any(re.match(r'^\s*BACKEND_URL\s*=', line) for line in new_lines):
+    new_lines.append('BACKEND_URL=' + json.dumps(url))
 path.write_text('\n'.join(new_lines) + '\n')
 path.chmod(0o600)
 PY
@@ -94,9 +99,16 @@ async def main():
     client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=15000)
     await client.admin.command("ping")
     db = client[os.environ.get("DATABASE_NAME", "file2link")]
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for key in ("base_url", "backend_url"):
+        await db.settings.update_one(
+            {"key": key},
+            {"$set": {"value": sys.argv[1], "updated_by": "cloudflare-deployment", "updated_at": now}},
+            upsert=True,
+        )
     await db.settings.update_one(
-        {"key": "base_url"},
-        {"$set": {"value": sys.argv[1], "updated_by": "deployment", "updated_at": datetime.datetime.utcnow()}},
+        {"key": "website_urls"},
+        {"$addToSet": {"value": sys.argv[1]}, "$set": {"updated_at": now}},
         upsert=True,
     )
     client.close()
@@ -121,6 +133,7 @@ curl -fsS "http://127.0.0.1:${PORT_VALUE}/health" >/dev/null || {
   exit 1
 }
 
-log "BASE_URL saved to .env and MongoDB: $TUNNEL_URL"
+log "BASE_URL and BACKEND_URL saved to .env and MongoDB: $TUNNEL_URL"
+log "Cloudflare URL registered as a public website URL; Vercel URL is registered automatically on its first request."
 log 'Tunnel is running. Keep this systemd service enabled; it will regenerate and resynchronize the URL after a VPS reboot.'
 wait "$CF_PID"

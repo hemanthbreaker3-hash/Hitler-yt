@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
-from app.database.connection import db, settings
+from app.database.connection import db, settings, settings_col
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(__import__('pathlib').Path(__file__).resolve().parent / 'templates'))
@@ -23,6 +23,8 @@ class SettingsUpdate(BaseModel):
     built_in_player_enabled: bool | None = None
     auto_player_redirect: bool | None = None
     access_mode: str | None = Field(default=None, pattern='^(all|admins|owners)$')
+    backend_url: str | None = Field(default=None, max_length=500)
+    base_url: str | None = Field(default=None, max_length=500)
 
 class CategoryInput(BaseModel):
     name: str = Field(min_length=1, max_length=50)
@@ -63,7 +65,8 @@ async def admin_auth(credentials: HTTPBasicCredentials | None = Depends(security
 
 async def get_settings():
     doc = await site_settings.find_one({'_id':'runtime'}) or {}
-    return { 'downloads_enabled': doc.get('downloads_enabled', True), 'streaming_enabled': doc.get('streaming_enabled', True), 'built_in_player_enabled': doc.get('built_in_player_enabled', True), 'auto_player_redirect': doc.get('auto_player_redirect', False), 'access_mode': doc.get('access_mode', 'all') }
+    urls = {x['key']: x.get('value', '') for x in await settings_col.find({'key': {'$in': ['base_url', 'backend_url', 'vercel_url', 'website_urls']}}, {'key': 1, 'value': 1}).to_list(4)}
+    return { 'downloads_enabled': doc.get('downloads_enabled', True), 'streaming_enabled': doc.get('streaming_enabled', True), 'built_in_player_enabled': doc.get('built_in_player_enabled', True), 'auto_player_redirect': doc.get('auto_player_redirect', False), 'access_mode': doc.get('access_mode', 'all'), 'base_url': urls.get('base_url', settings.BASE_URL), 'backend_url': urls.get('backend_url', settings.BACKEND_URL or ''), 'vercel_url': urls.get('vercel_url', os.getenv('WEBSITE_URL', '')), 'website_urls': urls.get('website_urls', []) }
 
 async def seed_categories():
     await pages.create_index('slug', unique=True)
@@ -110,10 +113,32 @@ async def title_page(request: Request, slug: str):
 async def panel(request: Request, _: bool = Depends(admin_auth)):
     return templates.TemplateResponse(request=request,name='admin/panel.html',context={'request':request,'settings':await get_settings()})
 
+@router.get('/api/admin/settings')
+async def read_admin_settings(_: bool = Depends(admin_auth)):
+    return await get_settings()
+
+
 @router.put('/api/admin/settings')
 async def update_settings(data: SettingsUpdate, _: bool = Depends(admin_auth)):
     values = data.model_dump(exclude_none=True)
-    if values: await site_settings.update_one({'_id':'runtime'},{'$set':values},upsert=True)
+    url_values = {key: values.pop(key) for key in ('base_url', 'backend_url') if key in values}
+    if values:
+        await site_settings.update_one({'_id':'runtime'},{'$set':values},upsert=True)
+    for key, candidate in url_values.items():
+        candidate = candidate.strip().rstrip('/')
+        parsed = urlparse(candidate)
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise HTTPException(400, f'{key} must be a valid public HTTP(S) URL without credentials, query or fragment')
+        host = (parsed.hostname or '').lower()
+        if host in ('localhost', '127.0.0.1', '0.0.0.0') or host.endswith(('.local', '.internal')):
+            raise HTTPException(400, f'{key} must use a publicly reachable hostname')
+        await settings_col.update_one({'key':key},{'$set':{'value':candidate,'updated_at':datetime.now(timezone.utc)}},upsert=True)
+        if key == 'base_url':
+            await settings_col.update_one({'key':'website_urls'},{'$addToSet':{'value':candidate},'$set':{'updated_at':datetime.now(timezone.utc)}},upsert=True)
+            settings.BASE_URL = candidate
+            os.environ['BASE_URL'] = candidate
+        else:
+            settings.BACKEND_URL = candidate
     return await get_settings()
 
 @router.get('/api/admin/categories')

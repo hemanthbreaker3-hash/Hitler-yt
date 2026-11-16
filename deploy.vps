@@ -97,7 +97,7 @@ aliases = {'APP_ID':'API_ID', 'DATABASE_URI':'MONGODB_URI', 'DATABASE_URL':'MONG
 for alias, canonical in aliases.items():
     if os.environ.get(alias) and not os.environ.get(canonical):
         os.environ[canonical] = os.environ[alias]
-keys = ('API_ID','API_HASH','BOT_TOKEN','OWNER_ID','ADMINS','CHANNEL_ID','FORCE_SUB_CHANNELS','MONGODB_URI','DATABASE_NAME','REDIS_URL','BASE_URL','PORT','DEBUG','DEFAULT_EXPIRY','SESSIONS','ADMIN_PANEL_TOKEN','TMDB_API_KEY','STREAM_CHUNK_SIZE')
+keys = ('API_ID','API_HASH','BOT_TOKEN','OWNER_ID','ADMINS','CHANNEL_ID','FORCE_SUB_CHANNELS','MONGODB_URI','DATABASE_NAME','REDIS_URL','BASE_URL','BACKEND_URL','WEBSITE_URL','PORT','DEBUG','DEFAULT_EXPIRY','SESSIONS','ADMIN_PANEL_TOKEN','TMDB_API_KEY','STREAM_CHUNK_SIZE')
 for key in keys:
     if key in os.environ: values[key] = os.environ[key]
 # Also accept legacy alias values from .env/config.env.
@@ -232,7 +232,7 @@ UNIT
       warn "You can retry with: sudo systemctl restart file2link-cloudflared"
     else
       info "Cloudflare Quick Tunnel URL: $TUNNEL_URL"
-      info "BASE_URL has been synchronized to .env and MongoDB; new Telegram links will use this URL."
+      info "BASE_URL and BACKEND_URL have been synchronized to .env and MongoDB; new Telegram links use Cloudflare as the primary website domain."
       info "Tunnel service is enabled at boot and will resynchronize the URL after a VPS reboot."
     fi
     info "Deployment command completed."

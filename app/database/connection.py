@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     ADMINS: str = ""
     FORCE_SUB_CHANNELS: str = ""
     BASE_URL: str = "http://localhost:8000"
+    BACKEND_URL: Optional[str] = None
     DEFAULT_EXPIRY: int = 24
     CHANNEL_ID: Optional[int] = None
     UPDATE_CHANNEL_URL: str = "https://t.me/HiTLERYT"
@@ -96,11 +97,14 @@ async def create_indexes() -> None:
 
 
 async def load_custom_settings() -> None:
-    custom = await settings_col.find_one({"key": "base_url"}, {"value": 1})
-    if custom and custom.get("value"):
+    """Load runtime URLs from MongoDB so the bot and website share one source of truth."""
+    for key, attribute in (("base_url", "BASE_URL"), ("backend_url", "BACKEND_URL")):
+        custom = await settings_col.find_one({"key": key}, {"value": 1})
+        if not custom or not custom.get("value"):
+            continue
         candidate = str(custom["value"]).strip().rstrip("/")
         parsed = urlparse(candidate)
         if parsed.scheme in {"http", "https"} and parsed.netloc and not (parsed.username or parsed.password or parsed.query or parsed.fragment):
-            settings.BASE_URL = candidate
+            setattr(settings, attribute, candidate)
         else:
-            logger.warning("Ignoring invalid persisted BASE_URL; retaining environment configuration")
+            logger.warning("Ignoring invalid persisted %s; retaining environment configuration", key)

@@ -1,0 +1,5 @@
+{
+  "tests/test_app.py": true,
+  "tests/test_stream_ranges.py": true,
+  "tests/test_probe.py::ProbeParsingTests": true
+}
