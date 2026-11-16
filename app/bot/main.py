@@ -47,6 +47,141 @@ def _kb(rows):
     return InlineKeyboardMarkup(rows)
 
 
+async def _catalog_search(query_text: str, media_filter: str | None):
+    """Search movies/TV. Tries OMDb, then TMDB (only if their keys are configured),
+    then falls back to Apple's iTunes Search API, which needs no key at all, so
+    /search always works even if no metadata API key was ever set up.
+    Returns (provider, items, error_message)."""
+    omdb_key = (getattr(settings, "OMDB_API_KEY", "") or os.getenv("OMDB_API_KEY", "")).strip()
+    tmdb_key = (getattr(settings, "TMDB_API_KEY", "") or os.getenv("TMDB_API_KEY", "")).strip()
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(20.0, connect=8.0),
+        headers={"Accept": "application/json"},
+        follow_redirects=True,
+    ) as http:
+        if omdb_key:
+            try:
+                omdb_type = {"movie": "movie", "tv": "series"}.get(media_filter)
+                params = {"apikey": omdb_key, "s": query_text, "page": 1}
+                if omdb_type:
+                    params["type"] = omdb_type
+                r = await http.get("https://www.omdbapi.com/", params=params)
+                r.raise_for_status(); payload = r.json()
+                if str(payload.get("Response", "")).lower() != "false":
+                    items = []
+                    for item in payload.get("Search") or []:
+                        kind = (item.get("Type") or "").lower()
+                        mtype = "movie" if kind == "movie" else "tv" if kind == "series" else None
+                        if not mtype or not item.get("imdbID"):
+                            continue
+                        title = (item.get("Title") or "").strip()
+                        if not title:
+                            continue
+                        poster = item.get("Poster") or ""
+                        poster = poster if poster and poster != "N/A" else ""
+                        year = re.sub(r"[^0-9]", "", item.get("Year") or "")[:4]
+                        items.append({"source": "omdb", "source_id": item["imdbID"], "media_type": mtype, "title": title, "year": year, "poster": poster})
+                    if items:
+                        return "omdb", items, None
+            except Exception:
+                logger.exception("OMDb search failed; trying next provider")
+
+        if tmdb_key:
+            try:
+                tmdb_type = {"movie": "movie", "tv": "tv"}.get(media_filter, "multi")
+                r = await http.get(f"https://api.themoviedb.org/3/search/{tmdb_type}", params={"api_key": tmdb_key, "query": query_text, "include_adult": "false", "page": 1})
+                r.raise_for_status(); payload = r.json()
+                items = []
+                for item in payload.get("results") or []:
+                    mtype = item.get("media_type") if tmdb_type == "multi" else tmdb_type
+                    if mtype not in ("movie", "tv") or not item.get("id"):
+                        continue
+                    title = (item.get("title") or item.get("name") or "").strip()
+                    if not title:
+                        continue
+                    rd = item.get("release_date") or item.get("first_air_date") or ""
+                    year = rd[:4] if isinstance(rd, str) and len(rd) >= 4 else ""
+                    poster_path = item.get("poster_path") or ""
+                    poster = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else ""
+                    items.append({"source": "tmdb", "source_id": str(item["id"]), "media_type": mtype, "title": title, "year": year, "poster": poster})
+                if items:
+                    return "tmdb", items, None
+            except Exception:
+                logger.exception("TMDB search failed; trying next provider")
+
+        # Free, keyless fallback: Apple's iTunes Search API. Always available, no setup needed.
+        try:
+            medias = ["movie"] if media_filter == "movie" else ["tvShow"] if media_filter == "tv" else ["movie", "tvShow"]
+            items = []
+            for media in medias:
+                r = await http.get("https://itunes.apple.com/search", params={"term": query_text, "media": media, "limit": 10, "country": "US"})
+                r.raise_for_status(); payload = r.json()
+                for item in payload.get("results") or []:
+                    title = (item.get("trackName") or item.get("collectionName") or "").strip()
+                    track_id = item.get("trackId") or item.get("collectionId")
+                    if not title or not track_id:
+                        continue
+                    rd = item.get("releaseDate") or ""
+                    year = rd[:4] if isinstance(rd, str) and len(rd) >= 4 else ""
+                    poster = (item.get("artworkUrl100") or "").replace("100x100bb", "600x600bb")
+                    items.append({"source": "itunes", "source_id": str(track_id), "media_type": "movie" if media == "movie" else "tv", "title": title, "year": year, "poster": poster})
+            if items:
+                return "itunes", items, None
+            return "itunes", [], "No results found"
+        except Exception:
+            logger.exception("iTunes fallback search failed")
+            return None, [], "All search providers are unavailable right now"
+
+
+async def _catalog_details(source: str, source_id: str, media_type: str) -> dict:
+    """Best-effort fetch of extra fields (genres, runtime, plot, rating, poster) for a
+    chosen result. Never raises — returns whatever defaults it couldn't fill in."""
+    extra = {"genres": [], "runtime": None, "overview": None, "rating": None, "poster": None, "imdb_id": ""}
+    try:
+        if source == "omdb":
+            omdb_key = (getattr(settings, "OMDB_API_KEY", "") or os.getenv("OMDB_API_KEY", "")).strip()
+            if not omdb_key:
+                return extra
+            async with httpx.AsyncClient(timeout=15) as http:
+                r = await http.get("https://www.omdbapi.com/", params={"apikey": omdb_key, "i": source_id, "plot": "full"})
+                r.raise_for_status(); meta = r.json()
+            if str(meta.get("Response", "")).lower() == "false":
+                return extra
+            extra["genres"] = [g.strip() for g in (meta.get("Genre") or "").split(",") if g.strip()]
+            extra["imdb_id"] = meta.get("imdbID") or source_id
+            m = re.search(r"\d+", meta.get("Runtime") or "")
+            extra["runtime"] = int(m.group()) if m else None
+            if meta.get("Plot") and meta["Plot"] != "N/A":
+                extra["overview"] = meta["Plot"]
+            if meta.get("Poster") and meta["Poster"] != "N/A":
+                extra["poster"] = meta["Poster"]
+            if meta.get("imdbRating") and meta["imdbRating"] != "N/A":
+                try:
+                    extra["rating"] = float(meta["imdbRating"])
+                except ValueError:
+                    pass
+        elif source == "tmdb":
+            tmdb_key = (getattr(settings, "TMDB_API_KEY", "") or os.getenv("TMDB_API_KEY", "")).strip()
+            if not tmdb_key:
+                return extra
+            endpoint = "tv" if media_type == "tv" else "movie"
+            async with httpx.AsyncClient(timeout=15) as http:
+                r = await http.get(f"https://api.themoviedb.org/3/{endpoint}/{source_id}", params={"api_key": tmdb_key, "append_to_response": "external_ids"})
+                r.raise_for_status(); meta = r.json()
+            extra["genres"] = [g.get("name", "") for g in meta.get("genres", []) if g.get("name")]
+            extra["imdb_id"] = (meta.get("external_ids") or {}).get("imdb_id") or meta.get("imdb_id", "")
+            extra["runtime"] = meta.get("runtime") or (meta.get("episode_run_time") or [None])[0]
+            if meta.get("overview"):
+                extra["overview"] = meta["overview"]
+            if meta.get("vote_average"):
+                extra["rating"] = meta["vote_average"]
+        # source == "itunes": the search result already carries everything it offers.
+    except Exception:
+        logger.exception("Catalog details lookup failed for source=%s", source)
+    return extra
+
+
 async def is_access_allowed(user_id: int) -> bool:
     config = await db.site_settings.find_one({"_id": "runtime"}) or {}
     mode = config.get("access_mode", "all")
@@ -392,108 +527,60 @@ def register_handlers(bot):
         query_text = parts[1].strip()
         media_filter = None  # None = search both movies and series (OMDb "multi")
         # Optional explicit media type; otherwise search both movies and TV.
-        typed = re.match(r"^(movie|movies|tv|series)\\s*:\\s*(.+)$", query_text, re.I)
+        typed = re.match(r"^(movie|movies|tv|series)\s*:\s*(.+)$", query_text, re.I)
         if typed:
             media_filter = "movie" if typed.group(1).lower() in ("movie", "movies") else "tv"
             query_text = typed.group(2).strip()
         else:
-            typed = re.match(r"^(movie|movies|tv|series)\\s+(.+)$", query_text, re.I)
+            typed = re.match(r"^(movie|movies|tv|series)\s+(.+)$", query_text, re.I)
             if typed:
                 media_filter = "movie" if typed.group(1).lower() in ("movie", "movies") else "tv"
                 query_text = typed.group(2).strip()
 
         if not query_text:
             return await message.reply("❌ Please provide a movie or series name.")
-        api_key = (getattr(settings, "OMDB_API_KEY", "") or os.getenv("OMDB_API_KEY", "")).strip()
-        if not api_key:
-            return await message.reply(
-                "⚠️ **OMDb (IMDb) API key is not configured.**\n"
-                "Add `OMDB_API_KEY` to the bot backend environment and restart the bot.\n"
-                "Get a free key at https://www.omdbapi.com/apikey.aspx"
-            )
 
-        status = await message.reply(f"🔍 Searching IMDb for **{html.escape(query_text[:100])}**…")
+        status = await message.reply(f"🔍 Searching for **{html.escape(query_text[:100])}**…")
         try:
-            omdb_type = {"movie": "movie", "tv": "series"}.get(media_filter)
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(20.0, connect=8.0),
-                headers={"Accept": "application/json"},
-                follow_redirects=True,
-            ) as http:
-                params = {"apikey": api_key, "s": query_text, "page": 1}
-                if omdb_type:
-                    params["type"] = omdb_type
-                response = await http.get("https://www.omdbapi.com/", params=params)
-                response.raise_for_status()
-                payload = response.json()
-            if not isinstance(payload, dict):
-                raise ValueError("OMDb returned an unexpected response")
-            if str(payload.get("Response", "")).lower() == "false":
-                error_msg = payload.get("Error", "No results found")
+            provider, results, error_msg = await _catalog_search(query_text, media_filter)
+            if provider is None:
+                return await status.edit_text(f"❌ {html.escape(str(error_msg))}. Please try `/search` again in a moment.")
+            if not results:
                 return await status.edit_text(
-                    f"🔎 {html.escape(str(error_msg))} for **{html.escape(query_text[:100])}**.\n"
+                    f"🔎 {html.escape(str(error_msg or 'No results found'))} for **{html.escape(query_text[:100])}**.\n"
                     "Try a different spelling or use `/search movie: name` / `/search tv: name`."
                 )
 
             rows = []
-            saved = 0
-            for item in payload.get("Search") or []:
-                if not isinstance(item, dict):
-                    continue
-                omdb_kind = (item.get("Type") or "").lower()
-                media_type = "movie" if omdb_kind == "movie" else "tv" if omdb_kind == "series" else None
-                imdb_id = item.get("imdbID")
-                if media_type is None or not imdb_id:
-                    continue
-                title = (item.get("Title") or "").strip()
-                if not title:
-                    continue
+            for result in results[:10]:
                 pending_id = secrets.token_hex(5)
-                year = re.sub(r"[^0-9]", "", (item.get("Year") or ""))[:4]
-                poster = item.get("Poster") or ""
-                poster = poster if poster and poster != "N/A" else ""
                 await db.cms_pending.insert_one({
                     "_id": pending_id,
-                    "imdb_id": imdb_id,
-                    "media_type": media_type,
-                    "title": title,
+                    "source": result["source"],
+                    "source_id": result["source_id"],
+                    "media_type": result["media_type"],
+                    "title": result["title"],
                     "overview": "",
-                    "poster_path": poster,
-                    "release_date": year,
+                    "poster_path": result["poster"],
+                    "release_date": result["year"],
                     "rating": None,
                     "created_at": datetime.datetime.utcnow(),
                 })
-                label = f"{title} ({year})" if year else title
-                kind = "Movie" if media_type == "movie" else "TV"
+                label = f"{result['title']} ({result['year']})" if result["year"] else result["title"]
+                kind = "Movie" if result["media_type"] == "movie" else "TV"
                 rows.append([InlineKeyboardButton(f"{label[:42]} · {kind}", callback_data=f"cmscreate:{pending_id}")])
-                saved += 1
-                if saved >= 10:
-                    break
 
-            if not rows:
-                return await status.edit_text(
-                    f"🔎 No movie or TV results found for **{html.escape(query_text[:100])}**.\n"
-                    "Try a different spelling or use `/search movie: name` / `/search tv: name`."
-                )
+            source_label = {"omdb": "IMDb", "tmdb": "TMDB", "itunes": "iTunes"}.get(provider, provider)
             await status.edit_text(
-                f"🎬 **IMDb Search Results**\n"
+                f"🎬 **{source_label} Search Results**\n"
                 f"> Query: `{html.escape(query_text[:100])}`\n"
                 f"> Matches: `{len(rows)}`\n\n"
                 "Select a result to publish its catalog page:",
                 reply_markup=_kb(rows),
             )
-        except httpx.HTTPStatusError as exc:
-            logger.warning("OMDb search returned HTTP %s", exc.response.status_code)
-            await status.edit_text(
-                f"❌ OMDb search failed (HTTP {exc.response.status_code}). "
-                "Check the API key and OMDb availability."
-            )
-        except (httpx.TimeoutException, httpx.RequestError):
-            logger.exception("OMDb search network failure")
-            await status.edit_text("⏳ OMDb did not respond. Please try `/search` again in a moment.")
         except Exception as exc:
-            logger.exception("OMDb search failed")
-            await status.edit_text(f"❌ OMDb search failed: `{type(exc).__name__}`")
+            logger.exception("Catalog search failed")
+            await status.edit_text(f"❌ Search failed: `{type(exc).__name__}`")
 
     @bot.on_callback_query(filters.regex(r"^cmscreate:"))
     async def cms_create_callback(client, callback: CallbackQuery):
@@ -503,7 +590,7 @@ def register_handlers(bot):
         data = getattr(callback, "data", "") or ""
         pending_id = data.split(":", 1)[1] if ":" in data else ""
         pending = await db.cms_pending.find_one({"_id": pending_id}) if pending_id else None
-        if not pending or pending.get("media_type") not in ("movie", "tv") or not pending.get("imdb_id"):
+        if not pending or pending.get("media_type") not in ("movie", "tv") or not pending.get("source_id"):
             return await callback.answer("Search result expired. Run /search again.", show_alert=True)
         from app.database.connection import settings as app_settings
         slug = re.sub(r"[^a-z0-9]+", "-", pending["title"].lower()).strip("-") or secrets.token_hex(5)
@@ -511,34 +598,14 @@ def register_handlers(bot):
         while await db.catalog_pages.find_one({"slug": slug}):
             slug = f"{base}-{n}"; n += 1
         category = "web-series" if pending["media_type"] == "tv" else "movies"
-        extra = {"genres": [], "imdb_id": pending["imdb_id"], "runtime": None, "tagline": ""}
-        api_key = (getattr(settings, "OMDB_API_KEY", "") or os.getenv("OMDB_API_KEY", "")).strip()
-        if api_key:
-            try:
-                async with httpx.AsyncClient(timeout=15) as http:
-                    detail = await http.get("https://www.omdbapi.com/", params={"apikey": api_key, "i": pending["imdb_id"], "plot": "full"})
-                    detail.raise_for_status(); metadata = detail.json()
-                if str(metadata.get("Response", "")).lower() != "false":
-                    genres = [g.strip() for g in (metadata.get("Genre") or "").split(",") if g.strip()]
-                    runtime_match = re.search(r"\\d+", metadata.get("Runtime") or "")
-                    extra = {
-                        "genres": genres,
-                        "imdb_id": metadata.get("imdbID") or pending["imdb_id"],
-                        "runtime": int(runtime_match.group()) if runtime_match else None,
-                        "tagline": "",
-                    }
-                    if metadata.get("Plot") and metadata["Plot"] != "N/A":
-                        pending["overview"] = metadata["Plot"]
-                    if metadata.get("imdbRating") and metadata["imdbRating"] != "N/A":
-                        try:
-                            pending["rating"] = float(metadata["imdbRating"])
-                        except ValueError:
-                            pass
-                    poster = metadata.get("Poster") or ""
-                    if poster and poster != "N/A":
-                        pending["poster_path"] = poster
-            except Exception:
-                logger.exception("OMDb details lookup failed; publishing search metadata only")
+        detail = await _catalog_details(pending.get("source", ""), pending["source_id"], pending["media_type"])
+        extra = {"genres": detail["genres"], "imdb_id": detail["imdb_id"], "runtime": detail["runtime"], "tagline": ""}
+        if detail["overview"]:
+            pending["overview"] = detail["overview"]
+        if detail["rating"] is not None:
+            pending["rating"] = detail["rating"]
+        if detail["poster"]:
+            pending["poster_path"] = detail["poster"]
         await db.catalog_pages.insert_one({"slug": slug, "title": pending["title"], "overview": pending.get("overview", ""), "poster_path": pending.get("poster_path", ""), "release_date": pending.get("release_date", ""), "rating": pending.get("rating"), "media_type": pending["media_type"], "category_slugs": [category], "groups": [], "published": True, "created_at": datetime.datetime.utcnow(), **extra})
         await db.cms_pending.delete_one({"_id": pending_id})
         await callback.message.edit_text(f"✅ Page created: {app_settings.BASE_URL.rstrip('/')}/title/{slug}\nUse /edit while replying with this link, or open /panel to manage page groups and buttons.")
