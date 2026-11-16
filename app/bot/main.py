@@ -25,6 +25,7 @@ from app.database.connection import (
 from app.admin.auth import make_password_hash
 from app.cms import rewrite_all_stored_catalog_buttons
 from app.models.schemas import FileMetadata, User
+from app.streamer.manager import session_manager
 from app.utils.cloudflare_tunnel import _extract_tunnel_url_from_logs, apply_auto_cloudflare_url
 from app.utils.helpers import (
     generate_short_code,
@@ -47,6 +48,10 @@ import io
 
 logger = logging.getLogger(__name__)
 
+# Tracks admin user IDs currently waiting to send bot token(s) after clicking [➕ Add Bot Token] in /addbots
+_awaiting_bot_token_admins: set[int] = set()
+_BOT_TOKEN_PATTERN = re.compile(r"\d{6,16}:[A-Za-z0-9_-]{30,60}")
+
 
 def get_ist_greeting():
     ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -61,6 +66,10 @@ def get_ist_greeting():
 
 def _kb(rows):
     return InlineKeyboardMarkup(rows)
+
+
+def _is_admin_user(user_id: int) -> bool:
+    return user_id == settings.OWNER_ID or user_id in settings.admin_list
 
 
 async def is_access_allowed(user_id: int) -> bool:
@@ -78,6 +87,7 @@ async def setup_bot_commands(bot):
     try:
         commands = [
             BotCommand("start", "Start / help"),
+            BotCommand("addbots", "Add unlimited bot tokens to boost download speed (admin)"),
             BotCommand("panel", "Open control panel (admin)"),
             BotCommand("manage", "Edit website pages and bot settings (admin)"),
             BotCommand("username", "Set website panel username (admin)"),
@@ -102,6 +112,62 @@ async def setup_bot_commands(bot):
         logger.exception("Failed to register bot commands")
 
 
+def _build_addbots_summary_and_kb() -> tuple[str, InlineKeyboardMarkup]:
+    helper_list = session_manager.list_helper_bots()
+    total_clients = len(session_manager.get_all_clients())
+    if helper_list:
+        lines = []
+        for idx, b in enumerate(helper_list, start=1):
+            status_icon = "🟢" if b.get("connected") else "🔴"
+            uname = f"@{b['username']}" if b.get("username") else b.get("first_name") or f"ID {b['bot_id']}"
+            lines.append(f"{idx}. {status_icon} **{html.escape(uname)}** (`{b['bot_id']}`)")
+        bots_text = "\n".join(lines)
+    else:
+        bots_text = "_No extra helper bots added yet._"
+
+    channel_note = (
+        f"📌 **Storage Channel (`CHANNEL_ID`):** `{settings.CHANNEL_ID}`\n"
+        "> *(Make sure every helper bot is added as an Admin in your storage channel so all bots stream in parallel!)*"
+        if settings.CHANNEL_ID
+        else "💡 **Tip:** Set `CHANNEL_ID` in `.env` and add your helper bots as admins in that channel so all helper bots can parallel-stream user uploads!"
+    )
+
+    text = (
+        "🚀 **Multi-Bot Download Speed Booster (`/addbots`)**\n\n"
+        f"> ⚡ **Active Streaming Clients Pool:** `{total_clients}`\n"
+        f"> 🤖 **Added Helper Bots:** `{len(helper_list)}` (Unlimited supported)\n\n"
+        f"**Connected Helper Bots:**\n{bots_text}\n\n"
+        f"{channel_note}\n\n"
+        "Click **➕ Add Bot Token** below to add one or more bot tokens and boost download speed:"
+    )
+
+    rows = [
+        [InlineKeyboardButton("➕ Add Bot Token", callback_data="addbots:add")],
+    ]
+    if helper_list:
+        rows.append([
+            InlineKeyboardButton("🗑️ Remove a Bot", callback_data="addbots:remove_menu"),
+            InlineKeyboardButton("🔄 Refresh Status", callback_data="addbots:refresh"),
+        ])
+    else:
+        rows.append([InlineKeyboardButton("🔄 Refresh Status", callback_data="addbots:refresh")])
+    return text, _kb(rows)
+
+
+async def _process_and_save_bot_tokens(raw_text: str, user_id: int) -> tuple[list[dict], list[str]]:
+    tokens = list(dict.fromkeys(_BOT_TOKEN_PATTERN.findall(raw_text or "")))
+    added = []
+    errors = []
+    for tok in tokens:
+        try:
+            meta = await session_manager.add_helper_bot(tok, added_by=user_id, persist=True)
+            added.append(meta)
+        except Exception as exc:
+            masked = tok.split(":", 1)[0] + ": ***"
+            errors.append(f"`{masked}` → {html.escape(str(exc))}")
+    return added, errors
+
+
 def register_handlers(bot):
     """Register wzgram (Pyrogram-compatible) handlers on the bot client."""
 
@@ -111,11 +177,12 @@ def register_handlers(bot):
         if not user or user.is_bot:
             return
         user_id = user.id
+        _awaiting_bot_token_admins.discard(user_id)
         access_cfg = await db.site_settings.find_one({"_id": "runtime"}) or {}
         access_mode = access_cfg.get("access_mode", "all")
         if access_mode == "owners" and user_id != settings.OWNER_ID:
             return await message.reply("🔒 This bot is currently restricted to its owner.")
-        if access_mode == "admins" and user_id not in settings.admin_list and user_id != settings.OWNER_ID:
+        if access_mode == "admins" and not _is_admin_user(user_id):
             return await message.reply("🔒 This bot is currently restricted to administrators.")
 
         user_data = await users_col.find_one({"user_id": user_id})
@@ -172,6 +239,151 @@ def register_handlers(bot):
             reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
         )
 
+    # ─── /addbots Command & Interactive Inline Button Flow ────────────────────
+
+    @bot.on_message(filters.command("addbots") & filters.private)
+    async def addbots_command_handler(client, message: Message):
+        user = message.from_user
+        if not user or user.is_bot or not _is_admin_user(user.id):
+            return await message.reply("🚫 **Unauthorized Access** — Only bot admins can manage helper bots.")
+
+        raw = (message.text or "").strip()
+        parts = raw.split(maxsplit=1)
+        # If the admin passed tokens directly with /addbots <token1> <token2>...
+        if len(parts) > 1 and _BOT_TOKEN_PATTERN.search(parts[1]):
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            status_msg = await message.reply("⚡ **Validating & starting helper bot token(s)...**")
+            added, errors = await _process_and_save_bot_tokens(parts[1], user.id)
+            summary_lines = []
+            if added:
+                summary_lines.append(f"✅ **Added & Started {len(added)} Helper Bot(s):**")
+                for m in added:
+                    summary_lines.append(f"• @{html.escape(m.get('username') or '')} (`{m['bot_id']}`)")
+            if errors:
+                summary_lines.append("\n⚠️ **Failed Tokens:**")
+                summary_lines.extend(f"• {e}" for e in errors)
+            summary_lines.append(f"\n🚀 **Total Active Download Booster Clients:** `{len(session_manager.get_all_clients())}`")
+            return await status_msg.edit_text(
+                "\n".join(summary_lines),
+                reply_markup=_kb([
+                    [InlineKeyboardButton("➕ Add More Bot Tokens", callback_data="addbots:add")],
+                    [InlineKeyboardButton("📋 View All Helper Bots", callback_data="addbots:refresh")],
+                ]),
+            )
+
+        text, kb = _build_addbots_summary_and_kb()
+        await message.reply(text, reply_markup=kb)
+
+    @bot.on_callback_query(filters.regex(r"^addbots:"))
+    async def addbots_callback_handler(client, callback: CallbackQuery):
+        user = callback.from_user
+        if not user or not _is_admin_user(user.id):
+            return await callback.answer("🚫 Admins only", show_alert=True)
+
+        action = (callback.data or "").split(":", 1)[1]
+
+        if action == "add":
+            _awaiting_bot_token_admins.add(user.id)
+            await callback.answer("Send the Bot Token now")
+            return await callback.message.edit_text(
+                "🤖 **Add Helper Bot Token (Unlimited)**\n\n"
+                "> Send the **Bot Token** from @BotFather now (e.g. `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`).\n"
+                "> 💡 *You can send a single token or paste multiple bot tokens at once (separated by spaces or newlines).* \n\n"
+                "All added bots are saved to MongoDB and used in parallel to boost download & streaming speeds.",
+                reply_markup=_kb([[InlineKeyboardButton("❌ Cancel", callback_data="addbots:cancel")]]),
+            )
+
+        if action == "cancel":
+            _awaiting_bot_token_admins.discard(user.id)
+            await callback.answer("Cancelled")
+            text, kb = _build_addbots_summary_and_kb()
+            return await callback.message.edit_text(text, reply_markup=kb)
+
+        if action == "refresh":
+            _awaiting_bot_token_admins.discard(user.id)
+            await session_manager.load_saved_helper_bots()
+            await callback.answer("Refreshed helper bot pool")
+            text, kb = _build_addbots_summary_and_kb()
+            return await callback.message.edit_text(text, reply_markup=kb)
+
+        if action == "remove_menu":
+            helper_list = session_manager.list_helper_bots()
+            if not helper_list:
+                await callback.answer("No helper bots to remove", show_alert=True)
+                text, kb = _build_addbots_summary_and_kb()
+                return await callback.message.edit_text(text, reply_markup=kb)
+            rows = []
+            for b in helper_list:
+                uname = f"@{b['username']}" if b.get("username") else f"ID {b['bot_id']}"
+                rows.append([InlineKeyboardButton(f"🗑️ Remove {uname}", callback_data=f"addbots:del:{b['bot_id']}")])
+            rows.append([InlineKeyboardButton("⬅️ Back", callback_data="addbots:refresh")])
+            await callback.answer()
+            return await callback.message.edit_text(
+                "🗑️ **Remove a Helper Bot**\n\nSelect a bot below to stop and remove it from the download pool:",
+                reply_markup=_kb(rows),
+            )
+
+        if action.startswith("del:"):
+            try:
+                bot_id = int(action.split(":", 1)[1])
+                await session_manager.remove_helper_bot(bot_id)
+                await callback.answer("Helper bot removed")
+            except Exception as exc:
+                await callback.answer(f"Failed: {exc}", show_alert=True)
+            text, kb = _build_addbots_summary_and_kb()
+            return await callback.message.edit_text(text, reply_markup=kb)
+
+    @bot.on_message(filters.text & filters.private & ~filters.regex(r"^/"))
+    async def admin_bot_token_input_handler(client, message: Message):
+        """Handle bot token input sent by an admin after clicking [➕ Add Bot Token] in /addbots."""
+        user = message.from_user
+        if not user or user.is_bot or not _is_admin_user(user.id):
+            return
+        raw_text = (message.text or "").strip()
+        if user.id not in _awaiting_bot_token_admins and not _BOT_TOKEN_PATTERN.fullmatch(raw_text):
+            return
+
+        matches = _BOT_TOKEN_PATTERN.findall(raw_text)
+        if not matches:
+            return await message.reply(
+                "❌ **No valid Telegram Bot Token detected.**\n\n"
+                "Please send a valid Bot Token from @BotFather (format: `123456789:ABCdefGHI...`), or click **Cancel**.",
+                reply_markup=_kb([[InlineKeyboardButton("❌ Cancel", callback_data="addbots:cancel")]]),
+            )
+
+        _awaiting_bot_token_admins.discard(user.id)
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        status_msg = await message.reply(f"⚡ **Connecting & saving {len(matches)} helper bot token(s)...**")
+        added, errors = await _process_and_save_bot_tokens(raw_text, user.id)
+
+        lines = []
+        if added:
+            lines.append(f"✅ **Successfully Added {len(added)} Helper Bot(s) to Download Booster Pool:**")
+            for m in added:
+                lines.append(f"• 🤖 @{html.escape(m.get('username') or '')} (`{m['bot_id']}`)")
+        if errors:
+            lines.append("\n⚠️ **Could Not Start:**")
+            lines.extend(f"• {e}" for e in errors)
+
+        lines.append(f"\n🚀 **Total Active Download Booster Clients:** `{len(session_manager.get_all_clients())}`")
+        if settings.CHANNEL_ID:
+            lines.append(f"📌 *Remember to add new helper bots as Admin in your storage channel (`{settings.CHANNEL_ID}`) for parallel multi-bot speed!*")
+
+        await status_msg.edit_text(
+            "\n".join(lines),
+            reply_markup=_kb([
+                [InlineKeyboardButton("➕ Add Another Bot Token", callback_data="addbots:add")],
+                [InlineKeyboardButton("📋 View All Helper Bots", callback_data="addbots:refresh")],
+            ]),
+        )
+
     @bot.on_message((filters.document | filters.video | filters.audio | filters.animation | filters.photo | filters.voice | filters.video_note) & ~filters.channel)
     async def media_handler(client, message: Message):
         user = message.from_user
@@ -182,7 +394,7 @@ def register_handlers(bot):
         access_mode = access_cfg.get("access_mode", "all")
         if access_mode == "owners" and user.id != settings.OWNER_ID:
             return await message.reply("🔒 This bot is currently restricted to its owner.")
-        if access_mode == "admins" and user.id not in settings.admin_list and user.id != settings.OWNER_ID:
+        if access_mode == "admins" and not _is_admin_user(user.id):
             return await message.reply("🔒 This bot is currently restricted to administrators.")
         runtime_cfg = await db.site_settings.find_one({"_id": "runtime"}) or {}
         downloads_enabled = runtime_cfg.get("downloads_enabled", True)
@@ -282,7 +494,6 @@ def register_handlers(bot):
         )
         await files_col.insert_one(file_meta.dict())
 
-        # Check live cloudflared log first, then MongoDB, so auto-set Cloudflare Try URL is always used
         log_cf = _extract_tunnel_url_from_logs()
         if log_cf:
             await apply_auto_cloudflare_url(log_cf, source="media-upload-check")
@@ -343,6 +554,22 @@ def register_handlers(bot):
         except Exception:
             pass
 
+        if settings.CHANNEL_ID and settings.CHANNEL_ID != message.chat.id:
+            try:
+                log_msg = await message.copy(
+                    chat_id=settings.CHANNEL_ID,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=channel_buttons,
+                )
+                if log_msg and getattr(log_msg, "id", None):
+                    await files_col.update_one(
+                        {"short_code": short_code},
+                        {"$set": {"storage_chat_id": settings.CHANNEL_ID, "storage_message_id": log_msg.id}},
+                    )
+            except Exception as e:
+                logger.exception("Error mirroring to log channel: %s", e)
+
         try:
             await message.copy(
                 chat_id=message.chat.id,
@@ -356,17 +583,6 @@ def register_handlers(bot):
                 await message.reply(caption, parse_mode=ParseMode.HTML, reply_markup=user_buttons)
             except Exception as e2:
                 logger.exception("Fallback reply failed: %s", e2)
-
-        if settings.CHANNEL_ID and settings.CHANNEL_ID != message.chat.id:
-            try:
-                await message.copy(
-                    chat_id=settings.CHANNEL_ID,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=channel_buttons,
-                )
-            except Exception as e:
-                logger.exception("Error mirroring to log channel: %s", e)
 
     @bot.on_callback_query(filters.regex(r"^del_"))
     async def delete_callback(client, callback: CallbackQuery):
@@ -387,7 +603,7 @@ def register_handlers(bot):
     @bot.on_message(filters.command("search"))
     async def cms_search_handler(client, message: Message):
         user = message.from_user
-        if not user or user.is_bot or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
+        if not user or user.is_bot or not _is_admin_user(user.id):
             return await message.reply("🚫 Admins only.")
 
         raw = (message.text or "").strip()
@@ -502,7 +718,7 @@ def register_handlers(bot):
     @bot.on_callback_query(filters.regex(r"^cmscreate:"))
     async def cms_create_callback(client, callback: CallbackQuery):
         user = callback.from_user
-        if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
+        if not user or not _is_admin_user(user.id):
             return await callback.answer("Admins only", show_alert=True)
         data = getattr(callback, "data", "") or ""
         pending_id = data.split(":", 1)[1] if ":" in data else ""
@@ -560,7 +776,7 @@ def register_handlers(bot):
     @bot.on_callback_query(filters.regex(r"^cmscat:"))
     async def cms_category_callback(client, callback: CallbackQuery):
         user = callback.from_user
-        if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
+        if not user or not _is_admin_user(user.id):
             return await callback.answer("Admins only", show_alert=True)
         pending_id = callback.data.split(":", 1)[1]
         pending = await db.cms_pending.find_one({"_id": pending_id, "action": "category"})
@@ -577,7 +793,7 @@ def register_handlers(bot):
     @bot.on_message(filters.command(["username", "password"]))
     async def panel_credentials_handler(client, message: Message):
         user = message.from_user
-        if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
+        if not user or not _is_admin_user(user.id):
             return await message.reply("🚫 Admins only.")
         parts = (message.text or "").split(maxsplit=1)
         command = parts[0].split("@")[0].lower() if parts else ""
@@ -609,7 +825,7 @@ def register_handlers(bot):
     @bot.on_message(filters.command(["categories", "edit", "panel", "manage"]))
     async def cms_admin_commands(client, message: Message):
         user = message.from_user
-        if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
+        if not user or not _is_admin_user(user.id):
             return await message.reply("🚫 Admins only.")
         web_base = (await get_active_website_url()) or settings.BASE_URL
         base = str(web_base).rstrip("/")
@@ -677,11 +893,13 @@ def register_handlers(bot):
         return await message.reply(
             "🔐 **HITLER YT · Control Panel**\n\n"
             f"> ☁️ **Auto Cloudflare Stream/Download/Button URL:** `{current_cf}`\n"
-            f"> ▲ **Vercel Website URL (Website Only):** `{vercel_url}`\n\n"
+            f"> ▲ **Vercel Website URL (Website Only):** `{vercel_url}`\n"
+            f"> 🤖 **Active Booster Clients:** `{len(session_manager.get_all_clients())}` (use `/addbots` to add more)\n\n"
             f"**Registered Vercel website domains**\n{website_lines}\n\n"
             "**Panel login management**\n"
             "• `/username new_username` — change the website panel username\n"
-            "• `/password new_password` — change the website panel password (10+ characters)\n\n"
+            "• `/password new_password` — change the website panel password (10+ characters)\n"
+            "• `/addbots` — add unlimited bot tokens to boost download speeds\n\n"
             "The Cloudflare `trycloudflare.com` URL is auto-detected and automatically replaces all button URL domains and generates all download & stream links, while Vercel serves the website.",
             reply_markup=_kb([[InlineKeyboardButton("Open HITLER YT Website Panel", url=f"{base}/panel")]]),
         )
@@ -689,7 +907,7 @@ def register_handlers(bot):
     @bot.on_message(filters.command("backendurl"))
     async def backendurl_handler(client, message: Message):
         user = message.from_user
-        if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
+        if not user or not _is_admin_user(user.id):
             return await message.reply("🚫 **Unauthorized Access**")
         args = (message.text or "").split(maxsplit=1)
         current = (await get_active_cloudflare_url()) or settings.BACKEND_URL or "Auto-detecting"
@@ -741,7 +959,7 @@ def register_handlers(bot):
         user = message.from_user
         if not user or user.is_bot:
             return
-        if user.id not in settings.admin_list and user.id != settings.OWNER_ID:
+        if not _is_admin_user(user.id):
             return await message.reply(
                 "🚫 **Unauthorized Access**\n\n"
                 "> Only authorized bot administrators can update the Base URL."
@@ -807,9 +1025,7 @@ def register_handlers(bot):
     @bot.on_message(filters.command("stats"))
     async def stats_handler(client, message: Message):
         user = message.from_user
-        if not user or user.is_bot:
-            return
-        if user.id not in settings.admin_list and user.id != settings.OWNER_ID:
+        if not user or user.is_bot or not _is_admin_user(user.id):
             return
         total_files = await files_col.count_documents({})
         total_users = await users_col.count_documents({})
@@ -817,6 +1033,7 @@ def register_handlers(bot):
             f"📊 **System Statistics**\n\n"
             f"> 👥 **Total Users:** `{total_users}`\n"
             f"> 📁 **Total Files Generated:** `{total_files}`\n"
+            f"> 🤖 **Active Booster Clients:** `{len(session_manager.get_all_clients())}` (`{len(session_manager.helper_bots)}` helper bots)\n"
             f"> ⚡ **System Status:** `Online & High-Speed`\n"
             f"> 🔧 **Engine:** `wzgram[fast]`"
         )
@@ -824,9 +1041,7 @@ def register_handlers(bot):
     @bot.on_message(filters.command("broadcast"))
     async def broadcast_handler(client, message: Message):
         user = message.from_user
-        if not user or user.is_bot:
-            return
-        if user.id not in settings.admin_list and user.id != settings.OWNER_ID:
+        if not user or user.is_bot or not _is_admin_user(user.id):
             return
         if not message.reply_to_message:
             return await message.reply("⚠️ **Usage:** Please reply to a message to broadcast it.")
@@ -856,9 +1071,7 @@ def register_handlers(bot):
     @bot.on_message(filters.command("ban"))
     async def ban_handler(client, message: Message):
         user = message.from_user
-        if not user or user.is_bot:
-            return
-        if user.id not in settings.admin_list and user.id != settings.OWNER_ID:
+        if not user or user.is_bot or not _is_admin_user(user.id):
             return
         try:
             target = int((message.text or "").split()[1])
@@ -872,9 +1085,7 @@ def register_handlers(bot):
     @bot.on_message(filters.command("unban"))
     async def unban_handler(client, message: Message):
         user = message.from_user
-        if not user or user.is_bot:
-            return
-        if user.id not in settings.admin_list and user.id != settings.OWNER_ID:
+        if not user or user.is_bot or not _is_admin_user(user.id):
             return
         try:
             target = int((message.text or "").split()[1])
@@ -888,9 +1099,7 @@ def register_handlers(bot):
     @bot.on_message(filters.command("autodel"))
     async def autodel_handler(client, message: Message):
         user = message.from_user
-        if not user or user.is_bot:
-            return
-        if user.id not in settings.admin_list and user.id != settings.OWNER_ID:
+        if not user or user.is_bot or not _is_admin_user(user.id):
             return
         try:
             args = (message.text or "").split()

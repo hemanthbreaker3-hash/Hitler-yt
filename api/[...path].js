@@ -175,21 +175,36 @@ function rewriteMediaOrButtonUrl(targetUrl, cloudflareBase, forceReplaceDomain =
   return target;
 }
 
-function rewritePageGroupsToCloudflare(groups, cloudflareBase) {
+function normalizeAndRewritePageGroups(groups, cloudflareBase) {
   if (!Array.isArray(groups)) return [];
-  return groups.map((group) => {
-    if (!group || typeof group !== 'object') return group;
-    const buttons = Array.isArray(group.buttons)
-      ? group.buttons.map((btn) => {
-          if (!btn || typeof btn !== 'object') return btn;
-          return {
-            ...btn,
-            url: btn.url ? rewriteMediaOrButtonUrl(btn.url, cloudflareBase, true) : '',
-          };
-        })
-      : [];
-    return { ...group, buttons };
-  });
+  let watchIdx = 0;
+  let dlIdx = 0;
+  const out = [];
+  for (const group of groups) {
+    if (!group || typeof group !== 'object') continue;
+    const box = String(group.box || 'watch').trim().toLowerCase() === 'download' ? 'download' : 'watch';
+    const defaultGName = box === 'watch' ? `Watch Group ${++watchIdx}` : `Download Group ${++dlIdx}`;
+    const name = String(group.name || '').trim() || defaultGName;
+    const rawButtons = Array.isArray(group.buttons) ? group.buttons : [];
+    const buttons = [];
+    for (let i = 0; i < rawButtons.length; i++) {
+      const btn = rawButtons[i];
+      if (!btn || typeof btn !== 'object') continue;
+      let bName = String(btn.name || '').trim();
+      let bUrl = String(btn.url || '').trim();
+      if (!bName && !bUrl) continue;
+      if (!bName) bName = `${box === 'watch' ? 'Watch' : 'Download'} ${i + 1}`;
+      if (bUrl && !/^(https?:\/\/|\/)/i.test(bUrl)) bUrl = 'https://' + bUrl;
+      if (bUrl) {
+        buttons.push({
+          name: bName,
+          url: rewriteMediaOrButtonUrl(bUrl, cloudflareBase, true),
+        });
+      }
+    }
+    out.push({ box, name, buttons });
+  }
+  return out;
 }
 
 function serializeCatalogDoc(doc, cloudflareBase) {
@@ -201,7 +216,7 @@ function serializeCatalogDoc(doc, cloudflareBase) {
     else if (typeof v === 'number' && !Number.isFinite(v)) copy[k] = null;
     else copy[k] = v;
   }
-  copy.groups = rewritePageGroupsToCloudflare(copy.groups || [], cloudflareBase);
+  copy.groups = normalizeAndRewritePageGroups(copy.groups || [], cloudflareBase);
   return copy;
 }
 
@@ -214,7 +229,7 @@ async function rewriteAllStoredCatalogButtons(db, cloudflareBase) {
     const docs = await pages.find({ 'groups.0': { $exists: true } }, { projection: { _id: 1, groups: 1 } }).toArray();
     for (const doc of docs) {
       const oldGroups = Array.isArray(doc.groups) ? doc.groups : [];
-      const newGroups = rewritePageGroupsToCloudflare(oldGroups, cfValid);
+      const newGroups = normalizeAndRewritePageGroups(oldGroups, cfValid);
       if (JSON.stringify(oldGroups) !== JSON.stringify(newGroups)) {
         await pages.updateOne(
           { _id: doc._id },
@@ -528,7 +543,8 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     button,input,select{font:inherit}
     .wrap{width:min(100% - 16px,1100px);margin:auto}
     .topbar{
-      min-height:76px;
+      min-height:calc(2cm + 20px);
+      padding:10px 0;
       display:flex;
       align-items:center;
       background:#0d0d0d;
@@ -541,31 +557,48 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
       width:min(100% - 16px,1100px);
       margin:auto;
       display:flex;
+      flex-wrap:wrap;
       align-items:center;
       justify-content:space-between;
       gap:12px;
     }
     .topbar-logo{
-      display:flex;
+      display:inline-flex;
       align-items:center;
-      gap:8px;
-      font-family:Inter,Arial,Helvetica,sans-serif;
+      gap:12px;
+      height:2cm;
+      min-height:2cm;
+      width:6cm;
+      min-width:6cm;
+      font-family:Inter,"Arial Black",Arial,Helvetica,sans-serif;
       font-weight:950;
-      font-size:25px;
-      letter-spacing:.65px;
+      font-size:34px;
+      letter-spacing:1px;
       line-height:1;
       text-transform:uppercase;
-      text-shadow:0 2px 18px rgba(250,204,21,.12);
+      white-space:nowrap;
+      text-shadow:0 3px 22px rgba(250,204,21,.22);
     }
     .topbar-logo img{
-      width:52px;height:52px;border-radius:12px;object-fit:cover;
-      border:2px solid rgba(250,204,21,.65);
-      box-shadow:0 0 18px rgba(250,204,21,.18);
+      width:2cm;
+      height:2cm;
+      min-width:2cm;
+      min-height:2cm;
+      border-radius:14px;
+      object-fit:cover;
+      border:2.5px solid rgba(250,204,21,.8);
+      box-shadow:0 0 22px rgba(250,204,21,.28);
+      flex-shrink:0;
+    }
+    .topbar-logo .brand-name{
+      display:inline-flex;
+      align-items:center;
+      height:2cm;
+      min-width:calc(4cm - 12px);
     }
     .topbar-logo span{color:var(--yellow);font-weight:1000}
-    .topbar-logo .brand-yt{color:#fff;font-weight:900;margin-left:-5px}
-    @media(min-width:700px){.topbar-logo{font-size:29px;gap:10px}.topbar-logo img{width:58px;height:58px}}
-    .topbar-links{display:flex;gap:10px;align-items:center}
+    .topbar-logo .brand-yt{color:#fff;font-weight:950;margin-left:3px}
+    .topbar-links{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
     .topbar-links a{
       color:var(--muted);font-size:13px;padding:6px 10px;border-radius:6px;
       transition:color .15s,background .15s;
@@ -673,7 +706,8 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
       .topbar-links{gap:2px}
       .topbar-links a{padding:6px 7px;font-size:12px}
       .poster-grid{grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:12px}
-      .topbar-logo{font-size:19px;gap:7px}.topbar-logo img{width:44px;height:44px}
+      .topbar-logo{font-size:30px;height:2cm;min-height:2cm;width:6cm;min-width:6cm}
+      .topbar-logo img{width:2cm;height:2cm;min-width:2cm;min-height:2cm}
       .section-head h2{font-size:15px}
     }
   </style>
@@ -683,8 +717,8 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
 <header class="topbar">
   <div class="topbar-inner">
     <a class="topbar-logo" href="/" title="HITLER YT">
-      <img src="/static/images/logo.jpg" alt="HITLER YT logo" width="52" height="52" loading="eager">
-      <span>HITLER</span><span class="brand-yt">YT</span>
+      <img src="/static/images/logo.jpg" alt="HITLER YT logo" loading="eager">
+      <div class="brand-name"><span>HITLER</span><span class="brand-yt">YT</span></div>
     </a>
     <div class="topbar-links">
       <a href="/">Home</a>
@@ -704,6 +738,11 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
 </footer>
 </body>
 </html>`;
+}
+
+function pagePosterPath(p) {
+  if (!p) return '/static/images/poster.jpg';
+  return String(p).startsWith('http') ? p : `https://image.tmdb.org/t/p/w500${p}`;
 }
 
 function renderIndexHtml(initialItems, initialCategories, queryStr = '') {
@@ -924,10 +963,7 @@ function renderSearchHtml({ results, query, typeFilter, yearFilter, genreFilter,
   const cardsHtml = results.length
     ? results
         .map((p) => {
-          const poster =
-            p.poster_path && String(p.poster_path).startsWith('http')
-              ? p.poster_path
-              : pagePosterPath(p.poster_path);
+          const poster = pagePosterPath(p.poster_path);
           const year = p.release_date ? ` (${String(p.release_date).slice(0, 4)})` : '';
           const mediaType = p.media_type ? `${escapeHtml(String(p.media_type).toUpperCase())} · ` : '';
           const genreText = Array.isArray(p.genres) && p.genres.length ? escapeHtml(p.genres.slice(0, 2).join(', ')) : 'WEB-DL · 1080p 720p &amp; 480p';
@@ -982,11 +1018,6 @@ function renderSearchHtml({ results, query, typeFilter, yearFilter, genreFilter,
     title: `${query ? `Search: ${query}` : 'Search'} · HITLER YT`,
     content,
   });
-}
-
-function pagePosterPath(p) {
-  if (!p) return '/static/images/poster.jpg';
-  return String(p).startsWith('http') ? p : `https://image.tmdb.org/t/p/w500${p}`;
 }
 
 function renderTitleHtml(page, cloudflareUrl) {
@@ -1111,7 +1142,31 @@ function renderTitleHtml(page, cloudflareUrl) {
 }
 
 function renderPanelHtml(settings) {
-  const headExtra = `<style>.admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.admin-card{padding:18px}.switch{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #1e3d64}.switch input{accent-color:#3b82f6;width:20px;height:20px}.admin-card input,.admin-card select{width:100%;padding:11px;background:#091a31;border:1px solid #28558b;color:white;border-radius:10px;margin:6px 0}.result{padding:10px;border:1px solid #244c7c;border-radius:10px;margin:8px 0;cursor:pointer}.result:hover{background:#10294a}#page-search{font-weight:700}.admin-card h2,.admin-card h3{font-weight:900;letter-spacing:.2px}.admin-card button{font-weight:800}@media(max-width:600px){.admin-card{padding:13px}.admin-grid{grid-template-columns:1fr}.admin-card input,.admin-card select,.admin-card button{min-height:44px}#groups-container .result input{min-width:0}}</style>`;
+  const headExtra = `<style>
+    .admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+    .admin-card{padding:18px}
+    .switch{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #1e3d64}
+    .switch input{accent-color:#3b82f6;width:20px;height:20px}
+    .admin-card input,.admin-card select{width:100%;padding:11px;background:#091a31;border:1px solid #28558b;color:white;border-radius:10px;margin:6px 0}
+    .result{padding:12px;border:1px solid #244c7c;border-radius:10px;margin:10px 0;background:#071426}
+    #tmdb-results .result,#categories .result{cursor:pointer}
+    #tmdb-results .result:hover{background:#10294a}
+    #page-search{font-weight:700}
+    .admin-card h2,.admin-card h3{font-weight:900;letter-spacing:.2px}
+    .admin-card button{font-weight:800}
+    .box-panel{border:1px solid #244c7c;border-radius:14px;padding:16px;background:#061120}
+    .box-panel.watch-panel{border-color:#2563eb}
+    .box-panel.download-panel{border-color:#10b981}
+    .group-card{border:1px solid #2b5485;border-radius:12px;padding:12px;margin:12px 0;background:#0b1c33}
+    .group-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+    .btn-row{border:1px solid #1e3a5f;border-radius:10px;padding:10px;margin-top:8px;background:#071324}
+    .field-label{display:block;font-size:12px;font-weight:700;color:#93c5fd;margin-top:6px}
+    @media(max-width:600px){
+      .admin-card{padding:13px}
+      .admin-grid{grid-template-columns:1fr}
+      .admin-card input,.admin-card select,.admin-card button{min-height:44px}
+    }
+  </style>`;
 
   const switches = [
     ['downloads_enabled', 'Downloads'],
@@ -1125,30 +1180,632 @@ function renderPanelHtml(settings) {
     )
     .join('');
 
-  const content = `<h1>HITLER YT · Control Center</h1><p class="muted">Manage website and playback settings. Changes are saved to MongoDB.</p><div class="admin-grid"><section class="card admin-card"><h2>Bot & Player</h2><div id="switches">${switches}</div><label>Access permissions</label><select id="access_mode"><option value="all" ${settings.access_mode === 'all' ? 'selected' : ''}>All users</option><option value="admins" ${settings.access_mode === 'admins' ? 'selected' : ''}>Admins only</option><option value="owners" ${settings.access_mode === 'owners' ? 'selected' : ''}>Owners only</option></select><p id="save-status" class="muted">Changes save automatically.</p></section><section class="card admin-card"><h2>🌐 Website & Cloudflare Tunnel URLs</h2><label>Cloudflare Try URL (Download, Stream & Button Links)</label><input id="base-url" type="url" placeholder="https://name.trycloudflare.com"><label>Backend Tunnel URL (Cloudflare → VPS)</label><input id="backend-url" type="url" placeholder="https://name.trycloudflare.com"><label>Vercel Website URL (Catalog Website)</label><input id="vercel-url" type="url" readonly placeholder="Detected on first Vercel visit"><small class="muted" id="website-urls"></small><button class="btn accent" onclick="saveUrls()">Save & Rewrite Button URLs</button><p id="url-status" class="muted">All download links, stream links, and title-page button URLs automatically use your Cloudflare trycloudflare.com URL.</p><small class="muted">Vercel serves the catalog website directly from MongoDB. Set MONGODB_URI in Vercel to the same database used by your VPS bot.</small></section><section class="card admin-card"><h2>TMDB title search</h2><input id="tmdb-q" placeholder="Search movie or series"><button class="btn accent" onclick="searchTMDB()">Search TMDB</button><div id="tmdb-results"></div></section><section class="card admin-card"><h2>Categories</h2><input id="cat-name" placeholder="New category name"><button class="btn accent" onclick="addCategory()">Create category</button><div id="categories"></div></section></div><section class="card admin-card" style="margin-top:16px"><h2>Page editor · groups & buttons</h2><p class="muted">Every title page has two permanent link boxes: Watch and Download. Add unlimited groups and buttons to either box; button domains are automatically updated to your active Cloudflare trycloudflare.com URL.</p><input id="page-search" placeholder="Search by page name or paste /title/page-link" oninput="searchPages()"><select id="page-select" onchange="loadPageEditor()"><option value="">Choose a page…</option></select><button class="btn" type="button" onclick="openPastedPage()">Open pasted page link</button><input id="edit-title" placeholder="Title"><input id="edit-overview" placeholder="Description"><input id="edit-poster" placeholder="Poster URL or TMDB poster path"><input id="edit-date" placeholder="Release date"><input id="edit-rating" placeholder="Rating"><select id="edit-type"><option value="movie">Movie</option><option value="tv">Web Series</option></select><input id="edit-cats" placeholder="Category slugs, comma separated (movies,web-series)"><div class="admin-grid" style="margin:12px 0">
-<section class="card admin-card"><h3>▶ WATCH box</h3><p class="muted">Add as many groups as you need, or leave this box empty.</p><button class="btn" type="button" onclick="addGroup('watch')">＋ Add Watch group</button><button class="btn" type="button" onclick="emptyBox('watch')">Empty Watch box</button></section>
-<section class="card admin-card"><h3>⬇ DOWNLOAD box</h3><p class="muted">Add as many groups as you need, or leave this box empty.</p><button class="btn" type="button" onclick="addGroup('download')">＋ Add Download group</button><button class="btn" type="button" onclick="emptyBox('download')">Empty Download box</button></section>
-</div><div id="groups-container"></div><button class="btn accent" onclick="savePageEditor()">Save page changes</button><button class="btn" type="button" onclick="deleteCurrentPage()">Delete page</button><p id="edit-status" class="muted"></p></section><script>
-async function api(url,opts={}){const r=await fetch(url,{...opts,headers:{'Content-Type':'application/json',...(opts.headers||{})}});if(!r.ok){const payload=await r.json().catch(()=>({}));throw Error(payload.detail||payload.message||payload.error||r.statusText||('HTTP '+r.status))}return r.json()}
-const status=document.getElementById('save-status');
-async function loadUrls(){try{const d=await api('/api/admin/settings');document.getElementById('base-url').value=d.cloudflare_url||d.base_url||'';document.getElementById('backend-url').value=d.backend_url||d.cloudflare_url||'';document.getElementById('vercel-url').value=d.vercel_url||'';document.getElementById('website-urls').textContent='Registered Vercel Website URLs: '+((d.website_urls||[]).join(' · ')||'Waiting for first Vercel visit')}catch(e){document.getElementById('url-status').textContent=e.message}}
-async function saveUrls(){const box=document.getElementById('url-status');try{const baseVal=document.getElementById('base-url').value.trim();const backVal=document.getElementById('backend-url').value.trim()||baseVal;const d=await api('/api/admin/settings',{method:'PUT',body:JSON.stringify({base_url:baseVal,backend_url:backVal,cloudflare_url:backVal||baseVal})});document.getElementById('base-url').value=d.cloudflare_url||d.base_url||'';document.getElementById('backend-url').value=d.backend_url||d.cloudflare_url||'';document.getElementById('vercel-url').value=d.vercel_url||'';document.getElementById('website-urls').textContent='Registered Vercel Website URLs: '+((d.website_urls||[]).join(' · ')||'Waiting for first Vercel visit');box.textContent='Saved to MongoDB! Download links, stream links, and title-page button URLs now use this Cloudflare URL.';if(document.getElementById('page-select').value){await loadPageEditor()}}catch(e){box.textContent=e.message}}
-async function saveSettings(){const data={access_mode:document.getElementById('access_mode').value};document.querySelectorAll('[data-key]').forEach(x=>data[x.dataset.key]=x.checked);try{await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(data)});status.textContent='Saved successfully.'}catch(e){status.textContent=e.message}}document.querySelectorAll('[data-key],#access_mode').forEach(x=>x.addEventListener('change',saveSettings));
-async function searchTMDB(){const q=document.getElementById('tmdb-q').value.trim();if(!q)return;const d=await api('/api/admin/tmdb-search?q='+encodeURIComponent(q));const box=document.getElementById('tmdb-results');box.innerHTML='';d.items.forEach(x=>{const b=document.createElement('div');b.className='result';b.textContent=x.title+' · '+(x.release_date||'');b.onclick=()=>createPage(x);box.append(b)})}
-async function createPage(x){const cats=await api('/api/admin/categories');const defaultCat=x.media_type==='tv'?'web-series':'movies';await api('/api/admin/pages',{method:'POST',body:JSON.stringify({title:x.title,overview:x.overview,poster_path:x.poster_path||'',release_date:x.release_date,rating:x.rating,media_type:x.media_type,tmdb_id:x.id,category_ids:[defaultCat],groups:[]})});await loadPageList();alert('Page created and saved to shared MongoDB. It is now live on the Vercel website.')}
-async function loadPageList(){await searchPages();const requested=new URLSearchParams(location.search).get('page');if(requested){const sel=document.getElementById('page-select');if([...sel.options].some(o=>o.value===requested)){sel.value=requested;await loadPageEditor()}}}
+  const content = `<h1>HITLER YT · Control Center</h1>
+<p class="muted">Manage website and playback settings. Changes are saved to MongoDB.</p>
+
+<div class="admin-grid">
+  <section class="card admin-card">
+    <h2>Bot & Player</h2>
+    <div id="switches">${switches}</div>
+    <label class="field-label">Access permissions</label>
+    <select id="access_mode">
+      <option value="all" ${settings.access_mode === 'all' ? 'selected' : ''}>All users</option>
+      <option value="admins" ${settings.access_mode === 'admins' ? 'selected' : ''}>Admins only</option>
+      <option value="owners" ${settings.access_mode === 'owners' ? 'selected' : ''}>Owners only</option>
+    </select>
+    <p id="save-status" class="muted">Changes save automatically.</p>
+  </section>
+
+  <section class="card admin-card">
+    <h2>🌐 Website & Cloudflare Tunnel URLs</h2>
+    <label class="field-label">Cloudflare Try URL (Download, Stream & Button Links)</label>
+    <input id="base-url" type="url" placeholder="https://name.trycloudflare.com">
+    <label class="field-label">Backend Tunnel URL (Cloudflare → VPS)</label>
+    <input id="backend-url" type="url" placeholder="https://name.trycloudflare.com">
+    <label class="field-label">Vercel Website URL (Catalog Website)</label>
+    <input id="vercel-url" type="url" readonly placeholder="Detected on first Vercel visit">
+    <small class="muted" id="website-urls"></small>
+    <button class="btn accent" type="button" onclick="saveUrls()" style="margin-top:8px;width:100%">Save & Rewrite Button URLs</button>
+    <p id="url-status" class="muted" style="margin-top:6px">All download links, stream links, and title-page button URLs automatically use your Cloudflare trycloudflare.com URL.</p>
+  </section>
+
+  <section class="card admin-card">
+    <h2>TMDB title search</h2>
+    <input id="tmdb-q" placeholder="Search movie or series">
+    <button class="btn accent" type="button" onclick="searchTMDB()" style="width:100%">Search TMDB</button>
+    <div id="tmdb-results"></div>
+  </section>
+
+  <section class="card admin-card">
+    <h2>Categories</h2>
+    <input id="cat-name" placeholder="New category name">
+    <button class="btn accent" type="button" onclick="addCategory()" style="width:100%">Create category</button>
+    <div id="categories"></div>
+  </section>
+</div>
+
+<section class="card admin-card" style="margin-top:16px">
+  <h2>Page editor · groups & buttons</h2>
+  <p class="muted">Select a page below, then add or edit unlimited groups and buttons in the <strong>Watch box</strong> and <strong>Download box</strong>. Every group name and button can be freely edited.</p>
+
+  <input id="page-search" placeholder="Search by page name or paste /title/page-link" oninput="searchPages()">
+  <select id="page-select" onchange="loadPageEditor()"><option value="">Choose a page…</option></select>
+  <button class="btn" type="button" onclick="openPastedPage()">Open pasted page link</button>
+
+  <div class="admin-grid" style="margin-top:10px">
+    <div>
+      <label class="field-label">Title</label>
+      <input id="edit-title" placeholder="Title">
+      <label class="field-label">Description</label>
+      <input id="edit-overview" placeholder="Description">
+      <label class="field-label">Poster URL or TMDB poster path</label>
+      <input id="edit-poster" placeholder="Poster URL or TMDB poster path">
+    </div>
+    <div>
+      <label class="field-label">Release Date</label>
+      <input id="edit-date" placeholder="Release date (YYYY-MM-DD)">
+      <label class="field-label">Rating</label>
+      <input id="edit-rating" placeholder="Rating (e.g. 8.5)">
+      <label class="field-label">Type</label>
+      <select id="edit-type"><option value="movie">Movie</option><option value="tv">Web Series</option></select>
+      <label class="field-label">Categories (comma-separated slugs)</label>
+      <input id="edit-cats" placeholder="movies,web-series">
+    </div>
+  </div>
+
+  <div class="admin-grid" style="margin:16px 0;align-items:start">
+    <section class="box-panel watch-panel">
+      <h3 style="color:#60a5fa">▶ WATCH BOX GROUPS</h3>
+      <p class="muted" style="font-size:12px;margin:4px 0 8px">Add groups to the Watch box (e.g. Watch 1080p, Episode 1–10, Hindi Dub).</p>
+      <label class="field-label">New Watch Group Name</label>
+      <input id="new-watch-group-name" placeholder="Enter Watch group name (e.g. Watch Online 1080p)">
+      <div class="group-actions">
+        <button class="btn accent" type="button" onclick="addGroup('watch')">＋ Add Watch Group</button>
+        <button class="btn" type="button" onclick="emptyBox('watch')">Empty Watch Box</button>
+      </div>
+      <div id="watch-groups-container" style="margin-top:12px"></div>
+    </section>
+
+    <section class="box-panel download-panel">
+      <h3 style="color:#34d399">⬇ DOWNLOAD BOX GROUPS</h3>
+      <p class="muted" style="font-size:12px;margin:4px 0 8px">Add groups to the Download box (e.g. Download 1080p, 720p, 480p).</p>
+      <label class="field-label">New Download Group Name</label>
+      <input id="new-download-group-name" placeholder="Enter Download group name (e.g. Direct Download 1080p)">
+      <div class="group-actions">
+        <button class="btn accent" type="button" onclick="addGroup('download')">＋ Add Download Group</button>
+        <button class="btn" type="button" onclick="emptyBox('download')">Empty Download Box</button>
+      </div>
+      <div id="download-groups-container" style="margin-top:12px"></div>
+    </section>
+  </div>
+
+  <div class="group-actions" style="margin-top:12px">
+    <button class="btn accent" type="button" onclick="savePageEditor()">💾 Save Page Changes</button>
+    <button class="btn" type="button" onclick="deleteCurrentPage()">🗑️ Delete Page</button>
+  </div>
+  <p id="edit-status" class="muted" style="margin-top:8px;font-weight:700"></p>
+</section>
+
+<script>
+async function api(url, opts = {}) {
+  const r = await fetch(url, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  });
+  if (!r.ok) {
+    const payload = await r.json().catch(() => ({}));
+    let errText = payload.detail || payload.message || payload.error || r.statusText || ('HTTP ' + r.status);
+    if (Array.isArray(errText)) {
+      errText = errText.map(e => (e && (e.msg || e.message)) ? e.msg || e.message : JSON.stringify(e)).join('; ');
+    } else if (typeof errText === 'object') {
+      errText = JSON.stringify(errText);
+    }
+    throw new Error(String(errText));
+  }
+  return r.json();
+}
+
+const status = document.getElementById('save-status');
+
+async function loadUrls() {
+  try {
+    const d = await api('/api/admin/settings');
+    document.getElementById('base-url').value = d.cloudflare_url || d.base_url || '';
+    document.getElementById('backend-url').value = d.backend_url || d.cloudflare_url || '';
+    document.getElementById('vercel-url').value = d.vercel_url || '';
+    document.getElementById('website-urls').textContent =
+      'Registered Vercel Website URLs: ' + ((d.website_urls || []).join(' · ') || 'Waiting for first Vercel visit');
+  } catch (e) {
+    document.getElementById('url-status').textContent = e.message;
+  }
+}
+
+async function saveUrls() {
+  const box = document.getElementById('url-status');
+  try {
+    const baseVal = document.getElementById('base-url').value.trim();
+    const backVal = document.getElementById('backend-url').value.trim() || baseVal;
+    const d = await api('/api/admin/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ base_url: baseVal, backend_url: backVal, cloudflare_url: backVal || baseVal }),
+    });
+    document.getElementById('base-url').value = d.cloudflare_url || d.base_url || '';
+    document.getElementById('backend-url').value = d.backend_url || d.cloudflare_url || '';
+    document.getElementById('vercel-url').value = d.vercel_url || '';
+    document.getElementById('website-urls').textContent =
+      'Registered Vercel Website URLs: ' + ((d.website_urls || []).join(' · ') || 'Waiting for first Vercel visit');
+    box.textContent = 'Saved to MongoDB! Download links, stream links, and title-page button URLs now use this Cloudflare URL.';
+    if (document.getElementById('page-select').value) {
+      await loadPageEditor();
+    }
+  } catch (e) {
+    box.textContent = e.message;
+  }
+}
+
+async function saveSettings() {
+  const data = { access_mode: document.getElementById('access_mode').value };
+  document.querySelectorAll('[data-key]').forEach(x => (data[x.dataset.key] = x.checked));
+  try {
+    await api('/api/admin/settings', { method: 'PUT', body: JSON.stringify(data) });
+    status.textContent = 'Saved successfully.';
+  } catch (e) {
+    status.textContent = e.message;
+  }
+}
+
+document.querySelectorAll('[data-key],#access_mode').forEach(x => x.addEventListener('change', saveSettings));
+
+async function searchTMDB() {
+  const q = document.getElementById('tmdb-q').value.trim();
+  if (!q) return;
+  const d = await api('/api/admin/tmdb-search?q=' + encodeURIComponent(q));
+  const box = document.getElementById('tmdb-results');
+  box.innerHTML = '';
+  d.items.forEach(x => {
+    const b = document.createElement('div');
+    b.className = 'result';
+    b.textContent = x.title + ' · ' + (x.release_date || '');
+    b.onclick = () => createPage(x);
+    box.append(b);
+  });
+}
+
+async function createPage(x) {
+  const defaultCat = x.media_type === 'tv' ? 'web-series' : 'movies';
+  const created = await api('/api/admin/pages', {
+    method: 'POST',
+    body: JSON.stringify({
+      title: x.title,
+      overview: x.overview,
+      poster_path: x.poster_path || '',
+      release_date: x.release_date,
+      rating: x.rating,
+      media_type: x.media_type,
+      tmdb_id: x.id,
+      category_ids: [defaultCat],
+      groups: [],
+    }),
+  });
+  await loadPageList();
+  if (created && created.slug) {
+    document.getElementById('page-select').value = created.slug;
+    await loadPageEditor();
+  }
+  alert('Page created and loaded in the editor below!');
+}
+
+async function loadPageList() {
+  await searchPages();
+  const requested = new URLSearchParams(location.search).get('page');
+  if (requested) {
+    const sel = document.getElementById('page-select');
+    if ([...sel.options].some(o => o.value === requested)) {
+      sel.value = requested;
+      await loadPageEditor();
+    }
+  }
+}
+
 let pageSearchTimer;
-async function searchPages(){clearTimeout(pageSearchTimer);return new Promise(resolve=>{pageSearchTimer=setTimeout(async()=>{try{let q=document.getElementById('page-search').value.trim();const match=q.match(/\\/title\\/([a-z0-9-]+)/i);if(match)q=match[1];const d=await api('/api/admin/pages'+(q?'?q='+encodeURIComponent(q):''));const sel=document.getElementById('page-select');const current=sel.value;sel.innerHTML='<option value="">Choose a page…</option>';d.items.forEach(p=>{const o=document.createElement('option');o.value=p.slug;o.textContent=p.title+' · '+p.slug;sel.append(o)});if(current&&[...sel.options].some(o=>o.value===current))sel.value=current;if(match&&d.items.length===1){sel.value=d.items[0].slug;await loadPageEditor()}}catch(e){document.getElementById('edit-status').textContent=e.message}finally{resolve()}},180)})}
-async function openPastedPage(){const raw=document.getElementById('page-search').value.trim();const match=raw.match(/\\/title\\/([a-z0-9-]+)/i);const slug=match?match[1]:raw;const sel=document.getElementById('page-select');if([...sel.options].some(o=>o.value===slug)){sel.value=slug;await loadPageEditor();return}try{const p=await api('/api/admin/pages/'+encodeURIComponent(slug));await searchPages();sel.value=p.slug;await loadPageEditor()}catch(e){document.getElementById('edit-status').textContent='Page not found. Search by its title or paste its /title/ link.'}}
-async function loadPageEditor(){const slug=document.getElementById('page-select').value;if(!slug)return;const p=await api('/api/admin/pages/'+encodeURIComponent(slug));document.getElementById('edit-title').value=p.title||'';document.getElementById('edit-overview').value=p.overview||'';document.getElementById('edit-poster').value=p.poster_path||'';document.getElementById('edit-date').value=p.release_date||'';document.getElementById('edit-rating').value=p.rating??'';document.getElementById('edit-type').value=p.media_type||'movie';document.getElementById('edit-cats').value=(p.category_slugs||[]).join(',');currentGroups=p.groups||[];renderGroups()}
-let currentGroups=[];
-function renderGroups(){const host=document.getElementById('groups-container');host.innerHTML='';currentGroups.forEach((g,gi)=>{const card=document.createElement('div');card.className='result';const header=document.createElement('div');header.style.display='flex';header.style.gap='6px';header.style.flexWrap='wrap';const box=document.createElement('select');box.style.maxWidth='150px';box.innerHTML='<option value="watch">Watch box</option><option value="download">Download box</option>';box.value=g.box||'watch';box.onchange=()=>g.box=box.value;header.append(box);const name=document.createElement('input');name.value=g.name||'';name.placeholder='Group name';name.oninput=()=>g.name=name.value;name.style.flex='1';header.append(name);const move=document.createElement('button');move.className='btn';move.type='button';move.textContent=(g.box||'watch')==='watch'?'Move to Download ↓':'Move to Watch ↑';move.onclick=()=>{g.box=(g.box||'watch')==='watch'?'download':'watch';renderGroups();document.getElementById('edit-status').textContent='Group moved in the editor. Click Save page changes to sync it to MongoDB.'};header.append(move);[['↑',-1],['↓',1]].forEach(([label,delta])=>{const b=document.createElement('button');b.type='button';b.className='btn';b.textContent=label;b.disabled=gi+delta<0||gi+delta>=currentGroups.length;b.onclick=()=>{const next=gi+delta;[currentGroups[gi],currentGroups[next]]=[currentGroups[next],currentGroups[gi]];renderGroups()};header.append(b)});const del=document.createElement('button');del.className='btn';del.type='button';del.textContent='Delete group';del.onclick=()=>{currentGroups.splice(gi,1);renderGroups()};header.append(del);card.append(header);const buttons=g.buttons||(g.buttons=[]);buttons.forEach((bt,bi)=>{const row=document.createElement('div');row.style.display='grid';row.style.gridTemplateColumns='1fr 2fr auto';row.style.gap='6px';row.style.marginTop='8px';const bn=document.createElement('input');bn.placeholder='Button name';bn.value=bt.name||'';bn.oninput=()=>bt.name=bn.value;const url=document.createElement('input');url.placeholder='Button URL (domain auto-replaced with Cloudflare try URL)';url.value=bt.url||'';url.oninput=()=>bt.url=url.value;const remove=document.createElement('button');remove.className='btn';remove.type='button';remove.textContent='×';remove.onclick=()=>{buttons.splice(bi,1);renderGroups()};row.append(bn,url,remove);card.append(row)});const add=document.createElement('button');add.className='btn';add.type='button';add.style.marginTop='10px';add.textContent='＋ Add button';add.onclick=()=>{buttons.push({name:'',url:''});renderGroups()};card.append(add);host.append(card)})}
-function addGroup(box='watch'){const count=currentGroups.filter(g=>(g.box||'watch')===box).length+1;currentGroups.push({box,name:'Group '+count,buttons:[]});renderGroups();document.getElementById('edit-status').textContent='Group added locally. Click Save page changes to publish it.'}
-function emptyBox(box){const label=box==='watch'?'Watch':'Download';const count=currentGroups.filter(g=>(g.box||'watch')===box).length;if(!count){document.getElementById('edit-status').textContent=label+' box is already empty.';return}if(!confirm('Remove all '+count+' group(s) and their buttons from the '+label+' box? This will not affect the other box. Click Save page changes to confirm the change in MongoDB.'))return;currentGroups=currentGroups.filter(g=>(g.box||'watch')!==box);renderGroups();document.getElementById('edit-status').textContent=label+' box cleared in the editor. Click Save page changes to publish.'}
-async function savePageEditor(){const slug=document.getElementById('page-select').value;if(!slug)return;try{const groups=currentGroups;await api('/api/admin/pages/'+encodeURIComponent(slug),{method:'PUT',body:JSON.stringify({title:document.getElementById('edit-title').value,overview:document.getElementById('edit-overview').value,poster_path:document.getElementById('edit-poster').value,release_date:document.getElementById('edit-date').value,rating:document.getElementById('edit-rating').value?Number(document.getElementById('edit-rating').value):null,media_type:document.getElementById('edit-type').value,category_ids:document.getElementById('edit-cats').value.split(',').map(x=>x.trim()).filter(Boolean),groups})});await loadPageEditor();document.getElementById('edit-status').textContent='Saved to shared MongoDB! Button URLs synced to your Cloudflare try URL.'}catch(e){document.getElementById('edit-status').textContent=e.message}}
-async function deleteCurrentPage(){const slug=document.getElementById('page-select').value;if(!slug)return;if(!confirm('Permanently delete this catalog page from shared MongoDB?'))return;try{await api('/api/admin/pages/'+encodeURIComponent(slug),{method:'DELETE'});document.getElementById('edit-status').textContent='Page deleted from shared MongoDB.';document.getElementById('page-select').value='';await loadPageList()}catch(e){document.getElementById('edit-status').textContent=e.message}}
-async function addCategory(){const name=document.getElementById('cat-name').value.trim();if(!name)return;await api('/api/admin/categories',{method:'POST',body:JSON.stringify({name})});loadCategories()}
-async function loadCategories(){const d=await api('/api/admin/categories');const box=document.getElementById('categories');box.innerHTML='';d.items.forEach(x=>{const row=document.createElement('div');row.className='result';row.textContent=x.name;if(!['movies','web-series'].includes(x.slug)){const b=document.createElement('button');b.className='btn';b.textContent='Delete';b.onclick=async()=>{await api('/api/admin/categories/'+x.slug,{method:'DELETE'});loadCategories()};row.append(' ',b)}box.append(row)})}loadCategories();loadPageList();loadUrls();
+async function searchPages() {
+  clearTimeout(pageSearchTimer);
+  return new Promise(resolve => {
+    pageSearchTimer = setTimeout(async () => {
+      try {
+        let q = document.getElementById('page-search').value.trim();
+        const match = q.match(/\\/title\\/([a-z0-9-]+)/i);
+        if (match) q = match[1];
+        const d = await api('/api/admin/pages' + (q ? '?q=' + encodeURIComponent(q) : ''));
+        const sel = document.getElementById('page-select');
+        const current = sel.value;
+        sel.innerHTML = '<option value="">Choose a page…</option>';
+        d.items.forEach(p => {
+          const o = document.createElement('option');
+          o.value = p.slug;
+          o.textContent = p.title + ' · ' + p.slug;
+          sel.append(o);
+        });
+        if (current && [...sel.options].some(o => o.value === current)) sel.value = current;
+        if (match && d.items.length === 1) {
+          sel.value = d.items[0].slug;
+          await loadPageEditor();
+        }
+      } catch (e) {
+        document.getElementById('edit-status').textContent = e.message;
+      } finally {
+        resolve();
+      }
+    }, 180);
+  });
+}
+
+async function openPastedPage() {
+  const raw = document.getElementById('page-search').value.trim();
+  const match = raw.match(/\\/title\\/([a-z0-9-]+)/i);
+  const slug = match ? match[1] : raw;
+  const sel = document.getElementById('page-select');
+  if ([...sel.options].some(o => o.value === slug)) {
+    sel.value = slug;
+    await loadPageEditor();
+    return;
+  }
+  try {
+    const p = await api('/api/admin/pages/' + encodeURIComponent(slug));
+    await searchPages();
+    sel.value = p.slug;
+    await loadPageEditor();
+  } catch (e) {
+    document.getElementById('edit-status').textContent = 'Page not found. Search by its title or paste its /title/ link.';
+  }
+}
+
+let currentGroups = [];
+
+async function loadPageEditor() {
+  const slug = document.getElementById('page-select').value;
+  if (!slug) return;
+  const p = await api('/api/admin/pages/' + encodeURIComponent(slug));
+  document.getElementById('edit-title').value = p.title || '';
+  document.getElementById('edit-overview').value = p.overview || '';
+  document.getElementById('edit-poster').value = p.poster_path || '';
+  document.getElementById('edit-date').value = p.release_date || '';
+  document.getElementById('edit-rating').value = p.rating ?? '';
+  document.getElementById('edit-type').value = p.media_type || 'movie';
+  document.getElementById('edit-cats').value = (p.category_slugs || []).join(',');
+  currentGroups = (p.groups || []).map(g => ({
+    box: g.box === 'download' ? 'download' : 'watch',
+    name: g.name || '',
+    buttons: Array.isArray(g.buttons) ? g.buttons.map(b => ({ name: b.name || '', url: b.url || '' })) : [],
+  }));
+  renderGroups();
+}
+
+function moveGroupWithinBox(globalIdx, direction) {
+  const targetBox = currentGroups[globalIdx]?.box || 'watch';
+  const sameBoxIndices = [];
+  currentGroups.forEach((g, idx) => {
+    if ((g.box || 'watch') === targetBox) sameBoxIndices.push(idx);
+  });
+  const pos = sameBoxIndices.indexOf(globalIdx);
+  const swapPos = pos + direction;
+  if (pos === -1 || swapPos < 0 || swapPos >= sameBoxIndices.length) return;
+  const otherGlobalIdx = sameBoxIndices[swapPos];
+  const tmp = currentGroups[globalIdx];
+  currentGroups[globalIdx] = currentGroups[otherGlobalIdx];
+  currentGroups[otherGlobalIdx] = tmp;
+  renderGroups();
+}
+
+function renderGroups() {
+  const watchHost = document.getElementById('watch-groups-container');
+  const downloadHost = document.getElementById('download-groups-container');
+  watchHost.innerHTML = '';
+  downloadHost.innerHTML = '';
+
+  const watchIndices = [];
+  const downloadIndices = [];
+  currentGroups.forEach((g, idx) => {
+    if ((g.box || 'watch') === 'download') downloadIndices.push(idx);
+    else watchIndices.push(idx);
+  });
+
+  if (!watchIndices.length) {
+    watchHost.innerHTML = '<p class="muted" style="font-size:12px">No Watch groups yet. Enter a name above and click "＋ Add Watch Group".</p>';
+  }
+  if (!downloadIndices.length) {
+    downloadHost.innerHTML = '<p class="muted" style="font-size:12px">No Download groups yet. Enter a name above and click "＋ Add Download Group".</p>';
+  }
+
+  currentGroups.forEach((g, gi) => {
+    const boxType = (g.box || 'watch') === 'download' ? 'download' : 'watch';
+    g.box = boxType;
+    const host = boxType === 'download' ? downloadHost : watchHost;
+    const boxList = boxType === 'download' ? downloadIndices : watchIndices;
+    const posInBox = boxList.indexOf(gi);
+
+    const card = document.createElement('div');
+    card.className = 'group-card';
+
+    const nameLabel = document.createElement('label');
+    nameLabel.className = 'field-label';
+    nameLabel.textContent = (boxType === 'watch' ? '▶ Watch' : '⬇ Download') + ' Group Name (editable):';
+    card.append(nameLabel);
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.value = g.name || '';
+    nameInput.placeholder = boxType === 'watch' ? 'e.g. Watch 1080p / Episode 1' : 'e.g. Download 1080p / 720p';
+    nameInput.oninput = () => {
+      g.name = nameInput.value;
+    };
+    card.append(nameInput);
+
+    const boxLabel = document.createElement('label');
+    boxLabel.className = 'field-label';
+    boxLabel.textContent = 'Group Box Location:';
+    card.append(boxLabel);
+
+    const boxSelect = document.createElement('select');
+    boxSelect.innerHTML = '<option value="watch">▶ Watch Box</option><option value="download">⬇ Download Box</option>';
+    boxSelect.value = boxType;
+    boxSelect.onchange = () => {
+      g.box = boxSelect.value;
+      renderGroups();
+      document.getElementById('edit-status').textContent =
+        'Moved "' + (g.name || 'Group') + '" to ' + (g.box === 'watch' ? 'Watch' : 'Download') + ' box. Click Save Page Changes to publish.';
+    };
+    card.append(boxSelect);
+
+    const actions = document.createElement('div');
+    actions.className = 'group-actions';
+
+    const switchBtn = document.createElement('button');
+    switchBtn.className = 'btn';
+    switchBtn.type = 'button';
+    switchBtn.textContent = boxType === 'watch' ? '⇄ Move to Download Box' : '⇄ Move to Watch Box';
+    switchBtn.onclick = () => {
+      g.box = boxType === 'watch' ? 'download' : 'watch';
+      renderGroups();
+      document.getElementById('edit-status').textContent =
+        'Moved "' + (g.name || 'Group') + '" to ' + (g.box === 'watch' ? 'Watch' : 'Download') + ' box. Click Save Page Changes to publish.';
+    };
+    actions.append(switchBtn);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn';
+    copyBtn.type = 'button';
+    copyBtn.textContent = boxType === 'watch' ? '📋 Copy to Download Box' : '📋 Copy to Watch Box';
+    copyBtn.onclick = () => {
+      const targetBox = boxType === 'watch' ? 'download' : 'watch';
+      const clonedButtons = (g.buttons || []).map(b => ({ name: b.name || '', url: b.url || '' }));
+      currentGroups.push({
+        box: targetBox,
+        name: g.name || (targetBox === 'watch' ? 'Watch Group' : 'Download Group'),
+        buttons: clonedButtons,
+      });
+      renderGroups();
+      document.getElementById('edit-status').textContent =
+        'Copied "' + (g.name || 'Group') + '" to ' + (targetBox === 'watch' ? 'Watch' : 'Download') + ' box.';
+    };
+    actions.append(copyBtn);
+
+    const upBtn = document.createElement('button');
+    upBtn.className = 'btn';
+    upBtn.type = 'button';
+    upBtn.textContent = '↑ Up';
+    upBtn.disabled = posInBox <= 0;
+    upBtn.onclick = () => moveGroupWithinBox(gi, -1);
+    actions.append(upBtn);
+
+    const downBtn = document.createElement('button');
+    downBtn.className = 'btn';
+    downBtn.type = 'button';
+    downBtn.textContent = '↓ Down';
+    downBtn.disabled = posInBox === -1 || posInBox >= boxList.length - 1;
+    downBtn.onclick = () => moveGroupWithinBox(gi, 1);
+    actions.append(downBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn';
+    delBtn.type = 'button';
+    delBtn.textContent = '🗑️ Delete Group';
+    delBtn.onclick = () => {
+      currentGroups.splice(gi, 1);
+      renderGroups();
+      document.getElementById('edit-status').textContent = 'Group deleted locally. Click Save Page Changes to update MongoDB.';
+    };
+    actions.append(delBtn);
+
+    card.append(actions);
+
+    const buttons = g.buttons || (g.buttons = []);
+    const btnContainer = document.createElement('div');
+    buttons.forEach((bt, bi) => {
+      const row = document.createElement('div');
+      row.className = 'btn-row';
+
+      const bNameLabel = document.createElement('label');
+      bNameLabel.className = 'field-label';
+      bNameLabel.textContent = 'Button #' + (bi + 1) + ' Name:';
+      const bn = document.createElement('input');
+      bn.type = 'text';
+      bn.placeholder = boxType === 'watch' ? 'e.g. Watch 1080p / Episode 1' : 'e.g. Download 1080p (1.4 GB)';
+      bn.value = bt.name || '';
+      bn.oninput = () => {
+        bt.name = bn.value;
+      };
+
+      const bUrlLabel = document.createElement('label');
+      bUrlLabel.className = 'field-label';
+      bUrlLabel.textContent = 'Button #' + (bi + 1) + ' Link URL:';
+      const url = document.createElement('input');
+      url.type = 'text';
+      url.placeholder = boxType === 'watch' ? 'https://.../watch/CODE or /watch/CODE' : 'https://.../dl/CODE or /dl/CODE';
+      url.value = bt.url || '';
+      url.oninput = () => {
+        bt.url = url.value;
+      };
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'btn';
+      removeBtn.type = 'button';
+      removeBtn.style.marginTop = '6px';
+      removeBtn.textContent = '✕ Remove Button #' + (bi + 1);
+      removeBtn.onclick = () => {
+        buttons.splice(bi, 1);
+        renderGroups();
+      };
+
+      row.append(bNameLabel, bn, bUrlLabel, url, removeBtn);
+      btnContainer.append(row);
+    });
+    card.append(btnContainer);
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn accent';
+    addBtn.type = 'button';
+    addBtn.style.marginTop = '10px';
+    addBtn.style.width = '100%';
+    addBtn.textContent = '＋ Add Button to "' + (g.name || 'Group') + '"';
+    addBtn.onclick = () => {
+      const nextNum = buttons.length + 1;
+      const defaultBtnName = (boxType === 'watch' ? 'Watch ' : 'Download ') + nextNum;
+      buttons.push({ name: defaultBtnName, url: '' });
+      renderGroups();
+    };
+    card.append(addBtn);
+
+    host.append(card);
+  });
+}
+
+function addGroup(box = 'watch') {
+  const slug = document.getElementById('page-select').value;
+  if (!slug) {
+    alert('Please select or create a page first before adding groups.');
+    return;
+  }
+  const inputId = box === 'download' ? 'new-download-group-name' : 'new-watch-group-name';
+  const nameInputEl = document.getElementById(inputId);
+  const customName = nameInputEl ? nameInputEl.value.trim() : '';
+  const count = currentGroups.filter(g => (g.box || 'watch') === box).length + 1;
+  const defaultName = (box === 'download' ? 'Download Group ' : 'Watch Group ') + count;
+  const finalName = customName || defaultName;
+  if (nameInputEl) nameInputEl.value = '';
+
+  currentGroups.push({
+    box: box === 'download' ? 'download' : 'watch',
+    name: finalName,
+    buttons: [{ name: box === 'download' ? 'Direct Download' : 'Watch Online', url: '' }],
+  });
+  renderGroups();
+  document.getElementById('edit-status').textContent =
+    'Added "' + finalName + '" to the ' + (box === 'download' ? 'Download' : 'Watch') + ' box. Add button links and click Save Page Changes.';
+}
+
+function emptyBox(box) {
+  const label = box === 'watch' ? 'Watch' : 'Download';
+  const count = currentGroups.filter(g => (g.box || 'watch') === box).length;
+  if (!count) {
+    document.getElementById('edit-status').textContent = label + ' box is already empty.';
+    return;
+  }
+  if (!confirm('Remove all ' + count + ' group(s) from the ' + label + ' box?')) return;
+  currentGroups = currentGroups.filter(g => (g.box || 'watch') !== box);
+  renderGroups();
+  document.getElementById('edit-status').textContent = label + ' box cleared. Click Save Page Changes to publish.';
+}
+
+async function savePageEditor() {
+  const slug = document.getElementById('page-select').value;
+  if (!slug) {
+    alert('Please choose a page to save.');
+    return;
+  }
+  try {
+    const cleanedGroups = currentGroups.map((g, idx) => {
+      const box = (g.box || 'watch') === 'download' ? 'download' : 'watch';
+      const name = (g.name || '').trim() || ((box === 'download' ? 'Download Group ' : 'Watch Group ') + (idx + 1));
+      const buttons = (g.buttons || [])
+        .map((b, bi) => ({
+          name: (b.name || '').trim() || ((box === 'download' ? 'Download ' : 'Watch ') + (bi + 1)),
+          url: (b.url || '').trim(),
+        }))
+        .filter(b => b.url.length > 0);
+      return { box, name, buttons };
+    });
+
+    await api('/api/admin/pages/' + encodeURIComponent(slug), {
+      method: 'PUT',
+      body: JSON.stringify({
+        title: document.getElementById('edit-title').value.trim(),
+        overview: document.getElementById('edit-overview').value,
+        poster_path: document.getElementById('edit-poster').value.trim(),
+        release_date: document.getElementById('edit-date').value.trim(),
+        rating: document.getElementById('edit-rating').value ? Number(document.getElementById('edit-rating').value) : null,
+        media_type: document.getElementById('edit-type').value,
+        category_ids: document.getElementById('edit-cats').value.split(',').map(x => x.trim()).filter(Boolean),
+        groups: cleanedGroups,
+      }),
+    });
+    await loadPageEditor();
+    document.getElementById('edit-status').textContent = '✅ Saved to shared MongoDB! Watch & Download groups and Cloudflare button URLs are now live.';
+  } catch (e) {
+    document.getElementById('edit-status').textContent = '❌ Save failed: ' + e.message;
+  }
+}
+
+async function deleteCurrentPage() {
+  const slug = document.getElementById('page-select').value;
+  if (!slug) return;
+  if (!confirm('Permanently delete this catalog page from shared MongoDB?')) return;
+  try {
+    await api('/api/admin/pages/' + encodeURIComponent(slug), { method: 'DELETE' });
+    document.getElementById('edit-status').textContent = 'Page deleted from shared MongoDB.';
+    document.getElementById('page-select').value = '';
+    currentGroups = [];
+    renderGroups();
+    await loadPageList();
+  } catch (e) {
+    document.getElementById('edit-status').textContent = e.message;
+  }
+}
+
+async function addCategory() {
+  const name = document.getElementById('cat-name').value.trim();
+  if (!name) return;
+  await api('/api/admin/categories', { method: 'POST', body: JSON.stringify({ name }) });
+  document.getElementById('cat-name').value = '';
+  loadCategories();
+}
+
+async function loadCategories() {
+  const d = await api('/api/admin/categories');
+  const box = document.getElementById('categories');
+  box.innerHTML = '';
+  d.items.forEach(x => {
+    const row = document.createElement('div');
+    row.className = 'result';
+    row.textContent = x.name + ' (' + x.slug + ')';
+    if (!['movies', 'web-series'].includes(x.slug)) {
+      const b = document.createElement('button');
+      b.className = 'btn';
+      b.style.marginLeft = '8px';
+      b.textContent = 'Delete';
+      b.onclick = async () => {
+        await api('/api/admin/categories/' + x.slug, { method: 'DELETE' });
+        loadCategories();
+      };
+      row.append(' ', b);
+    }
+    box.append(row);
+  });
+}
+
+loadCategories();
+loadPageList();
+loadUrls();
 </script>`;
 
   return renderBaseLayout({
@@ -1200,16 +1857,17 @@ function renderWatchHtml(file, settings, streamBaseUrl) {
         <span>${escapeHtml(file.access_count || 0)} views</span>
       </div>
       <div class="tools">
-        ${settings.downloads_enabled ? `<a class="btn accent" id="direct-dl-btn" href="${escapeHtml(dlHref)}">Download</a>` : ''}
-        <button class="btn" type="button" onclick="copyStream()">Copy stream URL</button>
+        ${settings.downloads_enabled ? `<a class="btn accent" id="direct-dl-btn" href="${escapeHtml(dlHref)}" download>⬇ Download (Chrome)</a><a class="btn" id="idm-dl-btn" href="#">⚡ 1DM Download</a>` : ''}
+        <button class="btn" type="button" onclick="copyDownload()">Copy Download Link</button>
+        <button class="btn" type="button" onclick="copyStream()">Copy Stream URL</button>
       </div>
       <div id="copy-status" class="copy-ok"></div>
     </div>
   </section>
   <aside class="side">
     <div class="card">
-      <b>Open in player</b>
-      <p class="muted" style="font-size:12px;margin:6px 0 14px">Android buttons use explicit VIEW intents via your Cloudflare stream URL.</p>
+      <b>Open in player / downloader</b>
+      <p class="muted" style="font-size:12px;margin:6px 0 14px">Android buttons use explicit VIEW intents via your Cloudflare URL.</p>
       <div id="mobile" class="player-panel active"><div class="player-grid" id="mobile-grid"></div></div>
     </div>
   </aside>
@@ -1226,6 +1884,15 @@ if (player) {
   player.src = STREAM_URL;
   player.load();
 }
+function idmIntent(url) {
+  const u = new URL(url);
+  const scheme = u.protocol.replace(':','');
+  return 'intent://' + u.host + u.pathname + u.search + '#Intent;scheme=' + scheme + ';action=android.intent.action.VIEW;package=idm.internet.download.manager;S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+}
+const dlBtn = document.getElementById('direct-dl-btn');
+if (dlBtn) dlBtn.href = DL_URL;
+const idmBtn = document.getElementById('idm-dl-btn');
+if (idmBtn) idmBtn.href = idmIntent(DL_URL);
 function androidIntent(url, pkg, mime) {
   const u = new URL(url);
   const scheme = u.protocol.replace(':','');
@@ -1243,8 +1910,8 @@ function addPlayer(gridId, label, href) {
   if (!href.startsWith('intent:')) { a.target = '_blank'; a.rel = 'noopener'; }
   document.getElementById(gridId)?.appendChild(a);
 }
-[['HV Stream', null],['PLAYit', 'com.playit.videoplayer'],['VLC', 'org.videolan.vlc'],['MX Player', 'com.mxtech.videoplayer.ad'],['Just Player', 'com.brouken.player']].forEach(([n, p]) => {
-  addPlayer('mobile-grid', n, n === 'HV Stream' ? hvStreamIntent(STREAM_URL) : androidIntent(STREAM_URL, p, INTENT_MIME));
+[['1DM Download', 'idm'],['HV Stream', null],['PLAYit', 'com.playit.videoplayer'],['VLC', 'org.videolan.vlc'],['MX Player', 'com.mxtech.videoplayer.ad'],['Just Player', 'com.brouken.player']].forEach(([n, p]) => {
+  addPlayer('mobile-grid', n, p === 'idm' ? idmIntent(DL_URL) : (n === 'HV Stream' ? hvStreamIntent(STREAM_URL) : androidIntent(STREAM_URL, p, INTENT_MIME)));
 });
 async function copyStream() {
   try {
@@ -1252,6 +1919,14 @@ async function copyStream() {
     document.getElementById('copy-status').textContent = 'Stream URL copied.';
   } catch (e) {
     window.prompt('Copy stream URL:', STREAM_URL);
+  }
+}
+async function copyDownload() {
+  try {
+    await navigator.clipboard.writeText(DL_URL);
+    document.getElementById('copy-status').textContent = 'Download link copied (paste in Chrome or 1DM).';
+  } catch (e) {
+    window.prompt('Copy download URL:', DL_URL);
   }
 }
 </script>`;
@@ -1267,8 +1942,8 @@ export default async function handler(req, res) {
   try {
     if (req.method === 'OPTIONS') {
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Authorization, Accept, Origin');
       res.statusCode = 204;
       res.end();
       return;
@@ -1560,7 +2235,7 @@ export default async function handler(req, res) {
           slug = `${base}-${i++}`;
         }
         const categoryIds = Array.isArray(body.category_ids) ? body.category_ids.map(String).filter(Boolean) : [];
-        const groups = rewritePageGroupsToCloudflare(Array.isArray(body.groups) ? body.groups : [], cloudflareUrl);
+        const groups = normalizeAndRewritePageGroups(Array.isArray(body.groups) ? body.groups : [], cloudflareUrl);
         const now = new Date();
         const doc = {
           slug,
@@ -1598,7 +2273,7 @@ export default async function handler(req, res) {
         if (req.method === 'PUT') {
           const body = await readJsonBody(req);
           const categoryIds = Array.isArray(body.category_ids) ? body.category_ids.map(String).filter(Boolean) : [];
-          const groups = rewritePageGroupsToCloudflare(Array.isArray(body.groups) ? body.groups : [], cloudflareUrl);
+          const groups = normalizeAndRewritePageGroups(Array.isArray(body.groups) ? body.groups : [], cloudflareUrl);
           const updateDoc = {
             title: String(body.title || '').trim(),
             overview: String(body.overview || ''),
@@ -1613,7 +2288,7 @@ export default async function handler(req, res) {
           };
           const result = await db.collection('catalog_pages').updateOne({ slug }, { $set: updateDoc });
           if (!result.matchedCount) sendJson(res, 404, { detail: 'Page not found' });
-          else sendJson(res, 200, { ok: true });
+          else sendJson(res, 200, { ok: true, groups });
           return;
         }
         if (req.method === 'DELETE') {
@@ -1739,7 +2414,7 @@ export default async function handler(req, res) {
       return;
     }
 
-    if (req.method === 'GET' && pathname.startsWith('/watch/')) {
+    if ((req.method === 'GET' || req.method === 'HEAD') && pathname.startsWith('/watch/')) {
       const shortCode = decodeURIComponent(pathname.slice('/watch/'.length));
       if (cloudflareUrl && !isVercelUrl(cloudflareUrl)) {
         res.writeHead(307, { Location: `${cloudflareUrl}${requestPath}` });
@@ -1771,6 +2446,7 @@ export default async function handler(req, res) {
     };
     if (req.headers.authorization) headers.authorization = req.headers.authorization;
     if (req.headers['content-type']) headers['content-type'] = req.headers['content-type'];
+    if (req.headers.range) headers.range = req.headers.range;
 
     const clientReq = transport.request(targetUrl, { method: req.method, headers }, (backendRes) => {
       const responseHeaders = { ...backendRes.headers };

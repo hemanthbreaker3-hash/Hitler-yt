@@ -24,7 +24,6 @@ from app.utils.cloudflare_tunnel import (
     stop_cloudflare_auto_tunnel,
 )
 from app.utils.helpers import is_trycloudflare_url
-from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import asyncio
@@ -91,7 +90,6 @@ async def auto_cloudflare_and_vercel_routing_middleware(request: Request, call_n
         if cf_url != getattr(settings, "BACKEND_URL", None):
             asyncio.create_task(apply_auto_cloudflare_url(cf_url, source="incoming-request"))
 
-        # Website is strictly on Vercel when vercel_url is configured; keep trycloudflare.com for download & stream links
         path = request.url.path
         if path in ("/", "/search") or path.startswith("/title/"):
             vercel_site = await get_active_vercel_website_url()
@@ -106,17 +104,17 @@ async def auto_cloudflare_and_vercel_routing_middleware(request: Request, call_n
 app.include_router(admin_router)
 app.include_router(cms_router)
 
-# Enable CORS
+# Enable CORS with exposed Range headers for Chrome, 1DM, ADM, IDM, and web players
+# Note: Do NOT enable GZipMiddleware because gzip-compressing binary /dl/ and /stream/ responses
+# breaks Content-Length / 206 Partial Content byte ranges in Chrome and 1DM!
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition"],
 )
-
-# Enable Compression
-app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Mount Static Files & Templates
 APP_DIR = Path(__file__).resolve().parent
@@ -174,7 +172,7 @@ async def index(request: Request):
     )
 
 
-@app.get("/watch/{short_code}")
+@app.api_route("/watch/{short_code}", methods=["GET", "HEAD"])
 async def watch_page(request: Request, short_code: str):
     file_data = await files_col.find_one({"short_code": short_code})
     if not file_data:
@@ -194,33 +192,45 @@ async def watch_page(request: Request, short_code: str):
     )
 
 
-@app.get("/dl/{short_code}")
-@app.get("/stream/{short_code}")
-async def stream_file(request: Request, short_code: str):
+@app.api_route("/dl/{short_code}", methods=["GET", "HEAD"])
+@app.api_route("/dl/{short_code}/{extra_name:path}", methods=["GET", "HEAD"])
+@app.api_route("/stream/{short_code}", methods=["GET", "HEAD"])
+@app.api_route("/stream/{short_code}/{extra_name:path}", methods=["GET", "HEAD"])
+async def stream_file(request: Request, short_code: str, extra_name: str = ""):
+    """
+    Public download (/dl/) and stream (/stream/) endpoint for any user in Chrome, 1DM, ADM, IDM, or players.
+    Supports both GET and HEAD requests and RFC 7233 Byte Ranges.
+    """
     runtime = await get_settings()
-    if request.url.path.startswith("/dl/") and not runtime["downloads_enabled"]:
+    if request.url.path.startswith("/dl/") and runtime.get("downloads_enabled") is False:
         raise HTTPException(status_code=403, detail="Downloads are currently disabled")
-    if request.url.path.startswith("/stream/") and not runtime["streaming_enabled"]:
+    if request.url.path.startswith("/stream/") and runtime.get("streaming_enabled") is False:
         raise HTTPException(status_code=403, detail="Streaming is currently disabled")
+
     file_data = await files_col.find_one({"short_code": short_code})
     if not file_data:
         raise HTTPException(status_code=404, detail="File not found")
 
-    await files_col.update_one({"short_code": short_code}, {"$inc": {"access_count": 1}})
+    if request.method.upper() == "GET":
+        await files_col.update_one({"short_code": short_code}, {"$inc": {"access_count": 1}})
 
     all_clients = session_manager.get_all_clients()
-    if not all_clients:
+    if not all_clients and session_manager.bot_client is None:
         raise HTTPException(status_code=503, detail="Telegram sessions are unavailable")
 
     return await get_streaming_response(
         clients=all_clients,
-        chat_id=file_data["chat_id"],
-        message_id=file_data["message_id"],
-        file_size=file_data["file_size"],
-        filename=file_data["filename"],
-        mime_type=file_data["mime_type"],
+        chat_id=file_data.get("chat_id"),
+        message_id=file_data.get("message_id"),
+        file_size=int(file_data.get("file_size") or 0),
+        filename=file_data.get("filename") or extra_name or "media",
+        mime_type=file_data.get("mime_type") or "application/octet-stream",
         request=request,
         chunk_size=settings.STREAM_CHUNK_SIZE,
+        file_id=file_data.get("file_id"),
+        storage_chat_id=file_data.get("storage_chat_id"),
+        storage_message_id=file_data.get("storage_message_id"),
+        bot_client=session_manager.bot_client,
     )
 
 
@@ -235,12 +245,20 @@ async def get_tracks(short_code: str):
     if cached and not cached.get('error'):
         return JSONResponse(cached)
 
-    client = session_manager.get_client()
+    client = session_manager.bot_client or session_manager.get_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Telegram session unavailable")
 
     try:
-        msg = await client.get_messages(file_data['chat_id'], file_data['message_id'])
+        chat_id = file_data.get("storage_chat_id") or file_data.get("chat_id")
+        msg_id = file_data.get("storage_message_id") or file_data.get("message_id")
+        msg = await client.get_messages(chat_id, msg_id)
         if isinstance(msg, list):
             msg = msg[0] if msg else None
+        if not msg and file_data.get("chat_id") != chat_id:
+            msg = await client.get_messages(file_data["chat_id"], file_data["message_id"])
+            if isinstance(msg, list):
+                msg = msg[0] if msg else None
         if not msg:
             raise HTTPException(status_code=404, detail="Media no longer available")
 
@@ -269,10 +287,10 @@ async def get_tracks(short_code: str):
         raise HTTPException(status_code=500, detail="Failed to probe tracks")
 
 
-@app.get("/remux/{short_code}")
+@app.api_route("/remux/{short_code}", methods=["GET", "HEAD"])
 async def remux_file(request: Request, short_code: str, audio: int = 0, aac: int = 1):
     """Browser-friendly fragmented MP4; AAC by default for universal audio."""
-    if not (await get_settings())["streaming_enabled"]:
+    if (await get_settings()).get("streaming_enabled") is False:
         raise HTTPException(status_code=403, detail="Streaming is currently disabled")
     file_data = await files_col.find_one({"short_code": short_code})
     if not file_data:
@@ -281,17 +299,21 @@ async def remux_file(request: Request, short_code: str, audio: int = 0, aac: int
         raise HTTPException(status_code=400, detail="Invalid audio track")
 
     clients = session_manager.get_all_clients()
-    if not clients:
+    if not clients and session_manager.bot_client is None:
         raise HTTPException(status_code=503, detail="Telegram sessions are unavailable")
     try:
         return await get_remux_response(
             clients=clients,
             chat_id=file_data["chat_id"],
             message_id=file_data["message_id"],
-            file_size=file_data["file_size"],
-            filename=file_data["filename"],
+            file_size=int(file_data.get("file_size") or 0),
+            filename=file_data.get("filename") or "media.mp4",
             audio_track=audio,
             force_aac=bool(aac),
+            file_id=file_data.get("file_id"),
+            storage_chat_id=file_data.get("storage_chat_id"),
+            storage_message_id=file_data.get("storage_message_id"),
+            bot_client=session_manager.bot_client,
         )
     except HTTPException:
         raise
@@ -300,13 +322,13 @@ async def remux_file(request: Request, short_code: str, audio: int = 0, aac: int
         raise HTTPException(status_code=500, detail="Error starting remux stream")
 
 
-@app.get("/_tgstream/{chat_id}/{message_id}")
+@app.api_route("/_tgstream/{chat_id}/{message_id}", methods=["GET", "HEAD"])
 async def internal_tg_stream(request: Request, chat_id: int, message_id: int):
     """Local-only style stream of a Telegram message media for mediainfo/ffmpeg (Range supported)."""
     clients = session_manager.get_all_clients()
-    if not clients:
+    if not clients and session_manager.bot_client is None:
         raise HTTPException(status_code=503, detail="No Telegram sessions")
-    client = clients[0]
+    client = session_manager.bot_client or clients[0]
     try:
         msg = await client.get_messages(chat_id, message_id)
         if isinstance(msg, list):
@@ -317,13 +339,16 @@ async def internal_tg_stream(request: Request, chat_id: int, message_id: int):
         if not media and not msg.photo:
             raise HTTPException(status_code=404, detail="No media")
         if msg.photo and not media:
-            file_size = msg.photo.file_size or 0
+            photo = msg.photo[-1] if isinstance(msg.photo, (list, tuple)) else msg.photo
+            file_size = getattr(photo, "file_size", 0) or 0
             filename = f"photo_{message_id}.jpg"
             mime = "image/jpeg"
+            fid = getattr(photo, "file_id", None)
         else:
             file_size = getattr(media, "file_size", None) or 0
             filename = getattr(media, "file_name", None) or f"file_{message_id}"
             mime = getattr(media, "mime_type", None) or "application/octet-stream"
+            fid = getattr(media, "file_id", None)
         if file_size <= 0:
             raise HTTPException(status_code=422, detail="Unknown file size")
         return await get_streaming_response(
@@ -335,6 +360,8 @@ async def internal_tg_stream(request: Request, chat_id: int, message_id: int):
             mime_type=mime,
             request=request,
             chunk_size=settings.STREAM_CHUNK_SIZE,
+            file_id=fid,
+            bot_client=session_manager.bot_client,
         )
     except HTTPException:
         raise

@@ -57,31 +57,47 @@ class PageInput(BaseModel):
     genres: list[str] = []
     runtime: int | None = None
 
-    @field_validator('groups')
+    @field_validator('groups', mode='before')
     @classmethod
     def validate_groups(cls, groups):
+        if not isinstance(groups, list):
+            return []
+        normalized_groups = []
+        watch_idx = 0
+        dl_idx = 0
         for group in groups:
-            if not isinstance(group, dict) or not str(group.get('name', '')).strip():
-                raise ValueError('Each group needs a name')
-            if group.get('box', 'watch') not in ('watch', 'download'):
-                raise ValueError('Group box must be watch or download')
-            buttons = group.get('buttons', [])
-            if not isinstance(buttons, list):
-                raise ValueError('Invalid group buttons')
-            for button in buttons:
-                if not isinstance(button, dict) or not str(button.get('name', '')).strip():
-                    raise ValueError('Each button needs a name')
-                target = str(button.get('url', '')).strip()
-                parsed = urlparse(target)
-                if (
-                    not target
-                    or (parsed.scheme and parsed.scheme not in ('http', 'https'))
-                    or (parsed.scheme and not parsed.netloc)
-                    or (parsed.netloc and not parsed.scheme)
-                    or (not parsed.scheme and not target.startswith('/'))
-                ):
-                    raise ValueError('Button URLs must be relative paths or HTTP(S) URLs')
-        return groups
+            if not isinstance(group, dict):
+                continue
+            box = str(group.get('box') or 'watch').strip().lower()
+            if box not in ('watch', 'download'):
+                box = 'watch'
+            if box == 'watch':
+                watch_idx += 1
+                default_gname = f'Watch Group {watch_idx}'
+            else:
+                dl_idx += 1
+                default_gname = f'Download Group {dl_idx}'
+            gname = str(group.get('name') or '').strip() or default_gname
+            raw_buttons = group.get('buttons') if isinstance(group.get('buttons'), list) else []
+            clean_buttons = []
+            for b_i, button in enumerate(raw_buttons):
+                if not isinstance(button, dict):
+                    continue
+                bname = str(button.get('name') or '').strip()
+                target = str(button.get('url') or '').strip()
+                if not bname and not target:
+                    continue
+                if not bname:
+                    bname = f"{'Watch' if box == 'watch' else 'Download'} {b_i + 1}"
+                if target and not target.startswith(('http://', 'https://', '/')):
+                    target = 'https://' + target
+                if target:
+                    parsed = urlparse(target)
+                    if parsed.scheme and parsed.scheme not in ('http', 'https'):
+                        raise ValueError(f'Invalid URL scheme in button "{bname}"')
+                    clean_buttons.append({'name': bname, 'url': target})
+            normalized_groups.append({'box': box, 'name': gname, 'buttons': clean_buttons})
+        return normalized_groups
 
 
 async def admin_auth(_: bool = Depends(require_panel_admin)):
@@ -524,7 +540,7 @@ async def edit_page(slug: str, data: PageInput, _: bool = Depends(admin_auth)):
     result = await pages.update_one({'slug': slug}, {'$set': doc})
     if not result.matched_count:
         raise HTTPException(404, 'Page not found')
-    return {'ok': True}
+    return {'ok': True, 'groups': doc['groups']}
 
 
 @router.delete('/api/admin/pages/{slug}')

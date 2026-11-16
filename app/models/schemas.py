@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
 
+
 class FileMetadata(BaseModel):
     file_id: str
     file_unique_id: str
@@ -15,7 +16,10 @@ class FileMetadata(BaseModel):
     short_code: str
     chat_id: int
     message_id: int
+    storage_chat_id: Optional[int] = None
+    storage_message_id: Optional[int] = None
     thumbnail_id: Optional[str] = None
+
 
 class User(BaseModel):
     user_id: int
@@ -26,6 +30,7 @@ class User(BaseModel):
     is_banned: bool = False
     joined_at: datetime = Field(default_factory=datetime.utcnow)
     last_active: datetime = Field(default_factory=datetime.utcnow)
+
 
 class AppSettings(BaseModel):
     force_sub_channels: List[int] = []
