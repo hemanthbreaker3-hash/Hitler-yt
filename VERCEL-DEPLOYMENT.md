@@ -37,3 +37,11 @@ Publish or edit catalog pages using Telegram `/search` or the website `/panel`. 
 - `503 Backend URL is not configured`: confirm the VPS saved `settings.backend_url` in the same database, or set `BACKEND_URL` as a temporary fallback.
 - MongoDB configuration errors: verify Atlas network access allows Vercel serverless outbound connections and that the database user has read/write access.
 - Pages not updating: confirm both VPS and Vercel use the same `MONGODB_URI` and `DATABASE_NAME`, then refresh; dynamic responses are configured not to be cached.
+
+## Shared catalog page synchronization
+
+Catalog pages are stored in the MongoDB collection `catalog_pages` in the database selected by `DATABASE_NAME` (default: `tg_media_bot`). The Telegram bot's `/search` publish action and the web panel's create/edit/delete actions write to this same collection. Public catalog, search, and title routes read from that collection on each request; the Vercel gateway disables caching for proxied HTML/API responses. Therefore a page created or edited through Telegram, the VPS website, or the Vercel website is shared automatically without a Vercel redeploy.
+
+For this to work, the VPS and Vercel must use the exact same `MONGODB_URI` and `DATABASE_NAME`, and Vercel's `BACKEND_URL`/MongoDB-backed backend setting must point to the currently reachable VPS/Cloudflare backend. If separate MongoDB databases or Atlas clusters are configured, the sites will not share page changes. Vercel requests are proxied to the configured backend, so the backend must remain online.
+
+The panel supports page creation, editing metadata/groups/buttons, and deleting pages. Page writes include `updated_at` timestamps. The Telegram bot's page publish and category assignment actions also update the shared collection.

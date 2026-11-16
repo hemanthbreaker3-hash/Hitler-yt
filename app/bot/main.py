@@ -518,7 +518,7 @@ def register_handlers(bot):
                 extra = {"genres": [g.get("name", "") for g in metadata.get("genres", [])], "imdb_id": (metadata.get("external_ids") or {}).get("imdb_id") or metadata.get("imdb_id", ""), "runtime": metadata.get("runtime") or (metadata.get("episode_run_time") or [None])[0], "tagline": metadata.get("tagline", "")}
             except Exception:
                 logger.exception("TMDB details lookup failed; publishing search metadata only")
-        await db.catalog_pages.insert_one({"slug": slug, "title": pending["title"], "overview": pending.get("overview", ""), "poster_path": pending.get("poster_path", ""), "release_date": pending.get("release_date", ""), "rating": pending.get("rating"), "media_type": pending["media_type"], "category_slugs": [category], "groups": [], "published": True, "created_at": datetime.datetime.utcnow(), **extra})
+        await db.catalog_pages.insert_one({"slug": slug, "title": pending["title"], "overview": pending.get("overview", ""), "poster_path": pending.get("poster_path", ""), "release_date": pending.get("release_date", ""), "rating": pending.get("rating"), "media_type": pending["media_type"], "category_slugs": [category], "groups": [], "published": True, "created_at": datetime.datetime.utcnow(), "updated_at": datetime.datetime.utcnow(), **extra})
         await db.cms_pending.delete_one({"_id": pending_id})
         await callback.message.edit_text(f"✅ Page created: {app_settings.BASE_URL.rstrip('/')}/title/{slug}\nUse /edit while replying with this link, or open /panel to manage page groups and buttons.")
         await callback.answer("Published")
@@ -532,7 +532,7 @@ def register_handlers(bot):
         pending = await db.cms_pending.find_one({"_id": pending_id, "action": "category"})
         if not pending:
             return await callback.answer("Selection expired", show_alert=True)
-        await db.catalog_pages.update_one({"slug": pending["page_slug"]}, {"$addToSet": {"category_slugs": pending["category_slug"]}})
+        await db.catalog_pages.update_one({"slug": pending["page_slug"]}, {"$addToSet": {"category_slugs": pending["category_slug"]}, "$set": {"updated_at": datetime.datetime.utcnow()}})
         await db.cms_pending.delete_one({"_id": pending_id})
         await callback.message.edit_text("✅ Page category updated. The website catalog is updated automatically.")
         await callback.answer("Category assigned")

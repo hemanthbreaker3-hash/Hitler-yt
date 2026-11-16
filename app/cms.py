@@ -255,6 +255,7 @@ async def create_page(data: PageInput, _: bool = Depends(admin_auth)):
         doc['imdb_id']=(meta.get('external_ids') or {}).get('imdb_id') or meta.get('imdb_id','')
         doc['runtime']=meta.get('runtime') or (meta.get('episode_run_time') or [None])[0]
         doc['tagline']=meta.get('tagline','')
+    doc['updated_at'] = doc['created_at']
     await pages.insert_one(doc)
     return {'slug':slug,'url':f"{settings.BASE_URL.rstrip('/')}/title/{slug}"}
 
@@ -262,6 +263,15 @@ async def create_page(data: PageInput, _: bool = Depends(admin_auth)):
 async def edit_page(slug: str, data: PageInput, _: bool = Depends(admin_auth)):
     cats=await categories.find({'slug':{'$in':data.category_ids}}).to_list(100)
     doc=data.model_dump(); doc['category_slugs']=[x['slug'] for x in cats]
+    doc['updated_at'] = datetime.now(timezone.utc)
     result=await pages.update_one({'slug':slug},{'$set':doc})
     if not result.matched_count: raise HTTPException(404,'Page not found')
     return {'ok':True}
+
+
+@router.delete('/api/admin/pages/{slug}')
+async def delete_page(slug: str, _: bool = Depends(admin_auth)):
+    result = await pages.delete_one({'slug': slug})
+    if not result.deleted_count:
+        raise HTTPException(404, 'Page not found')
+    return {'ok': True, 'deleted': slug}
