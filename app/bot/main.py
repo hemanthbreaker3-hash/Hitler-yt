@@ -412,8 +412,9 @@ def register_handlers(bot):
         user = message.from_user
         if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
             return await message.reply("🚫 Admins only.")
-        base = settings.BASE_URL.rstrip("/")
-        cmd = (message.text or "").split()[0].split("@")[0]
+        base = (await settings_col.find_one({"key": "base_url"}) or {}).get("value") or settings.BASE_URL
+        base = str(base).rstrip("/")
+        cmd = (message.text or "").split(maxsplit=1)[0].split("@")[0].lower()
         if cmd == "/categories":
             reply = getattr(message, "reply_to_message", None)
             if reply:
@@ -467,7 +468,8 @@ def register_handlers(bot):
                 "☁️ **Backend URL (Cloudflare Tunnel)**\n\n"
                 f"> Current: `{current}`\n\n"
                 "Usage: `/backendurl https://your-tunnel.trycloudflare.com`\n"
-                "Use the HTTPS Cloudflare public URL that forwards to the VPS backend port."
+                "Use the HTTPS Cloudflare public URL that forwards to the VPS backend port. "
+                "The VPS deployment normally detects and saves this URL automatically; you only need this command to override it."
             )
         candidate = args[1].strip()
         if not candidate.startswith(("http://", "https://")):

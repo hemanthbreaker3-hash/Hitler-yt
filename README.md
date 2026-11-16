@@ -65,17 +65,17 @@ Alternatively, install Python dependencies and run `uvicorn app.main:app --host 
 
 1. Import this repository at [Vercel](https://vercel.com/new).
 2. Set **Root Directory** to the repository root (do not select `vercel/`).
-3. Add `MONGODB_URI` and `DATABASE_NAME` to Vercel, using exactly the same MongoDB database as the VPS bot. This is required because the Vercel gateway reads the `backend_url` setting from MongoDB.
+3. Add `MONGODB_URI` and `DATABASE_NAME` to Vercel, using exactly the same MongoDB URI and database name as the VPS bot. This is the only required Vercel configuration for URL discovery; the Vercel gateway reads the Cloudflare `backend_url` from MongoDB.
 4. Deploy. No custom build command is required; the root `vercel.json` routes requests through the Node.js proxy in `api/[...path].js`.
-5. In Telegram, send `/baseurl https://your-project.vercel.app` to set the public website domain and `/backendurl https://your-tunnel.trycloudflare.com` to set the Cloudflare/VPS backend URL. Both are persisted in MongoDB. `/panel` displays both values and links to the web dashboard.
+5. On VPS deployment, the Cloudflare Quick Tunnel service automatically detects its generated HTTPS URL and saves it as both `base_url` and `backend_url` in MongoDB. You do not need to run `/backendurl` manually. When the Vercel website is first opened, it automatically registers its production and custom domains in MongoDB. `/panel` displays the detected domains. `/backendurl` is only an optional manual override.
 
 The Vercel gateway redirects `/stream`, `/dl`, and `/remux` traffic to the backend so media bytes do not pass through a serverless function. Other requests (home page, watch page, static files, catalog and admin API) are proxied to the backend.
 
-The Vercel gateway reads `settings.backend_url` from the shared MongoDB database on each request (with `BACKEND_URL` as an optional fallback). Changing `/backendurl` in Telegram therefore takes effect without redeploying Vercel. Do not use the Vercel website URL as the backend URL: the backend URL must be the Cloudflare Tunnel URL that reaches the VPS.
+The Vercel gateway reads `settings.backend_url` from the shared MongoDB database on each request (with `BACKEND_URL` as an optional fallback). The VPS Cloudflare service refreshes this database value automatically whenever its Quick Tunnel URL changes. Changing `/backendurl` in Telegram is only needed for a manual override. Do not use the Vercel website URL as the backend URL: the backend URL must be the Cloudflare Tunnel URL that reaches the VPS.
 
 ## 4. Admin dashboard and commands
 
-Open `https://your-project.vercel.app/panel` and authenticate with username `admin` and the `ADMIN_PANEL_TOKEN` password. The URL card in the dashboard can also update both MongoDB URL settings.
+Open `https://your-project.vercel.app/panel` and authenticate with username `admin` and the `ADMIN_PANEL_TOKEN` password from the VPS `.env`. Vercel must have the same `MONGODB_URI` and `DATABASE_NAME` as the VPS; Vercel cannot discover the generated tunnel URL without access to that shared database. The URL card in the dashboard can also update both MongoDB URL settings.
 
 - Toggle downloads and streaming independently.
 - Toggle the built-in watch-page player.

@@ -98,7 +98,7 @@ async def main():
         raise RuntimeError("MONGODB_URI/DATABASE_URL is missing inside web container")
     client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=15000)
     await client.admin.command("ping")
-    db = client[os.environ.get("DATABASE_NAME", "file2link")]
+    db = client[os.environ.get("DATABASE_NAME", "tg_media_bot")]
     now = datetime.datetime.now(datetime.timezone.utc)
     for key in ("base_url", "backend_url"):
         await db.settings.update_one(

@@ -94,7 +94,7 @@ export default async function handler(req, res) {
   if (!backendUrl) {
     res.status(503).json({
       error: 'Backend URL is not configured',
-      message: 'Send /backendurl https://your-cloudflare-tunnel.trycloudflare.com to the bot, or configure BACKEND_URL in Vercel as a fallback.',
+      message: 'The VPS deployment must save its Cloudflare URL in MongoDB. Set MONGODB_URI and DATABASE_NAME in Vercel to the exact same MongoDB database used by the VPS; BACKEND_URL is only an optional fallback.',
     });
     return;
   }

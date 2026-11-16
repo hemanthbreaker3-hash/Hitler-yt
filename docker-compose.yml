@@ -10,7 +10,7 @@ services:
       - .env
     environment:
       MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI in .env}
-      DATABASE_NAME: ${DATABASE_NAME:-file2link}
+      DATABASE_NAME: ${DATABASE_NAME:-tg_media_bot}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       PORT: ${PORT:-8000}
     depends_on:
