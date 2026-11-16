@@ -40,6 +40,8 @@ async def lifespan(app: FastAPI):
         session_manager.prepare_bot()
         register_handlers(session_manager.bot_client)
         await session_manager.start()
+        from app.bot.main import setup_bot_commands
+        await setup_bot_commands(session_manager.bot_client)
         if getattr(settings, "BASE_URL", None):
             os.environ["BASE_URL"] = str(settings.BASE_URL).rstrip("/")
         logger.info("HITLER service started (wzgram)")

@@ -11,7 +11,7 @@ import re
 
 from wzgram import filters
 from wzgram.enums import ParseMode
-from wzgram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
+from wzgram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery, BotCommand
 
 from app.database.connection import files_col, users_col, settings_col, settings, db
 from app.models.schemas import FileMetadata, User
@@ -55,6 +55,33 @@ async def is_access_allowed(user_id: int) -> bool:
     if mode == "admins":
         return user_id == settings.OWNER_ID or user_id in settings.admin_list
     return True
+
+
+
+async def setup_bot_commands(bot):
+    """Register all bot commands in the Telegram menu so they appear under the / button."""
+    try:
+        commands = [
+            BotCommand("start", "Start / help"),
+            BotCommand("panel", "Open control panel (admin)"),
+            BotCommand("backendurl", "Set backend / Cloudflare URL (admin)"),
+            BotCommand("baseurl", "Set primary website URL (admin)"),
+            BotCommand("categories", "Manage categories (admin)"),
+            BotCommand("edit", "Open page editor (admin)"),
+            BotCommand("search", "Search catalog (admin)"),
+            BotCommand("stats", "Bot statistics (admin)"),
+            BotCommand("broadcast", "Broadcast message (admin)"),
+            BotCommand("ban", "Ban a user (admin)"),
+            BotCommand("unban", "Unban a user (admin)"),
+            BotCommand("autodel", "Auto-delete settings (admin)"),
+            BotCommand("ss", "Generate screenshots"),
+            BotCommand("sv", "Generate sample video"),
+            BotCommand("mi", "MediaInfo for a file"),
+        ]
+        await bot.set_bot_commands(commands)
+        logger.info("Bot commands registered successfully (%d cmds)", len(commands))
+    except Exception:
+        logger.exception("Failed to register bot commands")
 
 
 def register_handlers(bot):
@@ -127,7 +154,7 @@ def register_handlers(bot):
             reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
         )
 
-    @bot.on_message(filters.media & ~filters.channel)
+    @bot.on_message((filters.document | filters.video | filters.audio | filters.animation | filters.photo | filters.voice | filters.video_note) & ~filters.channel)
     async def media_handler(client, message: Message):
         user = message.from_user
         if not user or user.is_bot:
@@ -196,11 +223,12 @@ def register_handlers(bot):
             mime_type = ani.mime_type or "video/mp4"
             file_id = ani.file_id
         elif message.photo:
-            photo = message.photo
-            file_name = f"photo_{photo.file_unique_id}.jpg"
-            file_size = photo.file_size or 0
+            # wzgram/pyrogram: photo may be a list of sizes or the largest PhotoSize
+            photo = message.photo[-1] if isinstance(message.photo, (list, tuple)) else message.photo
+            file_name = f"photo_{getattr(photo, 'file_unique_id', 'img')}.jpg"
+            file_size = getattr(photo, "file_size", 0) or 0
             mime_type = "image/jpeg"
-            file_id = photo.file_id
+            file_id = getattr(photo, "file_id", "") or ""
         elif message.voice:
             voice = message.voice
             file_name = f"voice_{voice.file_unique_id}.ogg"
@@ -214,7 +242,20 @@ def register_handlers(bot):
             mime_type = "video/mp4"
             file_id = vn.file_id
         else:
-            return await detecting_msg.edit_text("❌ **Error:** Unsupported media type.")
+            logger.warning("Unsupported media from user %s: media types present = %s", user.id, {
+                "document": bool(message.document),
+                "video": bool(message.video),
+                "audio": bool(message.audio),
+                "animation": bool(message.animation),
+                "photo": bool(message.photo),
+                "voice": bool(message.voice),
+                "video_note": bool(message.video_note),
+                "sticker": bool(getattr(message, "sticker", None)),
+            })
+            return await detecting_msg.edit_text(
+                "❌ **Error:** Unsupported media type.\n\n"
+                "Supported: documents, videos, audio, GIFs/animations, photos, voice notes, video notes."
+            )
 
         if not file_id:
             return await detecting_msg.edit_text("❌ **Error:** Could not extract media details.")
@@ -330,48 +371,134 @@ def register_handlers(bot):
         else:
             await callback.answer("🚫 You are not authorized to delete this link.", show_alert=True)
 
-    # Admin-only website CMS commands. The secure web dashboard performs the full edits.
+    # Admin-only website CMS search. Supports /search <query>, /search movie <query>,
+    # and /search tv <query>; all selected results are stored before publishing.
     @bot.on_message(filters.command("search"))
     async def cms_search_handler(client, message: Message):
         user = message.from_user
-        if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
+        if not user or user.is_bot or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
             return await message.reply("🚫 Admins only.")
-        args = (message.text or "").split(maxsplit=1)
-        if len(args) < 2:
-            return await message.reply("Usage: /search movie or series name")
-        api_key = settings.TMDB_API_KEY
+
+        raw = (message.text or "").strip()
+        parts = raw.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            return await message.reply(
+                "🔎 **TMDB Catalog Search**\\n\\n"
+                "> `/search movie name` — search movies and series\\n"
+                "> `/search movie movie name` — movies only\\n"
+                "> `/search tv series name` — TV series only"
+            )
+
+        query_text = parts[1].strip()
+        media_filter = "multi"
+        # Optional explicit media type; otherwise search both movies and TV.
+        typed = re.match(r"^(movie|movies|tv|series)\\s*:\\s*(.+)$", query_text, re.I)
+        if typed:
+            media_filter = "movie" if typed.group(1).lower() in ("movie", "movies") else "tv"
+            query_text = typed.group(2).strip()
+        else:
+            typed = re.match(r"^(movie|movies|tv|series)\\s+(.+)$", query_text, re.I)
+            if typed:
+                media_filter = "movie" if typed.group(1).lower() in ("movie", "movies") else "tv"
+                query_text = typed.group(2).strip()
+
+        if not query_text:
+            return await message.reply("❌ Please provide a movie or series name.")
+        api_key = (getattr(settings, "TMDB_API_KEY", "") or os.getenv("TMDB_API_KEY", "")).strip()
         if not api_key:
-            return await message.reply("TMDB_API_KEY is missing in the backend environment.")
+            return await message.reply(
+                "⚠️ **TMDB API key is not configured.**\\n"
+                "Add `TMDB_API_KEY` to the bot backend environment and restart the bot."
+            )
+
+        status = await message.reply(f"🔍 Searching TMDB for **{html.escape(query_text[:100])}**…")
         try:
-            async with httpx.AsyncClient(timeout=15) as http:
-                response = await http.get("https://api.themoviedb.org/3/search/multi", params={"api_key": api_key, "query": args[1], "include_adult": "false"})
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(20.0, connect=8.0),
+                headers={"Accept": "application/json"},
+                follow_redirects=True,
+            ) as http:
+                response = await http.get(
+                    f"https://api.themoviedb.org/3/search/{media_filter}",
+                    params={"api_key": api_key, "query": query_text, "include_adult": "false", "page": 1},
+                )
                 response.raise_for_status()
-                results = response.json().get("results", [])[:20]
+                payload = response.json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+                raise ValueError("TMDB returned an unexpected response")
+
             rows = []
-            for item in results:
-                media_type = item.get("media_type")
-                if media_type not in ("movie", "tv"):
+            saved = 0
+            for item in payload["results"]:
+                if not isinstance(item, dict):
                     continue
-                title = item.get("title") or item.get("name") or "Untitled"
+                media_type = item.get("media_type") if media_filter == "multi" else media_filter
+                if media_type not in ("movie", "tv") or not item.get("id"):
+                    continue
+                title = (item.get("title") or item.get("name") or "").strip()
+                if not title:
+                    continue
                 pending_id = secrets.token_hex(5)
-                await db.cms_pending.insert_one({"_id": pending_id, "tmdb_id": item["id"], "media_type": media_type, "title": title, "overview": item.get("overview", ""), "poster_path": item.get("poster_path") or "", "release_date": item.get("release_date") or item.get("first_air_date", ""), "rating": item.get("vote_average")})
-                rows.append([InlineKeyboardButton(f"{title[:45]} · {media_type}", callback_data=f"cmscreate:{pending_id}")])
+                release_date = item.get("release_date") or item.get("first_air_date") or ""
+                year = release_date[:4] if isinstance(release_date, str) and len(release_date) >= 4 else ""
+                await db.cms_pending.insert_one({
+                    "_id": pending_id,
+                    "tmdb_id": int(item["id"]),
+                    "media_type": media_type,
+                    "title": title,
+                    "overview": item.get("overview") or "",
+                    "poster_path": item.get("poster_path") or "",
+                    "release_date": release_date,
+                    "rating": item.get("vote_average"),
+                    "created_at": datetime.datetime.utcnow(),
+                })
+                label = f"{title} ({year})" if year else title
+                kind = "Movie" if media_type == "movie" else "TV"
+                rows.append([InlineKeyboardButton(f"{label[:42]} · {kind}", callback_data=f"cmscreate:{pending_id}")])
+                saved += 1
+                if saved >= 10:
+                    break
+
             if not rows:
-                return await message.reply("No matching movie or series found.")
-            return await message.reply("Select a TMDB result to publish its page:", reply_markup=_kb(rows))
+                return await status.edit_text(
+                    f"🔎 No movie or TV results found for **{html.escape(query_text[:100])}**.\\n"
+                    "Try a different spelling or use `/search movie: name` / `/search tv: name`."
+                )
+            await status.edit_text(
+                f"🎬 **TMDB Search Results**\\n"
+                f"> Query: `{html.escape(query_text[:100])}`\\n"
+                f"> Matches: `{len(rows)}`\\n\\n"
+                "Select a result to publish its catalog page:",
+                reply_markup=_kb(rows),
+            )
+        except httpx.HTTPStatusError as exc:
+            logger.warning("TMDB search returned HTTP %s", exc.response.status_code)
+            detail = ""
+            try:
+                detail = (exc.response.json() or {}).get("status_message", "")
+            except Exception:
+                pass
+            await status.edit_text(
+                f"❌ TMDB search failed (HTTP {exc.response.status_code}). "
+                f"{html.escape(str(detail)[:250]) or 'Check the API key and TMDB availability.'}"
+            )
+        except (httpx.TimeoutException, httpx.RequestError):
+            logger.exception("TMDB search network failure")
+            await status.edit_text("⏳ TMDB did not respond. Please try `/search` again in a moment.")
         except Exception as exc:
             logger.exception("TMDB search failed")
-            return await message.reply(f"TMDB search failed: {type(exc).__name__}")
+            await status.edit_text(f"❌ TMDB search failed: `{type(exc).__name__}`")
 
     @bot.on_callback_query(filters.regex(r"^cmscreate:"))
     async def cms_create_callback(client, callback: CallbackQuery):
         user = callback.from_user
         if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
             return await callback.answer("Admins only", show_alert=True)
-        pending_id = callback.data.split(":", 1)[1]
-        pending = await db.cms_pending.find_one({"_id": pending_id})
-        if not pending:
-            return await callback.answer("Search result expired", show_alert=True)
+        data = getattr(callback, "data", "") or ""
+        pending_id = data.split(":", 1)[1] if ":" in data else ""
+        pending = await db.cms_pending.find_one({"_id": pending_id}) if pending_id else None
+        if not pending or pending.get("media_type") not in ("movie", "tv") or not pending.get("tmdb_id"):
+            return await callback.answer("Search result expired. Run /search again.", show_alert=True)
         from app.database.connection import settings as app_settings
         slug = re.sub(r"[^a-z0-9]+", "-", pending["title"].lower()).strip("-") or secrets.token_hex(5)
         base, n = slug, 2
@@ -867,13 +994,13 @@ def register_handlers(bot):
             return await message.reply("❌ Send a valid downloadable HTTP/HTTPS URL.")
         if not direct_url and (not target or not _is_media_message(target)):
             return await message.reply(
-                "📊 **MediaInfo**\\n\\n"
-                "> Reply to Telegram media with `/mi`, or send `/mi https://example.com/file.mkv`.\\n"
+                "📊 **MediaInfo**\n\n"
+                "> Reply to Telegram media with `/mi`, or send `/mi https://example.com/file.mkv`.\n"
                 "> Direct downloadable HTTP/HTTPS links are supported."
             )
 
         status = await message.reply(
-            "🔍 **Extracting MediaInfo…**\\n> " +
+            "🔍 **Extracting MediaInfo…**\n> " +
             ("Probing downloadable URL (no full download)." if direct_url else "Probing Telegram media via stream.")
         )
         work = None
@@ -905,8 +1032,9 @@ def register_handlers(bot):
                     name = "video"
                 name = name or "file"
 
-            name = name.replace("\\n", " ").replace("\\r", " ")[:180]
+            name = name.replace("\n", " ").replace("\r", " ")[:180]
 
+            body = format_output(data)
             header = f"📊 **MediaInfo for** `{name}`\n\n"
             full = header + f"```\n{body}\n```"
             if len(full) > 4000:
