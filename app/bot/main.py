@@ -8,6 +8,8 @@ import mimetypes
 import httpx
 import secrets
 import re
+import tempfile
+from pathlib import Path
 
 from wzgram import filters
 from wzgram.enums import ParseMode
@@ -51,6 +53,8 @@ logger = logging.getLogger(__name__)
 # Tracks admin user IDs currently waiting to send bot token(s) after clicking [➕ Add Bot Token] in /addbots
 _awaiting_bot_token_admins: set[int] = set()
 _BOT_TOKEN_PATTERN = re.compile(r"\d{6,16}:[A-Za-z0-9_-]{30,60}")
+_awaiting_ad_config: dict[int, str] = {}
+_AD_CONFIG_MAX_BYTES = 64 * 1024
 
 
 def get_ist_greeting():
@@ -88,6 +92,8 @@ async def setup_bot_commands(bot):
         commands = [
             BotCommand("start", "Start / help"),
             BotCommand("addbots", "Add unlimited bot tokens to boost download speed (admin)"),
+            BotCommand("adsense", "Manage Google AdSense configuration (admin)"),
+            BotCommand("monetag", "Manage Monetag configuration (admin)"),
             BotCommand("panel", "Open control panel (admin)"),
             BotCommand("manage", "Edit website pages and bot settings (admin)"),
             BotCommand("username", "Set website panel username (admin)"),
@@ -170,6 +176,129 @@ async def _process_and_save_bot_tokens(raw_text: str, user_id: int) -> tuple[lis
 
 def register_handlers(bot):
     """Register wzgram (Pyrogram-compatible) handlers on the bot client."""
+
+    async def _show_ad_config(message, provider: str):
+        doc = await db.site_settings.find_one({"_id": "ad_config"}) or {}
+        cfg = doc.get(provider, {})
+        enabled = bool(cfg.get("enabled", False))
+        exists = bool(cfg.get("tag"))
+        label = "Google AdSense" if provider == "adsense" else "Monetag"
+        status = "🟢 Enabled" if enabled else "🔴 Disabled"
+        file_status = "✅ Configuration uploaded" if exists else "⚠️ No configuration file uploaded"
+        rows = [
+            [InlineKeyboardButton("📤 Upload / Replace File", callback_data=f"adcfg:{provider}:upload")],
+            [InlineKeyboardButton("🟢 Enable" if not enabled else "🔴 Disable", callback_data=f"adcfg:{provider}:toggle")],
+        ]
+        if exists:
+            rows.append([InlineKeyboardButton("🗑️ Remove Configuration", callback_data=f"adcfg:{provider}:remove")])
+        rows.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"adcfg:{provider}:refresh")])
+        await message.reply(
+            f"📢 **{label} Settings**\n\n**Status:** {status}\n**File:** {file_status}\n\n"
+            "Upload a `.txt`, `.html`, or `.js` file containing the provider's official ad code. "
+            "Only enable it after verifying the code in your provider dashboard.",
+            reply_markup=_kb(rows),
+        )
+
+    @bot.on_message(filters.command("adsense") & filters.private)
+    async def adsense_command_handler(client, message: Message):
+        user = message.from_user
+        if not user or not _is_admin_user(user.id):
+            return await message.reply("🚫 **Admins only.**")
+        await _show_ad_config(message, "adsense")
+
+    @bot.on_message(filters.command("monetag") & filters.private)
+    async def monetag_command_handler(client, message: Message):
+        user = message.from_user
+        if not user or not _is_admin_user(user.id):
+            return await message.reply("🚫 **Admins only.**")
+        await _show_ad_config(message, "monetag")
+
+    @bot.on_callback_query(filters.regex(r"^adcfg:(adsense|monetag):(upload|toggle|remove|refresh)$"))
+    async def ad_config_callback_handler(client, callback: CallbackQuery):
+        user = callback.from_user
+        if not user or not _is_admin_user(user.id):
+            return await callback.answer("🚫 Admins only", show_alert=True)
+        _, provider, action = (callback.data or "").split(":", 2)
+        doc = await db.site_settings.find_one({"_id": "ad_config"}) or {"_id": "ad_config"}
+        cfg = doc.get(provider, {})
+        if action == "upload":
+            _awaiting_ad_config[user.id] = provider
+            await callback.answer("Send the configuration file")
+            return await callback.message.edit_text(
+                f"📤 **Upload {provider.title()} configuration**\n\n"
+                "Send one `.txt`, `.html`, or `.js` document (maximum 64 KB). "
+                "Do not upload account passwords or private API credentials.",
+                reply_markup=_kb([[InlineKeyboardButton("❌ Cancel", callback_data=f"adcfg:{provider}:refresh")]]),
+            )
+        if action == "toggle":
+            if not cfg.get("tag"):
+                return await callback.answer("Upload a valid configuration file first", show_alert=True)
+            cfg["enabled"] = not bool(cfg.get("enabled", False))
+            await db.site_settings.update_one({"_id": "ad_config"}, {"$set": {provider: cfg}}, upsert=True)
+            await callback.answer("Enabled" if cfg["enabled"] else "Disabled")
+        elif action == "remove":
+            await db.site_settings.update_one({"_id": "ad_config"}, {"$unset": {provider: ""}}, upsert=True)
+            await callback.answer("Configuration removed")
+        else:
+            _awaiting_ad_config.pop(user.id, None)
+            await callback.answer("Refreshed")
+        fresh = await db.site_settings.find_one({"_id": "ad_config"}) or {}
+        cfg = fresh.get(provider, {})
+        enabled = bool(cfg.get("enabled", False))
+        exists = bool(cfg.get("tag"))
+        label = "Google AdSense" if provider == "adsense" else "Monetag"
+        rows = [
+            [InlineKeyboardButton("📤 Upload / Replace File", callback_data=f"adcfg:{provider}:upload")],
+            [InlineKeyboardButton("🟢 Enable" if not enabled else "🔴 Disable", callback_data=f"adcfg:{provider}:toggle")],
+        ]
+        if exists:
+            rows.append([InlineKeyboardButton("🗑️ Remove Configuration", callback_data=f"adcfg:{provider}:remove")])
+        rows.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"adcfg:{provider}:refresh")])
+        return await callback.message.edit_text(
+            f"📢 **{label} Settings**\n\n**Status:** {'🟢 Enabled' if enabled else '🔴 Disabled'}\n"
+            f"**File:** {'✅ Configuration uploaded' if exists else '⚠️ No configuration file uploaded'}",
+            reply_markup=_kb(rows),
+        )
+
+    @bot.on_message(filters.document & filters.private)
+    async def ad_config_file_handler(client, message: Message):
+        user = message.from_user
+        provider = _awaiting_ad_config.get(user.id) if user else None
+        if not provider or not user or not _is_admin_user(user.id):
+            return
+        document = message.document
+        filename = (document.file_name or "").lower()
+        if not filename.endswith((".txt", ".html", ".htm", ".js")):
+            return await message.reply("❌ Upload a .txt, .html, .htm, or .js configuration file.")
+        if int(document.file_size or 0) > _AD_CONFIG_MAX_BYTES:
+            return await message.reply("❌ File is too large. Maximum size is 64 KB.")
+        status = await message.reply("⏳ **Reading configuration file...**")
+        temp_path = None
+        try:
+            temp_path = await client.download_media(message)
+            if not temp_path:
+                raise ValueError("Telegram file download failed")
+            raw = Path(temp_path).read_bytes()
+            if not raw or len(raw) > _AD_CONFIG_MAX_BYTES:
+                raise ValueError("File is empty or exceeds 64 KB")
+            tag = raw.decode("utf-8-sig").strip()
+            if provider == "adsense":
+                if not ("adsbygoogle" in tag or "pagead2.googlesyndication.com" in tag or "ca-pub-" in tag):
+                    raise ValueError("This does not look like an AdSense ad code/configuration file")
+            elif not ("monetag" in tag.lower() or "3nbf4.com" in tag.lower() or "adexium" in tag.lower() or "push" in tag.lower() or "zone" in tag.lower()):
+                raise ValueError("This does not look like a Monetag tag/configuration file")
+            cfg = {"tag": tag, "filename": document.file_name or "ad-config", "enabled": False, "updated_by": user.id, "updated_at": datetime.datetime.now(datetime.timezone.utc)}
+            await db.site_settings.update_one({"_id": "ad_config"}, {"$set": {provider: cfg}}, upsert=True)
+            _awaiting_ad_config.pop(user.id, None)
+            await status.edit_text(f"✅ **{provider.title()} configuration saved.**\n\nIt is currently **Disabled**. Use /{provider} and press Enable after checking your ad code.")
+        except Exception as exc:
+            await status.edit_text(f"❌ Could not save configuration: {html.escape(str(exc))}")
+        finally:
+            if temp_path:
+                try:
+                    Path(temp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     @bot.on_message(filters.command("start") & filters.private)
     async def start_handler(client, message: Message):

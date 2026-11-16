@@ -16,6 +16,7 @@ const API_SUBPATHS = new Set([
 ]);
 
 let mongoClientPromise = null;
+let activeAdConfig = { adsense: {}, monetag: {} };
 let resolvedDbName = null;
 
 function getMongoUri() {
@@ -511,10 +512,9 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0a0a0a">
   <meta name="description" content="HITLER YT · Movies & Series">
-  <meta name="google-adsense-account" content="ca-pub-6636601525186884">
+  <meta name="google-adsense-account" content="${escapeHtml((activeAdConfig.adsense?.tag || '').match(/ca-pub-[0-9]{10,25}/)?.[0] || '')}">
   <title>${escapeHtml(title)}</title>
-  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6636601525186884"
-       crossorigin="anonymous"></script>
+  ${activeAdConfig.adsense?.enabled && activeAdConfig.adsense?.tag ? `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${escapeHtml((activeAdConfig.adsense.tag.match(/ca-pub-[0-9]{10,25}/) || [''])[0])}" crossorigin="anonymous"></script>` : ''}
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <style>
     :root{
@@ -748,9 +748,9 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
 (function(){
   'use strict';
   // Ads are placed in visible content gaps only. Ordinary links/buttons are never hijacked.
-  var slot = '' + ${escapeHtml(process.env.ADSENSE_AD_SLOT || '')} + '';
-  var client = 'ca-pub-6636601525186884';
-  if (!/^\d{6,20}$/.test(slot)) return; // Set ADSENSE_AD_SLOT in Vercel to enable display units.
+  var slot = ${JSON.stringify(activeAdConfig.adsense?.enabled ? ((activeAdConfig.adsense.tag.match(/data-ad-slot=[\"']([0-9]{6,20})[\"']/) || [])[1] || '') : '')};
+  var client = ${JSON.stringify(activeAdConfig.adsense?.enabled ? ((activeAdConfig.adsense.tag.match(/ca-pub-[0-9]{10,25}/) || [''])[0]) : '')};
+  if (!/^\d{6,20}$/.test(slot) || !/^ca-pub-\d{10,25}$/.test(client)) return;
   var grids = Array.prototype.slice.call(document.querySelectorAll('main .poster-grid'));
   var inserted = 0;
   grids.forEach(function(grid){
@@ -771,6 +771,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
   });
 })();
 </script>
+${activeAdConfig.monetag?.enabled && activeAdConfig.monetag?.tag ? activeAdConfig.monetag.tag : ''}
 </body>
 </html>`;
 }
@@ -2055,6 +2056,11 @@ importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw')`;
     let db;
     try {
       db = await getDatabase();
+      const savedAds = (await db.collection('site_settings').findOne({ _id: 'ad_config' })) || {};
+      activeAdConfig = {
+        adsense: savedAds.adsense?.enabled ? savedAds.adsense : {},
+        monetag: savedAds.monetag?.enabled ? savedAds.monetag : {},
+      };
       await syncVercelWebsiteUrls(req, db);
       await ensureDefaultCategories(db);
     } catch (error) {

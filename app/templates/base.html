@@ -268,8 +268,10 @@
 .random-ad-slot .ad-label{display:block;margin:0 0 5px;color:#9aa5b7;font:600 10px/1.3 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase}
 </style>
   {% block head %}{% endblock %}
-<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6636601525186884"
-       crossorigin="anonymous"></script>
+{% set ads_cfg = request.state.ad_config if request is defined and request.state.ad_config is defined else {} %}
+{% set adsense_cfg = ads_cfg.get('adsense', {}) %}
+{% set monetag_cfg = ads_cfg.get('monetag', {}) %}
+{% if adsense_cfg.get('tag') %}{{ adsense_cfg.get('tag')|safe }}{% endif %}
 </head>
 <body>
 <header class="topbar">
@@ -294,13 +296,15 @@
 <footer class="footer">
   <a href="https://t.me/HiTLERYT" target="_blank" rel="noopener"><strong>HITLER YT</strong> · @hitleryt</a>
 </footer>
+{% if adsense_cfg.get('tag') %}
 <script>
 (function(){
   'use strict';
-  // Ads are placed in visible content gaps only. Ordinary links/buttons are never hijacked.
-  var slot = {{ (config.ADSENSE_AD_SLOT if config is defined and config.ADSENSE_AD_SLOT else '')|tojson }};
-  var client = 'ca-pub-6636601525186884';
-  if (!/^\d{6,20}$/.test(slot)) return; // Set ADSENSE_AD_SLOT in Vercel to enable display units.
+  // Insert AdSense only in content gaps; never intercept normal taps or links.
+  var tag = {{ adsense_cfg.get('tag', '')|tojson }};
+  var clientMatch = tag.match(/ca-pub-[0-9]{10,25}/);
+  var slotMatch = tag.match(/data-ad-slot=["\\']([0-9]{6,20})["\\']/);
+  if (!clientMatch || !slotMatch) return;
   var grids = Array.prototype.slice.call(document.querySelectorAll('main .poster-grid'));
   var inserted = 0;
   grids.forEach(function(grid){
@@ -309,17 +313,20 @@
     var candidates = [];
     for (var i=3; i<cards.length-1; i+=1) candidates.push(i);
     if (!candidates.length) return;
-    // Random position per page view; no click/tap interception or pop-under behavior.
     var chosen = candidates[Math.floor(Math.random()*candidates.length)];
     var wrap = document.createElement('div');
     wrap.className = 'random-ad-slot';
     wrap.setAttribute('aria-label','Advertisement');
-    wrap.innerHTML = '<span class="ad-label">Advertisement</span><ins class="adsbygoogle" style="display:block;min-height:100px" data-ad-client="'+client+'" data-ad-slot="'+slot+'" data-ad-format="auto" data-full-width-responsive="true"></ins>';
+    wrap.innerHTML = '<span class="ad-label">Advertisement</span><ins class="adsbygoogle" style="display:block;min-height:100px" data-ad-client="'+clientMatch[0]+'" data-ad-slot="'+slotMatch[1]+'" data-ad-format="auto" data-full-width-responsive="true"></ins>';
     cards[chosen].insertAdjacentElement('afterend', wrap);
     try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch(e) {}
     inserted += 1;
   });
 })();
 </script>
+{% endif %}
+{% if monetag_cfg.get('tag') %}
+{{ monetag_cfg.get('tag')|safe }}
+{% endif %}
 </body>
 </html>

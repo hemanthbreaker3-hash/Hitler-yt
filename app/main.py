@@ -97,6 +97,16 @@ async def auto_cloudflare_and_vercel_routing_middleware(request: Request, call_n
                 query = f"?{request.url.query}" if request.url.query else ""
                 return RedirectResponse(url=f"{vercel_site}{path}{query}", status_code=307)
 
+    # Read ad settings written by /adsense and /monetag. The website never
+    # executes uploaded tags unless the corresponding provider is enabled.
+    try:
+        ad_doc = await db.site_settings.find_one({"_id": "ad_config"}) or {}
+        request.state.ad_config = {
+            "adsense": ad_doc.get("adsense", {}) if ad_doc.get("adsense", {}).get("enabled") else {},
+            "monetag": ad_doc.get("monetag", {}) if ad_doc.get("monetag", {}).get("enabled") else {},
+        }
+    except Exception:
+        request.state.ad_config = {"adsense": {}, "monetag": {}}
     return await call_next(request)
 
 
