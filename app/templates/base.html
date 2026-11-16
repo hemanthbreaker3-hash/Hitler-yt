@@ -4,7 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0a0a0a">
-  <meta name="description" content="HITLER YT · Movies & Series">
+  <meta name="description" content="Discover, stream and download your media library.">
+  <meta name="color-scheme" content="dark">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <title>{% block title %}HITLER YT{% endblock %}</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <style>
@@ -29,7 +33,7 @@
       margin:0;
       background:var(--bg);
       color:var(--text);
-      font:500 14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+      font:500 14px/1.55 "DM Sans",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
       min-height:100vh;
     }
     h1,h2,h3,h4,strong,b,.topbar-logo{font-weight:850}
@@ -65,7 +69,7 @@
       min-height:2cm;
       width:6cm;
       min-width:6cm;
-      font-family:Inter,"Arial Black",Arial,Helvetica,sans-serif;
+      font-family:"Space Grotesk","DM Sans",sans-serif;
       font-weight:950;
       font-size:34px;
       letter-spacing:1px;
@@ -211,6 +215,51 @@
       .topbar-logo img{width:2cm;height:2cm;min-width:2cm;min-height:2cm}
       .section-head h2{font-size:15px}
     }
+
+    :root{--bg:#08090d;--bg2:#10131b;--card:#121620;--line:#252c3a;--text:#f4f6fb;--muted:#9aa5b7;--yellow:#f4c95d;--yellow-dark:#e5b842;--accent:#f4c95d;--radius:15px}
+    body{background:radial-gradient(ellipse at 12% -10%,rgba(244,201,93,.075),transparent 34%),var(--bg);letter-spacing:.005em}
+    .topbar{background:rgba(9,11,16,.88);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-bottom:1px solid rgba(255,255,255,.07)}
+    .topbar-logo{font-family:"Space Grotesk",sans-serif;text-shadow:0 5px 28px rgba(244,201,93,.16)}
+    .topbar-logo img{border-radius:17px;border:1px solid rgba(244,201,93,.55);box-shadow:0 5px 24px rgba(244,201,93,.15)}
+    .topbar-links a{border-radius:10px;transition:background .18s,color .18s}
+    .topbar-links a:hover{background:rgba(255,255,255,.07)}
+    .poster-card,.card{background:linear-gradient(155deg,rgba(22,27,38,.98),rgba(14,17,24,.98));border:1px solid rgba(255,255,255,.075);border-radius:15px}
+    .poster-card{content-visibility:auto;contain-intrinsic-size:260px 340px}
+    .poster-card:hover{border-color:rgba(244,201,93,.45);box-shadow:0 14px 32px rgba(0,0,0,.34)}
+    .poster-card img{background:#171c26}
+    .btn,.btn-yellow,.chip,.search-bar{border-radius:12px}
+    .search-bar{background:rgba(20,24,34,.9);border-color:rgba(255,255,255,.09)}
+    .search-bar:focus-within{border-color:rgba(244,201,93,.55);box-shadow:0 0 0 3px rgba(244,201,93,.09)}
+    .section-head h2{font-family:"Space Grotesk",sans-serif;letter-spacing:-.025em}
+    .footer{border-color:rgba(255,255,255,.07)}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+
+    /* Rainbow neon visual system — global theme for every page */
+    :root{--bg:#070812;--bg2:#101126;--card:#111329;--line:rgba(155,125,255,.22);--text:#f7f5ff;--muted:#aaa8c7;--yellow:#8cf7ff;--yellow-dark:#65dff2;--accent:#9d7bff;--red:#ff5da2;--rainbow:linear-gradient(105deg,#ff5ca8 0%,#ffb45e 18%,#f8f56b 34%,#63f5c8 51%,#61c9ff 68%,#a98aff 84%,#ff72d2 100%);--neon-shadow:0 0 14px rgba(111,211,255,.18),0 0 32px rgba(187,102,255,.12)}
+    body{background:radial-gradient(ellipse at 8% 8%,rgba(255,75,170,.16),transparent 32%),radial-gradient(ellipse at 92% 12%,rgba(77,145,255,.16),transparent 34%),radial-gradient(ellipse at 50% 85%,rgba(91,255,207,.09),transparent 38%),linear-gradient(145deg,#070812 0%,#0b0d1d 48%,#10091b 100%);background-attachment:fixed}
+    body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:-1;opacity:.22;background-image:radial-gradient(rgba(255,255,255,.25) .7px,transparent .7px);background-size:28px 28px;mask-image:linear-gradient(to bottom,black,transparent 85%)}
+    .topbar{background:rgba(7,8,18,.82);border-bottom:1px solid transparent;border-image:var(--rainbow) 1;box-shadow:0 8px 30px rgba(0,0,0,.28)}
+    .topbar-logo{background:var(--rainbow);background-clip:text;-webkit-background-clip:text;color:transparent;filter:drop-shadow(0 0 12px rgba(141,126,255,.25))}
+    .topbar-logo span,.topbar-logo .brand-yt{background:var(--rainbow);background-clip:text;-webkit-background-clip:text;color:transparent}
+    .topbar-logo img{border:2px solid transparent;box-shadow:0 0 0 1px rgba(255,255,255,.08),0 0 22px rgba(119,140,255,.35)}
+    .topbar-links a:hover{color:#fff;background:rgba(139,111,255,.15);box-shadow:0 0 16px rgba(139,111,255,.12)}
+    .btn-yellow,.search-bar button{color:#080914;background:var(--rainbow);background-size:220% 100%;box-shadow:0 0 12px rgba(101,216,255,.22),0 0 24px rgba(194,105,255,.16);transition:background-position .35s,transform .18s,box-shadow .18s}
+    .btn-yellow:hover,.search-bar button:hover{background-position:100% 0;box-shadow:0 0 18px rgba(255,102,190,.32),0 0 34px rgba(94,208,255,.2)}
+    .search-bar,.filters,.card,.poster-card,.trending-item,.tools,.info{background:linear-gradient(145deg,rgba(22,23,48,.94),rgba(12,14,31,.96));border-color:rgba(151,131,255,.2);box-shadow:var(--neon-shadow)}
+    .search-bar:focus-within{border-color:#79eaff;box-shadow:0 0 0 3px rgba(100,224,255,.12),0 0 24px rgba(151,113,255,.2)}
+    input:focus,select:focus,textarea:focus{outline-color:#7beaff}
+    .poster-card:hover,.trending-item:hover{border-color:rgba(112,226,255,.7);box-shadow:0 0 0 1px rgba(112,226,255,.16),0 12px 34px rgba(0,0,0,.42),0 0 25px rgba(155,105,255,.18);transform:translateY(-4px)}
+    .section-head h2{background:var(--rainbow);background-clip:text;-webkit-background-clip:text;color:transparent;text-shadow:0 0 22px rgba(137,140,255,.12)}
+    .chip,.btn{background:rgba(24,25,51,.86);border-color:rgba(157,132,255,.27);color:#e9e5ff}
+    .chip:hover,.chip.active,.btn:hover{border-color:#78eaff;color:#8df4ff;box-shadow:0 0 14px rgba(103,222,255,.15),inset 0 0 12px rgba(157,111,255,.08)}
+    .footer{border-color:rgba(157,132,255,.2);color:#aaa8c7}.footer a{color:#8ceeff}
+    .poster-card .title,.card h1,.card h2,.card h3{color:#fff}.muted,.poster-card .meta{color:#aaa8c7}
+    ::selection{background:rgba(176,111,255,.45);color:#fff}
+    ::-webkit-scrollbar{width:9px;height:8px}::-webkit-scrollbar-track{background:#090a17}::-webkit-scrollbar-thumb{background:linear-gradient(#ff66b3,#a47cff,#61dcff);border-radius:20px}
+    @media(max-width:600px){body{background-attachment:scroll}.topbar{backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.poster-card{box-shadow:0 0 13px rgba(125,112,255,.1)}}
+    @media(prefers-reduced-motion:no-preference){.topbar-logo{animation:rainbowGlow 7s ease-in-out infinite alternate}@keyframes rainbowGlow{from{filter:drop-shadow(0 0 7px rgba(104,220,255,.2))}to{filter:drop-shadow(0 0 15px rgba(255,105,195,.3))}}}
+
   </style>
   {% block head %}{% endblock %}
 </head>

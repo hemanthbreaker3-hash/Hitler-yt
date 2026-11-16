@@ -584,6 +584,147 @@ def register_handlers(bot):
             except Exception as e2:
                 logger.exception("Fallback reply failed: %s", e2)
 
+
+    @bot.on_message(filters.text & filters.private & ~filters.regex(r"^/"))
+    async def telegram_message_link_handler(client, message: Message):
+        """Create links for media already hosted in a Telegram message; never mirror it to storage."""
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        raw = (message.text or "").strip()
+        match = re.search(r"https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))(?:\?.*)?$", raw)
+        if not match:
+            return
+        if not await is_access_allowed(user.id):
+            return await message.reply("🔒 This bot is restricted by the administrator.")
+        user_data = await users_col.find_one({"user_id": user.id})
+        if user_data and user_data.get("is_banned"):
+            return await message.reply("🚫 Your account has been suspended.")
+        if not await check_rate_limit(user.id):
+            return await message.reply("⏳ Please wait a few seconds before requesting another link.")
+        if not await is_user_fsubbed(client, user.id):
+            return await message.reply(
+                "🔒 **Access Restricted**\n\nJoin the updates channel first.",
+                reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
+            )
+        runtime_cfg = await db.site_settings.find_one({"_id": "runtime"}) or {}
+        downloads_enabled = runtime_cfg.get("downloads_enabled", True)
+        streaming_enabled = runtime_cfg.get("streaming_enabled", True)
+        if not downloads_enabled and not streaming_enabled:
+            return await message.reply("🚫 Downloads and streaming are currently disabled.")
+        status = await message.reply("🔎 Checking Telegram message access…")
+        try:
+            if match.group(1):
+                chat_ref = int("-100" + match.group(1))
+                msg_id = int(match.group(2))
+            else:
+                chat_ref = "@" + match.group(3)
+                msg_id = int(match.group(4))
+            source_msg = await client.get_messages(chat_ref, msg_id)
+            if isinstance(source_msg, list):
+                source_msg = source_msg[0] if source_msg else None
+            if not source_msg or not _is_media_message(source_msg):
+                return await status.edit_text(
+                    "❌ **No accessible media found.**\n\n"
+                    "The message may be deleted, unsupported, or the bot may not have permission to view that channel."
+                )
+
+            media = (source_msg.document or source_msg.video or source_msg.audio or
+                     source_msg.animation or source_msg.photo or source_msg.voice or
+                     source_msg.video_note)
+            if source_msg.document:
+                file_name = media.file_name or "file"
+                mime_type = media.mime_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+            elif source_msg.video:
+                file_name = getattr(media, "file_name", None) or f"video_{media.file_unique_id}.mp4"
+                mime_type = media.mime_type or "video/mp4"
+            elif source_msg.audio:
+                file_name = media.file_name or f"audio_{media.file_unique_id}.mp3"
+                mime_type = media.mime_type or "audio/mpeg"
+            elif source_msg.animation:
+                file_name = getattr(media, "file_name", None) or f"animation_{media.file_unique_id}.mp4"
+                mime_type = media.mime_type or "video/mp4"
+            elif source_msg.photo:
+                media = source_msg.photo[-1] if isinstance(source_msg.photo, (list, tuple)) else source_msg.photo
+                file_name, mime_type = f"photo_{media.file_unique_id}.jpg", "image/jpeg"
+            elif source_msg.voice:
+                file_name, mime_type = f"voice_{media.file_unique_id}.ogg", media.mime_type or "audio/ogg"
+            else:
+                file_name, mime_type = f"video_note_{media.file_unique_id}.mp4", "video/mp4"
+
+            file_id = getattr(media, "file_id", None)
+            if not file_id:
+                return await status.edit_text("❌ Telegram did not provide a downloadable file reference.")
+            existing = await files_col.find_one({
+                "chat_id": source_msg.chat.id,
+                "message_id": source_msg.id,
+                "file_id": file_id,
+            })
+            if existing:
+                short_code = existing["short_code"]
+            else:
+                short_code = generate_short_code()
+                file_meta = FileMetadata(
+                    file_id=file_id,
+                    file_unique_id=str(getattr(media, "file_unique_id", source_msg.id)),
+                    filename=file_name,
+                    mime_type=mime_type,
+                    file_size=getattr(media, "file_size", 0) or 0,
+                    uploader_id=user.id,
+                    short_code=short_code,
+                    chat_id=source_msg.chat.id,
+                    message_id=source_msg.id,
+                    expiry_time=None,
+                    storage_chat_id=None,
+                    storage_message_id=None,
+                )
+                await files_col.insert_one(file_meta.dict())
+
+            log_cf = _extract_tunnel_url_from_logs()
+            if log_cf:
+                await apply_auto_cloudflare_url(log_cf, source="telegram-message-link")
+            base_url = await get_active_cloudflare_url()
+            if not base_url:
+                try:
+                    base_url = normalize_public_base_url(settings.BASE_URL)
+                except ValueError:
+                    base_url = None
+            if not base_url:
+                return await status.edit_text("⚠️ Media access is confirmed, but the public link host is not configured yet. Set /baseurl and retry.")
+
+            links, buttons = [], []
+            if downloads_enabled:
+                dl = f"{base_url}/dl/{short_code}"
+                links.append(f'⬇️ <a href="{html.escape(dl, quote=True)}">Direct Download</a>')
+                buttons.append(InlineKeyboardButton("⬇️ Download", url=dl))
+            if streaming_enabled:
+                watch = f"{base_url}/watch/{short_code}"
+                links.append(f'▶️ <a href="{html.escape(watch, quote=True)}">Watch / Stream</a>')
+                buttons.append(InlineKeyboardButton("▶️ Watch Online", url=watch))
+            size = format_bytes(getattr(media, "file_size", 0) or 0)
+            caption = (
+                "✅ <b>Telegram message verified</b>\n\n"
+                f"📁 <b>File:</b> <code>{html.escape(file_name)}</code>\n"
+                f"📦 <b>Size:</b> <code>{html.escape(size)}</code>\n\n"
+                "🔗 <b>Generated links</b>\n" + "\n".join(links) +
+                "\n\n<i>Source: original Telegram message. No storage-channel copy was created.</i>"
+            )
+            await status.edit_text(caption, parse_mode=ParseMode.HTML,
+                reply_markup=_kb([buttons]) if buttons else None,
+                disable_web_page_preview=True)
+        except Exception as exc:
+            logger.info("Telegram source link could not be accessed for user %s: %s", user.id, exc)
+            reason = str(exc).lower()
+            if any(term in reason for term in ("peer_id_invalid", "chat not found", "channel_private", "user_not_participant", "private")):
+                detail = "The bot cannot access this private channel/chat. Add the bot to the channel with permission to read messages, then retry."
+            else:
+                detail = "Telegram could not return that message to this bot. Check that the link is correct and the bot can access the channel."
+            try:
+                await status.edit_text("❌ **Unable to access the Telegram message.**\n\n" + detail)
+            except Exception:
+                pass
+
+
     @bot.on_callback_query(filters.regex(r"^del_"))
     async def delete_callback(client, callback: CallbackQuery):
         user = callback.from_user

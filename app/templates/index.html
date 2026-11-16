@@ -66,8 +66,16 @@ window.__INITIAL_CATEGORIES__ = {{ (initial_categories if initial_categories is 
     renderCategories([{ name: 'Movies', slug: 'movies' }, { name: 'Web Series', slug: 'web-series' }]);
   }
 
+  // Paint server-provided catalog immediately; do not block first render on category/API requests.
+  if (Array.isArray(window.__INITIAL_CATALOG__) && window.__INITIAL_CATALOG__.length) {
+    renderItems(filterInitialItems());
+  }
+
   try {
-    const catRes = await fetch('/api/categories', { cache: 'no-store' });
+    const catRes = await fetch('/api/categories', {
+      cache: 'default',
+      signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(4000) : undefined
+    });
     if (catRes.ok) {
       const cats = await catRes.json();
       if (Array.isArray(cats.items) && cats.items.length) {
@@ -161,17 +169,13 @@ window.__INITIAL_CATEGORIES__ = {{ (initial_categories if initial_categories is 
     return list;
   }
 
-  if (Array.isArray(window.__INITIAL_CATALOG__) && window.__INITIAL_CATALOG__.length) {
-    renderItems(filterInitialItems());
-  }
-
   async function load() {
     try {
       const params = new URLSearchParams();
       if (q) params.set('q', q);
       if (category) params.set('category', category);
       const qs = params.toString();
-      const r = await fetch('/api/catalog' + (qs ? '?' + qs : ''), { cache: 'no-store' });
+      const r = await fetch('/api/catalog' + (qs ? '?' + qs : ''), { cache: 'default', signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(9000) : undefined });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         if (Array.isArray(window.__INITIAL_CATALOG__)) {
