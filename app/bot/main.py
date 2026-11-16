@@ -174,6 +174,38 @@ async def _process_and_save_bot_tokens(raw_text: str, user_id: int) -> tuple[lis
     return added, errors
 
 
+def _build_ad_config(provider: str, source: str, user_id: int, filename: str) -> dict:
+    """Validate pasted/uploaded provider code and separate Monetag SW from page tags."""
+    code = (source or "").strip()
+    if not code:
+        raise ValueError("The code is empty")
+    if provider == "adsense":
+        if not ("adsbygoogle" in code or "pagead2.googlesyndication.com" in code or re.search(r"ca-pub-\d{10,25}", code)):
+            raise ValueError("This does not look like Google AdSense code. Include the official adsbygoogle loader or ca-pub publisher ID.")
+        if "data-ad-slot" not in code and "pagead2.googlesyndication.com" not in code:
+            raise ValueError("This appears to be only an AdSense publisher/loader snippet. Add a responsive Display ad-unit code with its data-ad-slot ID to show ads.")
+        tag, service_worker = code, ""
+    elif provider == "monetag":
+        is_worker = "importScripts(" in code and "3nbf4.com" in code.lower()
+        is_page_tag = any(x in code.lower() for x in ("3nbf4.com", "monetag", "adexium", "data-zone", "zoneid", "push"))
+        if not (is_worker or is_page_tag):
+            raise ValueError("This does not look like Monetag code. Include the official 3nbf4.com tag or service-worker snippet.")
+        service_worker = code if is_worker else ""
+        tag = "" if is_worker else code
+        if is_worker and not re.search(r"[\"\']?zoneId[\"\']?\s*[:=]\s*\d+", code, re.I):
+            raise ValueError("The Monetag service worker is missing a numeric zoneId")
+    else:
+        raise ValueError("Unknown ad provider")
+    return {
+        "tag": tag,
+        "service_worker": service_worker,
+        "filename": filename,
+        "enabled": False,
+        "updated_by": user_id,
+        "updated_at": datetime.datetime.now(datetime.timezone.utc),
+    }
+
+
 def register_handlers(bot):
     """Register wzgram (Pyrogram-compatible) handlers on the bot client."""
 
@@ -181,7 +213,7 @@ def register_handlers(bot):
         doc = await db.site_settings.find_one({"_id": "ad_config"}) or {}
         cfg = doc.get(provider, {})
         enabled = bool(cfg.get("enabled", False))
-        exists = bool(cfg.get("tag"))
+        exists = bool(cfg.get("tag") or cfg.get("service_worker"))
         label = "Google AdSense" if provider == "adsense" else "Monetag"
         status = "🟢 Enabled" if enabled else "🔴 Disabled"
         file_status = "✅ Configuration uploaded" if exists else "⚠️ No configuration file uploaded"
@@ -226,13 +258,14 @@ def register_handlers(bot):
             await callback.answer("Send the configuration file")
             return await callback.message.edit_text(
                 f"📤 **Upload {provider.title()} configuration**\n\n"
-                "Send one `.txt`, `.html`, or `.js` document (maximum 64 KB). "
-                "Do not upload account passwords or private API credentials.",
+                "Send the code as a message, or upload one `.txt`, `.html`, or `.js` file (maximum 64 KB). "
+                "For Monetag, you can send the page tag and/or the complete root `sw.js` code. "
+                "Do not send account passwords or private API credentials.",
                 reply_markup=_kb([[InlineKeyboardButton("❌ Cancel", callback_data=f"adcfg:{provider}:refresh")]]),
             )
         if action == "toggle":
-            if not cfg.get("tag"):
-                return await callback.answer("Upload a valid configuration file first", show_alert=True)
+            if not (cfg.get("tag") or cfg.get("service_worker")):
+                return await callback.answer("Send or upload valid provider code first", show_alert=True)
             cfg["enabled"] = not bool(cfg.get("enabled", False))
             await db.site_settings.update_one({"_id": "ad_config"}, {"$set": {provider: cfg}}, upsert=True)
             await callback.answer("Enabled" if cfg["enabled"] else "Disabled")
@@ -245,7 +278,7 @@ def register_handlers(bot):
         fresh = await db.site_settings.find_one({"_id": "ad_config"}) or {}
         cfg = fresh.get(provider, {})
         enabled = bool(cfg.get("enabled", False))
-        exists = bool(cfg.get("tag"))
+        exists = bool(cfg.get("tag") or cfg.get("service_worker"))
         label = "Google AdSense" if provider == "adsense" else "Monetag"
         rows = [
             [InlineKeyboardButton("📤 Upload / Replace File", callback_data=f"adcfg:{provider}:upload")],
@@ -259,6 +292,36 @@ def register_handlers(bot):
             f"**File:** {'✅ Configuration uploaded' if exists else '⚠️ No configuration file uploaded'}",
             reply_markup=_kb(rows),
         )
+
+    @bot.on_message(filters.text & filters.private)
+    async def ad_config_text_handler(client, message: Message):
+        user = message.from_user
+        provider = _awaiting_ad_config.get(user.id) if user else None
+        if not provider or not user or not _is_admin_user(user.id):
+            return
+        raw_text = (message.text or "").strip()
+        if not raw_text or raw_text.startswith("/cancel"):
+            _awaiting_ad_config.pop(user.id, None)
+            return await message.reply("Ad-code input cancelled. Use /adsense or /monetag to start again.")
+        if len(raw_text.encode("utf-8")) > _AD_CONFIG_MAX_BYTES:
+            return await message.reply("❌ Code is too large. Maximum size is 64 KB.")
+        try:
+            cfg = _build_ad_config(provider, raw_text, user.id, "pasted-snippet")
+            existing_doc = await db.site_settings.find_one({"_id": "ad_config"}) or {}
+            previous = existing_doc.get(provider, {})
+            for field in ("tag", "service_worker"):
+                if not cfg.get(field) and previous.get(field):
+                    cfg[field] = previous[field]
+            await db.site_settings.update_one({"_id": "ad_config"}, {"$set": {provider: cfg}}, upsert=True)
+            _awaiting_ad_config.pop(user.id, None)
+            parts = []
+            if cfg.get("tag"):
+                parts.append("page ad tag saved")
+            if cfg.get("service_worker"):
+                parts.append("root service worker saved for /sw.js")
+            await message.reply(f"✅ **{provider.title()} snippet saved** ({' + '.join(parts)}).\n\nIt is **Disabled** until you enable it with /{provider}.")
+        except Exception as exc:
+            await message.reply(f"❌ Could not save snippet: {html.escape(str(exc))}\n\nSend the exact code copied from your publisher dashboard, or /cancel.")
 
     @bot.on_message(filters.document & filters.private)
     async def ad_config_file_handler(client, message: Message):
@@ -282,12 +345,12 @@ def register_handlers(bot):
             if not raw or len(raw) > _AD_CONFIG_MAX_BYTES:
                 raise ValueError("File is empty or exceeds 64 KB")
             tag = raw.decode("utf-8-sig").strip()
-            if provider == "adsense":
-                if not ("adsbygoogle" in tag or "pagead2.googlesyndication.com" in tag or "ca-pub-" in tag):
-                    raise ValueError("This does not look like an AdSense ad code/configuration file")
-            elif not ("monetag" in tag.lower() or "3nbf4.com" in tag.lower() or "adexium" in tag.lower() or "push" in tag.lower() or "zone" in tag.lower()):
-                raise ValueError("This does not look like a Monetag tag/configuration file")
-            cfg = {"tag": tag, "filename": document.file_name or "ad-config", "enabled": False, "updated_by": user.id, "updated_at": datetime.datetime.now(datetime.timezone.utc)}
+            cfg = _build_ad_config(provider, tag, user.id, document.file_name or "ad-config")
+            existing_doc = await db.site_settings.find_one({"_id": "ad_config"}) or {}
+            previous = existing_doc.get(provider, {})
+            for field in ("tag", "service_worker"):
+                if not cfg.get(field) and previous.get(field):
+                    cfg[field] = previous[field]
             await db.site_settings.update_one({"_id": "ad_config"}, {"$set": {provider: cfg}}, upsert=True)
             _awaiting_ad_config.pop(user.id, None)
             await status.edit_text(f"✅ **{provider.title()} configuration saved.**\n\nIt is currently **Disabled**. Use /{provider} and press Enable after checking your ad code.")

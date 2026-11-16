@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from app.database.connection import (
     settings,
     files_col,
@@ -130,6 +130,29 @@ app.add_middleware(
 APP_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+
+
+@app.get("/sw.js")
+async def monetag_service_worker():
+    """Serve Monetag's service worker from the required website-root path."""
+    try:
+        ad_doc = await db.site_settings.find_one({"_id": "ad_config"}) or {}
+        monetag = ad_doc.get("monetag", {})
+        worker = monetag.get("service_worker") if monetag.get("enabled") else None
+        if worker:
+            return Response(
+                content=str(worker).strip(),
+                media_type="application/javascript",
+                headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-store"},
+            )
+    except Exception as exc:
+        logger.warning("Could not load custom Monetag service worker: %s", exc)
+    fallback = (Path(__file__).resolve().parent.parent / "sw.js").read_text(encoding="utf-8")
+    return Response(
+        content=fallback,
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-store"},
+    )
 
 
 @app.get("/health")

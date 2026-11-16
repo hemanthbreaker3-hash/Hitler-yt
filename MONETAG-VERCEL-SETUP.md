@@ -1,12 +1,14 @@
 # Monetag Service Worker on Vercel
 
-The supplied `sw.js` is served at `https://YOUR-DOMAIN/sw.js` by the Vercel
-serverless handler before MongoDB initialization. This makes the exact worker
-file available at the required website-root URL.
+The service worker is served at `https://YOUR-DOMAIN/sw.js` by the Vercel
+serverless handler and by the Python website route. When an enabled Monetag
+configuration contains a service-worker snippet uploaded or pasted through Telegram,
+that exact code is served at the required website-root URL. Otherwise the bundled
+fallback worker is served.
 
-Supplied Monetag configuration:
-- Domain: `3nbf4.com`
-- Zone ID: `12276863`
+The original bundled fallback worker uses domain `3nbf4.com` and zone ID `12276863`.
+You can replace it from Telegram with the exact service-worker code copied from your
+Monetag dashboard; the supplied zone ID `12277063` is accepted and served dynamically.
 
 After deploying, verify that `https://YOUR-DOMAIN/sw.js` returns HTTP 200 and
 contains the supplied worker code. Use Monetag's dashboard Installation Check.
@@ -32,7 +34,8 @@ Ads are not opened by ordinary page taps, and the site does not hijack buttons/l
 The bot owner or an ID listed in `ADMINS` can manage ad tags directly in Telegram:
 
 - `/adsense` — upload/replace an official AdSense `.txt`, `.html`, or `.js` tag file, enable/disable it, or remove it.
-- `/monetag` — upload/replace an official Monetag tag file, enable/disable it, or remove it.
+- `/monetag` — paste an official Monetag page tag or service-worker snippet, or upload a `.txt`, `.html`, or `.js` file; enable/disable or remove it.
+- `/adsense` — paste or upload the official AdSense code, then enable/disable or remove it.
 
 Uploads are limited to 64 KB and stored in the shared MongoDB `site_settings` document with `_id: "ad_config"`. A newly uploaded tag is disabled until an admin explicitly enables it. The Python website renderer and Vercel serverless renderer read the same settings document, so changes take effect without a bot or website restart. The Vercel `MONGODB_URI` and `DATABASE_NAME` must point to the same database used by the bot.
 

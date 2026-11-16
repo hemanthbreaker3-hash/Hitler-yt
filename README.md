@@ -60,3 +60,13 @@ This flow does **not** copy or forward the media into `CHANNEL_ID` or any storag
 ## Monetag service worker (Vercel)
 
 The supplied Monetag `sw.js` is served from the required root URL. See [MONETAG-VERCEL-SETUP.md](MONETAG-VERCEL-SETUP.md) for production checks and the required dashboard ad-tag note.
+
+
+### Telegram ad-code setup
+
+Admins can use `/adsense` or `/monetag`, choose Upload / Replace, and either paste
+the exact code from the publisher dashboard into chat or upload a `.txt`, `.html`,
+or `.js` file (64 KB maximum). Monetag page tags and root `sw.js` service-worker
+snippets are stored separately; the enabled worker is served at `/sw.js`. AdSense
+responsive display units must include a real `data-ad-slot` ID. New code remains
+disabled until explicitly enabled.
