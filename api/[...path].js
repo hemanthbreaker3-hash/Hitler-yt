@@ -715,6 +715,11 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     }
   </style>
   ${headExtra}
+
+<style>
+.random-ad-slot{grid-column:1/-1;display:block;width:100%;min-width:0;min-height:100px;margin:10px 0;padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);overflow:hidden;text-align:center}
+.random-ad-slot .ad-label{display:block;margin:0 0 5px;color:#9aa5b7;font:600 10px/1.3 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+</style>
 </head>
 <body>
 <header class="topbar">
@@ -739,6 +744,33 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
 <footer class="footer">
   <a href="https://t.me/HiTLERYT" target="_blank" rel="noopener"><strong>HITLER YT</strong> · @hitleryt</a>
 </footer>
+<script>
+(function(){
+  'use strict';
+  // Ads are placed in visible content gaps only. Ordinary links/buttons are never hijacked.
+  var slot = '' + ${escapeHtml(process.env.ADSENSE_AD_SLOT || '')} + '';
+  var client = 'ca-pub-6636601525186884';
+  if (!/^\d{6,20}$/.test(slot)) return; // Set ADSENSE_AD_SLOT in Vercel to enable display units.
+  var grids = Array.prototype.slice.call(document.querySelectorAll('main .poster-grid'));
+  var inserted = 0;
+  grids.forEach(function(grid){
+    var cards = Array.prototype.slice.call(grid.querySelectorAll(':scope > .poster-card'));
+    if (cards.length < 5 || inserted >= 2) return;
+    var candidates = [];
+    for (var i=3; i<cards.length-1; i+=1) candidates.push(i);
+    if (!candidates.length) return;
+    // Random position per page view; no click/tap interception or pop-under behavior.
+    var chosen = candidates[Math.floor(Math.random()*candidates.length)];
+    var wrap = document.createElement('div');
+    wrap.className = 'random-ad-slot';
+    wrap.setAttribute('aria-label','Advertisement');
+    wrap.innerHTML = '<span class="ad-label">Advertisement</span><ins class="adsbygoogle" style="display:block;min-height:100px" data-ad-client="'+client+'" data-ad-slot="'+slot+'" data-ad-format="auto" data-full-width-responsive="true"></ins>';
+    cards[chosen].insertAdjacentElement('afterend', wrap);
+    try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch(e) {}
+    inserted += 1;
+  });
+})();
+</script>
 </body>
 </html>`;
 }
