@@ -73,13 +73,16 @@ async function syncVercelWebsiteUrls(req, db) {
 }
 
 function getRequestPath(req) {
-  const incoming = new URL(req.url || '/', 'https://vercel.invalid');
+  let incoming;
+  try { incoming = new URL(req.url || '/', 'https://vercel.invalid'); }
+  catch { return { pathname: '/', search: '' }; }
   const parts = req.query && req.query.path;
   let pathname = incoming.pathname || '/';
   if (Array.isArray(parts) && parts.length) {
     const clean = parts.map((part) => encodeURIComponent(String(part))).join('/');
-    // /api/catalog is rewritten to /api/api/catalog; keep the inner /api prefix.
-    pathname = parts[0] === 'api' ? `/api/${clean.slice(4)}` : `/${clean}`;
+    // Root is rewritten to /api/index; direct API paths become /api/api/... .
+    if (parts.length === 1 && parts[0] === 'index') pathname = '/';
+    else pathname = parts[0] === 'api' ? `/api/${clean.slice(4)}` : `/${clean}`;
   } else if (typeof parts === 'string' && parts) {
     pathname = parts === 'index' ? '/' : (parts.startsWith('api/') ? `/${parts}` : `/${parts}`);
   } else if (incoming.pathname === '/api/index') {
@@ -129,7 +132,9 @@ async function handleMongoPublicApi(req, res, pathname, search) {
       });
       return true;
     }
-    const slug = decodeURIComponent(pathname.slice('/api/public/title/'.length));
+    let slug;
+    try { slug = decodeURIComponent(pathname.slice('/api/public/title/'.length)); }
+    catch { sendJson(res, 400, { error: 'Invalid title slug' }); return true; }
     const page = await db.collection('catalog_pages').findOne({ slug, published: true }, { projection: { _id: 0 } });
     if (!page) sendJson(res, 404, { error: 'Title not found' });
     else sendJson(res, 200, page);
@@ -159,6 +164,18 @@ export default async function handler(req, res) {
     res.statusCode = 204; res.end(); return;
   }
   const { pathname, search } = getRequestPath(req);
+  if (pathname === '/api/health') {
+    try {
+      const db = await getDatabase();
+      await db.command({ ping: 1 });
+      const backendUrl = await getBackendUrl(db);
+      sendJson(res, 200, { status: 'ok', database: 'connected', backend_configured: Boolean(backendUrl), deployment: 'vercel-gateway' });
+    } catch (error) {
+      console.error('Vercel gateway health check failed:', error);
+      sendJson(res, 503, { status: 'degraded', database: 'unavailable', message: 'Check MONGODB_URI, DATABASE_NAME, Atlas network access and database permissions.' });
+    }
+    return;
+  }
   if (await handleMongoPublicApi(req, res, pathname, search)) return;
 
   let backendUrl;

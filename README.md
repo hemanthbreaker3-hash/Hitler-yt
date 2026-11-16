@@ -1,26 +1,20 @@
-# HITLER YT — Telegram Media Bot & OTT Website
+# HITLER YT — Telegram Media Bot + Website CMS
 
-A Telegram media-link bot and streaming backend with a blue, responsive HITLER YT website, MongoDB-backed catalog, TMDB publishing, and a Vercel gateway.
+A Telegram media-link bot and responsive OTT-style website. The VPS runs the Telegram bot and FastAPI media backend; MongoDB stores media-link records, website pages, categories and shared settings. Vercel and Cloudflare Pages are two public website gateways to the same backend and MongoDB data.
 
-> **Deployment architecture:** Vercel hosts the public website/gateway. The Telegram bot and media backend run continuously on your VPS. MongoDB is the shared source of truth for the Vercel website URL and Cloudflare Tunnel backend URL. Vercel serverless functions do not run the Telegram bot or handle high-bandwidth media streams.
+## Important architecture
 
-## Features
+- **VPS / Docker:** runs the Telegram bot, FastAPI website, streaming/download endpoints and Telegram sessions. This process must remain online.
+- **MongoDB:** persistent shared database for link metadata, catalog pages, categories, panel credentials and settings. Use the exact same cluster and `DATABASE_NAME` on the VPS and Vercel.
+- **Vercel:** Node.js gateway. It reads public catalog data from MongoDB and proxies rendered pages, admin actions and media redirects to the VPS backend. It does not run the Telegram bot or store media bytes.
+- **Cloudflare Pages:** optional alternate website gateway in `cloudflare/pages`. It proxies all routes to the same FastAPI backend, so the pages and content match the Vercel website.
+- **Cloudflare Tunnel:** exposes the VPS backend over HTTPS. Use a stable named tunnel hostname in production.
 
-- Telegram bot media link generation, force-subscription checks, rate limits, media information, screenshots, sample video, deletion, admin stats and broadcast tools.
-- FastAPI backend with Telegram media streaming, byte-range support, track discovery and remux endpoints.
-- Responsive blue HITLER YT website and watch page.
-- MongoDB-backed runtime settings and title catalog.
-- Basic-auth protected `/panel` dashboard and `/admin` dashboard.
-- Download, streaming, built-in player and best-effort Android VLC handoff settings.
-- All-users/admins-only/owners-only access mode setting.
-- TMDB search and one-click page publishing from Telegram `/search` and the admin dashboard.
-- `/categories`, `/edit`, and `/panel` admin commands link to the secure web CMS.
-- Default Movies and Web Series categories; custom categories can be created and deleted (default categories are protected).
-- Movie/series pages support metadata, categories, groups and multiple buttons per group through the catalog API.
+A download/watch link has no application-level expiry by default. It remains usable while its MongoDB record exists, the original Telegram message/file remains accessible, the Telegram session is authorized, and the VPS backend is online. This cannot protect against deletion of the source media or an upstream Telegram/account outage.
 
-## 1. Configure the backend
+## 1. Configure the VPS
 
-Copy `.env.example` to `.env` and configure at minimum:
+Copy `.env.example` to `.env` and fill in your real values:
 
 ```env
 API_ID=your_telegram_api_id
@@ -28,119 +22,75 @@ API_HASH=your_telegram_api_hash
 BOT_TOKEN=your_bot_token
 OWNER_ID=your_telegram_user_id
 ADMINS=123456789,987654321
-MONGODB_URI=mongodb+srv://...
+MONGODB_URI=mongodb+srv://USER:PASSWORD@CLUSTER/...
 DATABASE_NAME=tg_media_bot
-BASE_URL=https://your-project.vercel.app
-BACKEND_URL=
+BASE_URL=https://your-public-website.example
+BACKEND_URL=https://your-stable-cloudflare-tunnel.example
 ADMIN_PANEL_TOKEN=use-a-long-random-secret
 TMDB_API_KEY=your_tmdb_v3_api_key
 ```
 
-`ADMIN_PANEL_TOKEN` is the first-login fallback for the website dashboard (username: `admin`). After the bot starts, an authorized Telegram owner/admin can run `/username your_name` and `/password your_strong_password` to set panel credentials directly. Passwords are stored in MongoDB as salted PBKDF2 hashes, and the command message is deleted when Telegram allows it. Both the VPS and Vercel panel use the same MongoDB credentials. Never commit `.env` or expose secrets in client-side code. TMDB search is disabled until `TMDB_API_KEY` is configured.
+Generated links do not receive an expiry timestamp. The application removes its legacy MongoDB TTL index at startup so MongoDB cannot silently delete records due to an old expiry index. A legacy `DEFAULT_EXPIRY` environment variable is ignored.
 
-Optional settings are documented in `.env.example`. MongoDB must be reachable from the backend host. Redis is optional for deployments that do not use the cache integration.
-
-## 2. Deploy the backend (VPS / Docker)
-
-The bot and streaming backend must remain online. On a Linux VPS with Docker and Docker Compose installed:
-
-```bash
-cp .env.example .env
-nano .env
-
-docker compose up -d --build
-```
-
-Use **Docker Compose v2** (`docker compose`, with a space). The old Python-based `docker-compose` v1 is not supported because it can crash with `KeyError: 'ContainerConfig'` on newer Docker images. If an existing VPS shows that error, upload this updated project and run:
-
-```bash
-sudo bash fix-docker-compose.sh
-```
-
-This removes and recreates only the `web` container. It does **not** run `down -v`, delete named volumes, or delete your external MongoDB database.
-
-Check the backend:
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-Put the VPS backend behind HTTPS using Cloudflare Tunnel (for example `https://your-name.trycloudflare.com`) and forward it to the backend port (normally `8000`). Ensure Cloudflare Tunnel permits streaming responses and HTTP Range requests.
-
-Alternatively, install Python dependencies and run `uvicorn app.main:app --host 0.0.0.0 --port 8000`. This is suitable for development; use a process supervisor for production.
-
-## 3. Deploy the website gateway to Vercel (repository root)
-
-See [VERCEL-DEPLOYMENT.md](VERCEL-DEPLOYMENT.md) for the updated deployment checklist, bundled logo/static assets, live MongoDB synchronization behavior, and troubleshooting.
-
-1. Import this repository at [Vercel](https://vercel.com/new).
-2. Set **Root Directory** to the repository root (do not select `vercel/`).
-3. Add `MONGODB_URI` and `DATABASE_NAME` to Vercel, using exactly the same MongoDB URI and database name as the VPS bot. The Vercel gateway reads the Cloudflare `backend_url` from MongoDB for rendered pages and admin/media operations; public catalog APIs read the shared MongoDB database directly. Keep the VPS/Cloudflare backend online.
-4. Deploy. No custom build command is required; the root `vercel.json` routes requests through the Node.js proxy in `api/[...path].js`.
-5. On VPS deployment, the Cloudflare Quick Tunnel service automatically detects its generated HTTPS URL and saves it as both `base_url` and `backend_url` in MongoDB. You do not need to run `/backendurl` manually. When the Vercel website is first opened, it automatically registers its production and custom domains in MongoDB. `/panel` displays the detected domains. `/backendurl` is only an optional manual override.
-
-The Vercel gateway redirects `/stream`, `/dl`, and `/remux` traffic to the backend so media bytes do not pass through a serverless function. Other requests (home page, watch page, static files, catalog and admin API) are proxied to the backend.
-
-The Vercel gateway reads `settings.backend_url` from the shared MongoDB database on each request (with `BACKEND_URL` as an optional fallback). The VPS Cloudflare service refreshes this database value automatically whenever its Quick Tunnel URL changes. Changing `/backendurl` in Telegram is only needed for a manual override. Do not use the Vercel website URL as the backend URL: the backend URL must be the Cloudflare Tunnel URL that reaches the VPS.
-
-## 4. Admin dashboard and commands
-
-Open `https://your-project.vercel.app/panel` and authenticate using the credentials configured with the Telegram `/username` and `/password` commands. For first login before setting custom credentials, use username `admin` and the `ADMIN_PANEL_TOKEN` password from the VPS `.env`. Vercel must have the same `MONGODB_URI` and `DATABASE_NAME` as the VPS; Vercel cannot discover the generated tunnel URL without access to that shared database. The URL card in the dashboard can also update both MongoDB URL settings.
-
-- Toggle downloads and streaming independently.
-- Toggle the built-in watch-page player.
-- Toggle best-effort Android VLC auto handoff.
-- Select the configured access mode.
-- Create/delete custom categories.
-- Search TMDB and publish movie/series pages. Movie pages are assigned to Movies; TV pages to Web Series.
-
-Telegram admin commands:
-
-- `/search title` — search TMDB and select a result to publish.
-- `/categories` — open category management guidance.
-- `/edit` — open page editor guidance.
-- `/panel` — show primary Cloudflare website URL, Cloudflare backend URL, detected Vercel URL and all registered website domains.
-- `/baseurl https://your-public-site.com` — manually set the primary public website URL in MongoDB.
-- `/backendurl https://your-tunnel.trycloudflare.com` — manually set the Cloudflare Tunnel URL used by the Vercel gateway. VPS deployment normally sets this automatically.
-
-Only Telegram IDs in `ADMINS` or the `OWNER_ID` can use these CMS commands. The web dashboard uses its separate Basic-auth secret.
-
-## 5. Catalog API
-
-- `GET /api/catalog` — published catalog.
-- `GET /api/catalog?q=salaar` — title search.
-- `GET /api/catalog?category=movies` — category filter.
-- `GET /title/{slug}` — dedicated title page.
-- `GET /api/site-settings` — public playback settings.
-- `GET /api/admin/categories` — protected category list.
-- `POST /api/admin/categories` — protected category creation.
-- `DELETE /api/admin/categories/{slug}` — protected category deletion.
-- `GET /api/admin/tmdb-search?q=title` — protected TMDB search.
-- `POST /api/admin/pages` and `PUT /api/admin/pages/{slug}` — protected page publishing/editing.
-- `PUT /api/admin/settings` — protected runtime settings.
-
-All CMS writes are stored in MongoDB and survive process restarts. The page data model includes `groups: [{name, buttons: [{name, url}]}]`; keep button URLs absolute HTTP(S) URLs or relative same-site paths. Internal absolute links are rendered against the current forwarded website domain, so changing the Vercel domain does not require rewriting every internal button. Do not enter JavaScript URLs.
-
-## 6. Player behavior and limitations
-
-The built-in player can be hidden while external-player options remain on the Watch Online page. Auto handoff is best-effort: browsers do not expose a reliable API for enumerating installed external players. The current implementation attempts Android's VLC intent and uses the normal page as browser fallback. On iOS and desktop it leaves the normal page in place rather than claiming to detect an installed app it cannot verify.
-
-## 7. Development and tests
+Install and start:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-dev.txt
-pytest -q
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-For a local backend, set the environment variables above before starting the app. `/health` is the health-check endpoint.
+For Docker, configure `.env` and run `docker compose up -d --build`. Check `https://YOUR_BACKEND/health` returns `{"status":"ok","service":"HITLER"}`.
 
-## Security notes
+## 2. Deploy to Vercel
 
-- Keep bot tokens, API hashes, database URIs, TMDB keys and admin secrets in environment variables.
-- Use HTTPS for both Vercel and the backend.
-- Restrict backend ingress to trusted infrastructure where possible.
-- Use a strong `ADMIN_PANEL_TOKEN` for first login; set a unique panel password with `/password` and change it if it has ever been shared.
-- Configure `ADMINS` and `OWNER_ID` with numeric Telegram IDs.
-- TMDB metadata is provided by TMDB; attribution and applicable TMDB terms should be followed.
+1. Import the repository and set the project root to `File2link-Main` (the folder containing `vercel.json`).
+2. Set Vercel environment variables for Production (and Preview if required):
+   - `MONGODB_URI` — same MongoDB connection string used by the VPS.
+   - `DATABASE_NAME` — same database name used by the VPS, normally `tg_media_bot`.
+   - Optional `BACKEND_URL` — stable public HTTPS URL of the VPS/Cloudflare Tunnel. The preferred value is the MongoDB `settings` record with `key=backend_url`.
+3. Ensure MongoDB Atlas Network Access allows Vercel connections and the database user can read/write the configured database.
+4. Deploy. The Node gateway requires no build command. `/api/health` checks MongoDB connectivity and whether the backend URL is configured.
+5. Test `/`, `/api/health`, `/api/catalog`, `/panel`, `/watch/<code>` and `/dl/<code>`.
+
+If Vercel reports a 500, inspect **Vercel → Project → Deployments → Functions → Logs**. `/api/health` helps distinguish missing/invalid MongoDB configuration from a backend URL issue. Do not use the Vercel website URL as `BACKEND_URL`; that causes a proxy loop. The backend URL must point to the VPS service through a separate tunnel hostname.
+
+## 3. Deploy the same website on Cloudflare Pages (optional)
+
+1. Create a Cloudflare Pages project connected to this repository.
+2. Set the project root to `cloudflare/pages`, build command empty, and output directory `public`.
+3. Add the Pages environment variable `BACKEND_URL` with the stable public HTTPS Cloudflare Tunnel URL that reaches the VPS. It must not be the Pages website URL.
+4. Deploy. The Pages Function proxies every route to the same FastAPI backend, so `/`, `/search`, `/title/...`, `/panel`, APIs, player, downloads and watch pages use the same templates and MongoDB content as Vercel.
+
+Cloudflare Pages is a website gateway, not the place to run the Python Telegram bot or hold Telegram media. Keep the VPS service online.
+
+## 4. Website editor and Telegram commands
+
+Open `/panel` and sign in with your configured panel username/password. For first login, the default username is `admin` and the password is `ADMIN_PANEL_TOKEN` until custom credentials are set. Set credentials using the Telegram owner/admin commands:
+
+- `/username your_username`
+- `/password your_strong_password`
+- `/panel` — display website/backend URLs and panel link.
+- `/manage` — open the management dashboard.
+- `/manage page title` — search for a page by title and open its editor.
+- `/manage https://site.example/title/page-slug` — select a page by pasted title-page URL.
+- `/edit` — open the page editor.
+- `/search title` — search TMDB and publish a movie/series page.
+- `/categories` — category management.
+- `/baseurl https://your-site.example` — set the public website base URL.
+- `/backendurl https://your-tunnel.example` — set the VPS backend URL.
+
+The panel page editor can search by title/slug or accept a pasted `/title/<slug>` URL. It supports page metadata, categories, Watch/Download groups and multiple buttons per group. Changes are stored in MongoDB and shared across both gateways.
+
+## 5. Permanent media links and player behavior
+
+New media records use `expiry_time: null` by default. `/watch/<code>`, `/dl/<code>`, `/stream/<code>` and track/remux lookups no longer reject a record just because an old expiry timestamp is present. The MongoDB TTL index is removed during backend startup. Links can still stop working if the source Telegram message is deleted, Telegram access is revoked, the bot session is invalid, the MongoDB record is deleted, or the backend is offline.
+
+The automatic Android external-player option is best-effort: it attempts Playit, then MX Player, then VLC. Browsers do not provide a dependable installed-app inventory or guaranteed app-launch result. iOS and desktop browsers remain on the built-in/browser playback path. Users can still choose external-player links manually where available.
+
+## 6. Maintenance checks
+
+Run `python -m compileall -q app` and `node --check 'api/[...path].js'` after code changes. Keep deployment secrets out of source control.
+
+Do not commit `.env`, Telegram credentials, MongoDB URIs, TMDB keys or panel passwords. Use HTTPS, a stable tunnel hostname and a strong unique panel password.

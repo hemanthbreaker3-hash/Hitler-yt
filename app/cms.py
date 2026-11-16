@@ -231,8 +231,11 @@ async def tmdb_search(q: str, media_type: str = 'multi', _: bool = Depends(admin
     return {'items':[{'id':x['id'],'media_type':x.get('media_type',media_type if media_type!='multi' else 'movie'),'title':x.get('title') or x.get('name'),'overview':x.get('overview',''),'poster_path':x.get('poster_path'),'release_date':x.get('release_date') or x.get('first_air_date',''),'rating':x.get('vote_average')} for x in payload.get('results',[])[:20]]}
 
 @router.get('/api/admin/pages')
-async def list_pages(_: bool = Depends(admin_auth)):
-    return {'items': await pages.find({}, {'_id':0}).sort('created_at',-1).to_list(200)}
+async def list_pages(q: str | None = None, _: bool = Depends(admin_auth)):
+    query = {}
+    if q and q.strip():
+        query = {'$or': [{'title': {'$regex': re.escape(q.strip()[:100]), '$options': 'i'}}, {'slug': {'$regex': re.escape(q.strip()[:100]), '$options': 'i'}}]}
+    return {'items': await pages.find(query, {'_id':0}).sort('created_at',-1).to_list(300)}
 
 @router.get('/api/admin/pages/{slug}')
 async def get_page(slug: str, _: bool = Depends(admin_auth)):

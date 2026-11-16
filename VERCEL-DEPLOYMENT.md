@@ -45,3 +45,13 @@ Catalog pages are stored in the MongoDB collection `catalog_pages` in the databa
 For this to work, the VPS and Vercel must use the exact same `MONGODB_URI` and `DATABASE_NAME`. The Vercel public catalog endpoints (`/api/catalog`, `/api/categories`, `/api/site-settings`, `/api/public/title/{slug}`) read MongoDB directly, so title listing does not depend on the VPS proxy. The homepage, rendered `/title/{slug}` and `/search` HTML, and admin panel still use the VPS backend proxy. The rest of the rendered website, admin operations, and Telegram media streaming use the VPS/Cloudflare backend URL stored as `settings.key=backend_url`; keep that backend online and publicly reachable. If separate MongoDB databases or Atlas clusters are configured, page changes will not be shared.
 
 The panel supports page creation, editing metadata/groups/buttons, and deleting pages. Page writes include `updated_at` timestamps. The Telegram bot's page publish and category assignment actions also update the shared collection.
+
+
+## HTTP 500 / routing diagnostics
+
+- The homepage rewrite `/` is normalized to the backend root `/` (not `/index`).
+- Open `/api/health` to check whether the Vercel function can connect to MongoDB and whether a backend URL is configured.
+- For function-side errors, inspect Vercel → Project → Deployments → Functions → Logs.
+- A `503` from `/api/health` indicates MongoDB environment, Atlas network-access or database-permission configuration; a healthy database with `backend_configured: false` means the backend URL is missing.
+- Never configure `BACKEND_URL` to the Vercel domain itself. That creates a proxy loop; use the separate public Cloudflare Tunnel hostname for the VPS.
+- Cloudflare Pages can serve the same rendered website through the Pages gateway in `cloudflare/pages`; see its README for its `BACKEND_URL` setting.

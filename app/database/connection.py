@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     FORCE_SUB_CHANNELS: str = ""
     BASE_URL: str = "http://localhost:8000"
     BACKEND_URL: Optional[str] = None
-    DEFAULT_EXPIRY: int = 24
     CHANNEL_ID: Optional[int] = None
     UPDATE_CHANNEL_URL: str = "https://t.me/HiTLERYT"
     PORT: int = 8000
@@ -91,7 +90,13 @@ async def create_indexes() -> None:
     await files_col.create_index("short_code", unique=True)
     await files_col.create_index("file_id")
     await files_col.create_index("uploader_id")
-    await files_col.create_index("expiry_time", expireAfterSeconds=0)
+    # Short links are permanent by default. Remove the legacy TTL index because
+    # MongoDB TTL deletion would silently remove links even when app code keeps them.
+    try:
+        await files_col.drop_index("expiry_time_1")
+    except Exception as exc:
+        if "index not found" not in str(exc).lower() and "ns not found" not in str(exc).lower():
+            logger.warning("Could not remove legacy expiry TTL index: %s", exc)
     await users_col.create_index("user_id", unique=True)
     await settings_col.create_index("key", unique=True)
 

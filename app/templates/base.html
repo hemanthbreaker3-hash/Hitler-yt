@@ -29,9 +29,10 @@
       margin:0;
       background:var(--bg);
       color:var(--text);
-      font:400 14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+      font:500 14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
       min-height:100vh;
     }
+    h1,h2,h3,h4,strong,b,.topbar-logo{font-weight:850}
     a{color:inherit;text-decoration:none}
     button,input,select{font:inherit}
     .wrap{width:min(100% - 16px,1100px);margin:auto}
@@ -176,6 +177,10 @@
     .btn:hover{border-color:var(--yellow);color:var(--yellow)}
     /* Mobile */
     @media(max-width:600px){
+      body{font-size:14px}
+      .wrap{width:min(100% - 20px,1100px)}
+      .topbar-links{gap:2px}
+      .topbar-links a{padding:6px 7px;font-size:12px}
       .poster-grid{grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:12px}
       .topbar-logo{font-size:14px}
       .section-head h2{font-size:15px}

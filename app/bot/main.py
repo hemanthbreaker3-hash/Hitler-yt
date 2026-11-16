@@ -65,6 +65,7 @@ async def setup_bot_commands(bot):
         commands = [
             BotCommand("start", "Start / help"),
             BotCommand("panel", "Open control panel (admin)"),
+            BotCommand("manage", "Edit website pages and bot settings (admin)"),
             BotCommand("username", "Set website panel username (admin)"),
             BotCommand("password", "Set website panel password (admin)"),
             BotCommand("backendurl", "Set backend / Cloudflare URL (admin)"),
@@ -274,11 +275,8 @@ def register_handlers(bot):
             short_code=short_code,
             chat_id=message.chat.id,
             message_id=message.id,
-            expiry_time=(
-                datetime.datetime.utcnow() + datetime.timedelta(hours=settings.DEFAULT_EXPIRY)
-                if settings.DEFAULT_EXPIRY > 0
-                else None
-            ),
+            # Public media links are permanent; do not assign an expiry timestamp.
+            expiry_time=None,
         )
         await files_col.insert_one(file_meta.dict())
 
@@ -570,7 +568,7 @@ def register_handlers(bot):
                 pass
         return await message.reply(reply + "\n\nOpen `/panel` and sign in with your configured credentials.")
 
-    @bot.on_message(filters.command(["categories", "edit", "panel"]))
+    @bot.on_message(filters.command(["categories", "edit", "panel", "manage"]))
     async def cms_admin_commands(client, message: Message):
         user = message.from_user
         if not user or (user.id not in settings.admin_list and user.id != settings.OWNER_ID):
@@ -600,6 +598,21 @@ def register_handlers(bot):
             return await message.reply(f"🗂️ **Categories**\n\n{names}\n\nCreate or manage unlimited categories in the dashboard.", reply_markup=_kb([[InlineKeyboardButton("➕ Create / Manage Categories", url=f"{base}/panel")]]))
         if cmd == "/edit":
             return await message.reply("✏️ Page editor\n\nEdit page metadata, poster, categories, unlimited groups and buttons in the dashboard.", reply_markup=_kb([[InlineKeyboardButton("✏️ Open Page Editor", url=f"{base}/panel")]]))
+        if cmd == "/manage":
+            target = (message.text or "").split(maxsplit=1)[1].strip() if len((message.text or "").split(maxsplit=1)) > 1 else ""
+            match = re.search(r"/title/([a-z0-9-]+)", target, re.I)
+            if match:
+                page = await db.catalog_pages.find_one({"slug": match.group(1).lower()}, {"_id": 0, "title": 1})
+                if not page:
+                    return await message.reply("❌ Page link not found in the shared catalog.")
+                panel_url = f"{base}/panel?page={match.group(1).lower()}"
+                return await message.reply(f"✏️ **Editing: {page.get('title', match.group(1))}**", reply_markup=_kb([[InlineKeyboardButton("Open selected page editor", url=panel_url)]]))
+            if target:
+                safe = re.escape(target[:100])
+                page = await db.catalog_pages.find_one({"title": {"$regex": safe, "$options": "i"}}, {"_id": 0, "slug": 1, "title": 1})
+                if page:
+                    return await message.reply(f"✏️ **Editing: {page['title']}**", reply_markup=_kb([[InlineKeyboardButton("Open selected page editor", url=f"{base}/panel?page={page['slug']}")]]))
+            return await message.reply("🛠️ **Manage website & bot**\nUse `/manage page name` or `/manage https://your-site/title/page-slug` to open a selected page. Open the dashboard for all settings and pages.", reply_markup=_kb([[InlineKeyboardButton("🛠️ Open Manage Panel", url=f"{base}/panel")]]))
         current_backend = (await settings_col.find_one({"key": "backend_url"}) or {}).get("value") or settings.BACKEND_URL or "Not configured"
         current_base = (await settings_col.find_one({"key": "base_url"}) or {}).get("value") or settings.BASE_URL
         vercel_url = (await settings_col.find_one({"key": "vercel_url"}) or {}).get("value") or "Detected automatically after first Vercel request"

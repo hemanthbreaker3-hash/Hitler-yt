@@ -728,17 +728,29 @@ updateBrightness();
 updateGain();
 loadTracks();
 
-// Optional best-effort external-player handoff. Browsers do not expose a reliable
-// installed-app inventory; only Android's explicit VLC intent is attempted.
+// Best-effort Android handoff order. A browser cannot inspect installed apps,
+// so each app gets a short attempt and the normal watch page remains the fallback.
 {% if player_settings.auto_player_redirect %}
 (function autoPlayerHandoff(){
-  const ua=navigator.userAgent||'';
+  if (!/Android/i.test(navigator.userAgent||'')) return;
   const streamUrl=location.origin+'/stream/{{ file.short_code }}';
-  if (/Android/i.test(ua)) {
-    const fallback=location.href;
-    const intent='intent:'+streamUrl.replace(/^https?:\/\//,'')+'#Intent;scheme=https;type=video/*;package=org.videolan.vlc;S.browser_fallback_url='+encodeURIComponent(fallback)+';end';
-    setTimeout(()=>{ location.href=intent; },250);
-  }
+  const fallback=location.href;
+  const players=[
+    {name:'Playit',pkg:'com.playit.videoplayer',scheme:'playit://'},
+    {name:'MX Player',pkg:'com.mxtech.videoplayer.ad',scheme:'intent:'},
+    {name:'VLC',pkg:'org.videolan.vlc',scheme:'intent:'}
+  ];
+  let index=0;
+  const attempt=()=>{
+    if(index>=players.length)return;
+    const p=players[index++];
+    const target=p.scheme==='playit://'
+      ? 'playit://'+streamUrl.replace(/^https?:\/\//,'')
+      : 'intent:'+streamUrl.replace(/^https?:\/\//,'')+'#Intent;scheme=https;type=video/*;package='+p.pkg+';S.browser_fallback_url='+encodeURIComponent(fallback)+';end';
+    location.href=target;
+    setTimeout(attempt,850);
+  };
+  setTimeout(attempt,300);
 })();
 {% endif %}
 </script>

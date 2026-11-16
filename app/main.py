@@ -85,8 +85,8 @@ async def index(request: Request):
 @app.get("/watch/{short_code}")
 async def watch_page(request: Request, short_code: str):
     file_data = await files_col.find_one({"short_code": short_code})
-    if not file_data or (file_data.get("expiry_time") and file_data["expiry_time"] < datetime.datetime.utcnow()):
-        raise HTTPException(status_code=404, detail="Link not found or expired")
+    if not file_data:
+        raise HTTPException(status_code=404, detail="Link not found")
     
     return templates.TemplateResponse(
         request=request,
@@ -110,9 +110,6 @@ async def stream_file(request: Request, short_code: str):
     file_data = await files_col.find_one({"short_code": short_code})
     if not file_data:
         raise HTTPException(status_code=404, detail="File not found")
-    if file_data.get("expiry_time") and file_data["expiry_time"] < datetime.datetime.utcnow():
-        await files_col.delete_one({"short_code": short_code})
-        raise HTTPException(status_code=404, detail="Link expired")
 
     await files_col.update_one({"short_code": short_code}, {"$inc": {"access_count": 1}})
 
@@ -139,8 +136,8 @@ async def stream_file(request: Request, short_code: str):
 async def get_tracks(short_code: str):
     """Return available audio/video/subtitle tracks for a media file."""
     file_data = await files_col.find_one({"short_code": short_code})
-    if not file_data or (file_data.get("expiry_time") and file_data["expiry_time"] < datetime.datetime.utcnow()):
-        raise HTTPException(status_code=404, detail="File not found or expired")
+    if not file_data:
+        raise HTTPException(status_code=404, detail="File not found")
     
     # Check if tracks are already cached in the database (and not an error result)
     cached = file_data.get('tracks_info')
@@ -191,8 +188,8 @@ async def remux_file(request: Request, short_code: str, audio: int = 0, aac: int
     if not (await get_settings())["streaming_enabled"]:
         raise HTTPException(status_code=403, detail="Streaming is currently disabled")
     file_data = await files_col.find_one({"short_code": short_code})
-    if not file_data or (file_data.get("expiry_time") and file_data["expiry_time"] < datetime.datetime.utcnow()):
-        raise HTTPException(status_code=404, detail="File not found or expired")
+    if not file_data:
+        raise HTTPException(status_code=404, detail="File not found")
     if audio < 0 or audio > 32:
         raise HTTPException(status_code=400, detail="Invalid audio track")
 
