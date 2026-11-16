@@ -158,28 +158,15 @@ async def remove_category(slug: str, _: bool = Depends(admin_auth)):
     if slug in ('movies','web-series'): raise HTTPException(400,'Default categories cannot be deleted')
     await categories.delete_one({'slug':slug}); return {'ok':True}
 
-@router.get('/api/admin/omdb-search')
-async def omdb_search(q: str, media_type: str = 'multi', _: bool = Depends(admin_auth)):
-    key=settings.OMDB_API_KEY
-    if not key: raise HTTPException(503,'OMDB_API_KEY is not configured')
+@router.get('/api/admin/tmdb-search')
+async def tmdb_search(q: str, media_type: str = 'multi', _: bool = Depends(admin_auth)):
+    key=settings.TMDB_API_KEY
+    if not key: raise HTTPException(503,'TMDB_API_KEY is not configured')
     if media_type not in ('movie','tv','multi'): raise HTTPException(400,'Invalid media type')
-    omdb_type = {'movie':'movie','tv':'series'}.get(media_type)
-    params = {'apikey':key,'s':q}
-    if omdb_type: params['type']=omdb_type
     async with httpx.AsyncClient(timeout=15) as client:
-        r=await client.get('https://www.omdbapi.com/', params=params)
+        r=await client.get(f'https://api.themoviedb.org/3/search/{media_type}',params={'api_key':key,'query':q,'include_adult':'false'})
         r.raise_for_status(); payload=r.json()
-    if str(payload.get('Response','')).lower()=='false':
-        return {'items':[]}
-    items=[]
-    for x in (payload.get('Search') or [])[:20]:
-        kind = (x.get('Type') or '').lower()
-        mtype = 'movie' if kind=='movie' else 'tv' if kind=='series' else None
-        if not mtype or not x.get('imdbID'): continue
-        poster = x.get('Poster') or ''
-        if poster=='N/A': poster=''
-        items.append({'imdb_id':x['imdbID'],'media_type':mtype,'title':x.get('Title'),'overview':'','poster_path':poster,'release_date':x.get('Year',''),'rating':None})
-    return {'items':items}
+    return {'items':[{'id':x['id'],'media_type':x.get('media_type',media_type if media_type!='multi' else 'movie'),'title':x.get('title') or x.get('name'),'overview':x.get('overview',''),'poster_path':x.get('poster_path'),'release_date':x.get('release_date') or x.get('first_air_date',''),'rating':x.get('vote_average')} for x in payload.get('results',[])[:20]]}
 
 @router.get('/api/admin/pages')
 async def list_pages(_: bool = Depends(admin_auth)):
@@ -198,20 +185,15 @@ async def create_page(data: PageInput, _: bool = Depends(admin_auth)):
     while await pages.find_one({'slug':slug}): slug=f'{base}-{i}'; i+=1
     cats=await categories.find({'slug':{'$in':data.category_ids}}).to_list(100)
     doc=data.model_dump(); doc.update({'slug':slug,'category_slugs':[x['slug'] for x in cats],'published':True,'created_at':datetime.now(timezone.utc)})
-    if data.imdb_id and settings.OMDB_API_KEY:
+    if data.tmdb_id and settings.TMDB_API_KEY:
         async with httpx.AsyncClient(timeout=15) as client:
-            detail = await client.get('https://www.omdbapi.com/', params={'apikey':settings.OMDB_API_KEY,'i':data.imdb_id,'plot':'full'})
+            endpoint = 'tv' if data.media_type == 'tv' else 'movie'
+            detail = await client.get(f'https://api.themoviedb.org/3/{endpoint}/{data.tmdb_id}', params={'api_key':settings.TMDB_API_KEY,'append_to_response':'external_ids'})
             detail.raise_for_status(); meta=detail.json()
-        if str(meta.get('Response','')).lower()!='false':
-            doc['genres']=[g.strip() for g in (meta.get('Genre') or '').split(',') if g.strip()]
-            doc['imdb_id']=meta.get('imdbID') or data.imdb_id
-            runtime_match=re.search(r'\d+', meta.get('Runtime') or '')
-            doc['runtime']=int(runtime_match.group()) if runtime_match else None
-            if meta.get('Plot') and meta['Plot']!='N/A': doc['overview']=meta['Plot']
-            if meta.get('Poster') and meta['Poster']!='N/A': doc['poster_path']=meta['Poster']
-            if meta.get('imdbRating') and meta['imdbRating']!='N/A':
-                try: doc['rating']=float(meta['imdbRating'])
-                except ValueError: pass
+        doc['genres']=[g.get('name','') for g in meta.get('genres',[]) if g.get('name')]
+        doc['imdb_id']=(meta.get('external_ids') or {}).get('imdb_id') or meta.get('imdb_id','')
+        doc['runtime']=meta.get('runtime') or (meta.get('episode_run_time') or [None])[0]
+        doc['tagline']=meta.get('tagline','')
     await pages.insert_one(doc)
     return {'slug':slug,'url':f"{settings.BASE_URL.rstrip('/')}/title/{slug}"}
 
