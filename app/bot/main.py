@@ -302,18 +302,27 @@ def register_handlers(bot):
             reply_markup=_kb(rows),
         )
 
-    @bot.on_message(filters.document & filters.private)
-    async def ad_config_file_handler(client, message: Message):
-        user = message.from_user
+    async def _maybe_handle_ad_config_upload(client, message: Message, user) -> bool:
+        """Handle an AdSense/Monetag config-file upload after /adsense or /monetag → Upload.
+
+        Returns True if claimed and handled, False to fall through to normal media
+        handling. Kept as a plain helper (not its own @bot.on_message) because its old
+        filter (filters.document & filters.private) fully overlaps the media_handler's
+        filter for any document sent in a private chat — two handlers on overlapping
+        filters means only the first one registered ever runs, silently dropping every
+        document meant for /link or ordinary file-to-link uploads.
+        """
         provider = _awaiting_ad_config.get(user.id) if user else None
-        if not provider or not user or not _is_admin_user(user.id):
-            return
+        if not provider or not user or not _is_admin_user(user.id) or not message.document:
+            return False
         document = message.document
         filename = (document.file_name or "").lower()
         if not filename.endswith((".txt", ".html", ".htm", ".js")):
-            return await message.reply("❌ Upload a .txt, .html, .htm, or .js configuration file.")
+            await message.reply("❌ Upload a .txt, .html, .htm, or .js configuration file.")
+            return True
         if int(document.file_size or 0) > _AD_CONFIG_MAX_BYTES:
-            return await message.reply("❌ File is too large. Maximum size is 64 KB.")
+            await message.reply("❌ File is too large. Maximum size is 64 KB.")
+            return True
         status = await message.reply("⏳ **Reading configuration file...**")
         temp_path = None
         try:
@@ -341,6 +350,7 @@ def register_handlers(bot):
                     Path(temp_path).unlink(missing_ok=True)
                 except Exception:
                     pass
+        return True
 
     @bot.on_message(filters.command("start") & filters.private)
     async def start_handler(client, message: Message):
@@ -507,23 +517,30 @@ def register_handlers(bot):
             text, kb = _build_addbots_summary_and_kb()
             return await callback.message.edit_text(text, reply_markup=kb)
 
-    @bot.on_message(filters.text & filters.private & ~filters.regex(r"^/"))
-    async def admin_bot_token_input_handler(client, message: Message):
-        """Handle bot token input sent by an admin after clicking [➕ Add Bot Token] in /addbots."""
-        user = message.from_user
+    async def _maybe_handle_bot_token_input(client, message: Message, user) -> bool:
+        """Handle bot token input sent by an admin after clicking [➕ Add Bot Token] in /addbots.
+
+        Returns True if this message was claimed and fully handled (caller must stop),
+        False if it should fall through to the next text-input handler (e.g. shorteners,
+        ad-free text flows, or a t.me link). This is a plain helper (not a registered
+        handler) so that only ONE @bot.on_message(filters.text & filters.private & ~^/)
+        handler exists — registering two handlers on the same overlapping filter means
+        only the first one ever runs and silently swallows every other admin text input.
+        """
         if not user or user.is_bot or not _is_admin_user(user.id):
-            return
+            return False
         raw_text = (message.text or "").strip()
         if user.id not in _awaiting_bot_token_admins and not _BOT_TOKEN_PATTERN.fullmatch(raw_text):
-            return
+            return False
 
         matches = _BOT_TOKEN_PATTERN.findall(raw_text)
         if not matches:
-            return await message.reply(
+            await message.reply(
                 "❌ **No valid Telegram Bot Token detected.**\n\n"
                 "Please send a valid Bot Token from @BotFather (format: `123456789:ABCdefGHI...`), or click **Cancel**.",
                 reply_markup=_kb([[InlineKeyboardButton("❌ Cancel", callback_data="addbots:cancel")]]),
             )
+            return True
 
         _awaiting_bot_token_admins.discard(user.id)
         try:
@@ -554,6 +571,7 @@ def register_handlers(bot):
                 [InlineKeyboardButton("📋 View All Helper Bots", callback_data="addbots:refresh")],
             ]),
         )
+        return True
 
     @bot.on_message(filters.command("link") & filters.private)
     async def link_command(client, message: Message):
@@ -571,6 +589,10 @@ def register_handlers(bot):
     async def media_handler(client, message: Message):
         user = message.from_user
         if not user or user.is_bot:
+            return
+        # Single owner of this document/media filter: an admin's pending ad-config
+        # upload is checked first, then falls through to the normal file-to-link flow.
+        if await _maybe_handle_ad_config_upload(client, message, user):
             return
         explicit_link_request = user.id in _awaiting_link_admins
         if explicit_link_request:
@@ -778,6 +800,12 @@ def register_handlers(bot):
         """Create links for media already hosted in a Telegram message; never mirror it to storage."""
         user = message.from_user
         if not user or user.is_bot:
+            return
+        # Single owner of filters.text & filters.private & ~^/: check every pending
+        # admin text-input state here, in order, before falling through to t.me link
+        # parsing. Two handlers registered on the same (overlapping) filter would mean
+        # only the first ever fires — see _maybe_handle_bot_token_input's docstring.
+        if raw_override is None and await _maybe_handle_bot_token_input(client, message, user):
             return
         raw = (raw_override if raw_override is not None else (message.text or "")).strip()
         pending = _awaiting_shortener.get(user.id) if raw_override is None else None
