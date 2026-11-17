@@ -25,6 +25,17 @@ _KEY_PAGE_STYLE = '''
   .msg{color:#9ca3af;font-size:13px;margin-top:16px;text-align:center}
 '''
 
+PROTECTED_TITLE_PREFIX = "/title/"
+PROTECTED_TITLE_HOST = "hitler-yt.vercel.app"
+
+def is_protected_title_target(target: str, hostname: str | None = None) -> bool:
+    """Only title pages on the configured Vercel website can use shortener keys."""
+    if not isinstance(target, str) or not target.startswith("/") or target.startswith("//"):
+        return False
+    parsed = urllib.parse.urlsplit(target)
+    host_ok = hostname is None or hostname.lower().split(":", 1)[0] == PROTECTED_TITLE_HOST
+    return host_ok and not parsed.scheme and not parsed.netloc and parsed.path.startswith(PROTECTED_TITLE_PREFIX) and len(parsed.path) > len(PROTECTED_TITLE_PREFIX)
+
 def _page_key_html(path, error=""):
     # Keep the exact path + query as the scope; never accept a caller-supplied external URL.
     safe_path = html.escape(path, quote=True)
@@ -33,13 +44,13 @@ def _page_key_html(path, error=""):
     return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0a0a0a"><title>Key Verification · HITLER YT</title><style>{_KEY_PAGE_STYLE}</style></head><body><main><h1>🔐 Key Verification</h1><p class="lead">This page is protected. Enter a valid access key to continue, or get one below.</p><form method="post" action="/verify-key"><input type="hidden" name="target" value="{safe_path}"/><input name="key" placeholder="Paste your key here" required autocomplete="off"/><button type="submit">Open Link</button></form><a class="link-btn" href="/get-key-start?target={get_key_target}">Get Key</a>{f'<p class="err">{safe_error}</p>' if safe_error else ''}</main></body></html>'''
 
 async def gate_request(request: Request):
-    """Require a shortener key only for published title detail pages.
+    """Require a shortener key for every title page.
 
     The shortener is deliberately bypassed for the homepage, /search, /watch,
     /dl, /stream, /remux, APIs, static assets, and every other route.
     """
     path = request.url.path
-    if not path.startswith("/title/") or path == "/title/":
+    if not path.startswith(PROTECTED_TITLE_PREFIX) or len(path) <= len(PROTECTED_TITLE_PREFIX) or request.url.hostname.lower() != PROTECTED_TITLE_HOST:
         return None
     if request.method not in ("GET", "HEAD"):
         return None
@@ -70,9 +81,7 @@ async def verify_key(request: Request):
     form = await request.form()
     key = str(form.get("key", "")).strip()
     target = str(form.get("target", "/"))
-    parsed_target = urllib.parse.urlsplit(target)
-    if (not target.startswith("/") or target.startswith("//") or parsed_target.scheme
-            or parsed_target.netloc or not parsed_target.path.startswith("/title/")):
+    if not is_protected_title_target(target, request.url.hostname):
         raise HTTPException(400, "Shortener verification is available only for title pages")
     now = int(time.time())
     rec = await db.access_keys.find_one({"key":key,"target":target,"expires_at":{"$gt":now}})

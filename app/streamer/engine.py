@@ -22,6 +22,10 @@ TG_CHUNK = 1024 * 1024
 DEFAULT_CHUNK = 4 * TG_CHUNK
 MAX_CONCURRENT_PER_CLIENT = 32
 MAX_PARALLEL_STRIPES = 4
+MEDIA_TARGET_CACHE_TTL = 600
+_resolved_media_targets: dict[tuple, tuple[Client, object, float]] = {}
+_resolved_media_lock = asyncio.Lock()
+_resolution_locks: dict[tuple, asyncio.Lock] = {}
 
 _work_loads: dict[int, int] = {}
 _work_lock = asyncio.Lock()
@@ -104,28 +108,32 @@ def _extract_media_from_msg(msg):
 async def _resolve_message(client: Client, chat_id: int | None, message_id: int | None):
     if not chat_id or not message_id:
         return None
-    for attempt in range(3):
-        try:
-            msg = await client.get_messages(chat_id, message_id)
-            if isinstance(msg, list):
-                msg = msg[0] if msg else None
-            if not msg:
-                return None
-            if _extract_media_from_msg(msg) is None and not getattr(msg, "media", None):
-                return None
-            return msg
-        except Exception as e:
-            is_flood_wait = "flood" in type(e).__name__.lower() or "flood_wait" in str(e).lower()
-            wait = getattr(e, "value", None) or getattr(e, "x", None)
+    try:
+        msg = await client.get_messages(chat_id, message_id)
+        if isinstance(msg, list):
+            msg = msg[0] if msg else None
+        if not msg:
+            return None
+        if _extract_media_from_msg(msg) is None and not getattr(msg, "media", None):
+            return None
+        return msg
+    except Exception as exc:
+        is_flood_wait = "flood" in type(exc).__name__.lower() or "flood_wait" in str(exc).lower()
+        if is_flood_wait:
+            wait = getattr(exc, "value", None) or getattr(exc, "x", None) or 1
             try:
-                wait = float(wait) if wait is not None else (0.5 + attempt * 0.5)
+                wait = max(1, int(float(wait)))
             except (TypeError, ValueError):
-                wait = 0.5 + attempt * 0.5
-            # Honor Telegram's cooldown instead of rapidly repeating a rate-limited call.
-            wait = min(max(wait, 0.5), 60.0 if is_flood_wait else 5.0)
-            logger.warning("get_messages(%s, %s) retry %s (flood_wait=%s): %s", chat_id, message_id, attempt + 1, is_flood_wait, e)
-            await asyncio.sleep(wait)
-    return None
+                wait = 1
+            logger.warning("Telegram FloodWait while resolving %s/%s; trying another authorized session", chat_id, message_id)
+            raise HTTPException(
+                status_code=429,
+                detail="Telegram temporarily rate-limited this session. Retry after the indicated delay.",
+                headers={"Retry-After": str(wait)},
+            ) from exc
+        logger.debug("Could not resolve Telegram message %s/%s: %s", chat_id, message_id, exc)
+        return None
+
 
 
 def _ordered_candidate_clients(
@@ -139,8 +147,13 @@ def _ordered_candidate_clients(
         live.append(bot_client)
 
     if chat_id and chat_id > 0 and not storage_chat_id and bot_client is not None:
-        ordered = [bot_client] + [c for c in live if c is not bot_client]
-        return ordered
+        # A private chat with this bot is best served by its own bot session/file_id.
+        return [bot_client] + [c for c in live if c is not bot_client]
+    if chat_id and chat_id < 0:
+        # Public groups/channels are normally accessible through an authorized user session.
+        users = [c for c in live if not getattr(c, "bot_token", None)]
+        bots = [c for c in live if getattr(c, "bot_token", None)]
+        return users + bots
     return live
 
 
@@ -157,43 +170,84 @@ async def _acquire_media_target(
     if not candidates:
         raise HTTPException(status_code=503, detail="No connected Telegram sessions available")
 
-    remaining = list(candidates)
-    while remaining:
-        if chat_id and chat_id > 0 and not storage_chat_id and bot_client in remaining:
-            client = bot_client
+    # A file_id produced by this bot can be used directly for media in its private chat.
+    if file_id and chat_id and chat_id > 0 and not storage_chat_id and bot_client is not None:
+        if getattr(bot_client, "is_connected", False):
             async with _work_lock:
-                _work_loads[_cid(client)] = _work_loads.get(_cid(client), 0) + 1
-        else:
-            client = await _acquire_client(remaining)
-        remaining = [c for c in remaining if c is not client]
+                _work_loads[_cid(bot_client)] = _work_loads.get(_cid(bot_client), 0) + 1
+            return bot_client, file_id
 
-        try:
-            if storage_chat_id and storage_message_id:
-                msg = await _resolve_message(client, storage_chat_id, storage_message_id)
+    target_chat = storage_chat_id or chat_id
+    target_msg = storage_message_id or message_id
+    cache_key = (int(target_chat or 0), int(target_msg or 0), str(file_id or ""))
+    async with _resolved_media_lock:
+        key_lock = _resolution_locks.setdefault(cache_key, asyncio.Lock())
+
+    # Single-flight resolution: simultaneous Range requests from browsers/download managers
+    # share one Telegram get_messages call instead of hammering Telegram in parallel.
+    async with key_lock:
+        now = asyncio.get_running_loop().time()
+        async with _resolved_media_lock:
+            cached = _resolved_media_targets.get(cache_key)
+            if cached:
+                cached_client, cached_target, expires = cached
+                if expires > now and getattr(cached_client, "is_connected", False):
+                    async with _work_lock:
+                        _work_loads[_cid(cached_client)] = _work_loads.get(_cid(cached_client), 0) + 1
+                    return cached_client, cached_target
+                _resolved_media_targets.pop(cache_key, None)
+
+        rate_limited_for = None
+        for client in candidates:
+            await _acquire_client([client])
+            try:
+                msg = None
+                if storage_chat_id and storage_message_id:
+                    msg = await asyncio.wait_for(
+                        _resolve_message(client, storage_chat_id, storage_message_id), timeout=5.0
+                    )
+                if msg is None:
+                    msg = await asyncio.wait_for(
+                        _resolve_message(client, chat_id, message_id), timeout=5.0
+                    )
                 if msg is not None:
+                    async with _resolved_media_lock:
+                        _resolved_media_targets[cache_key] = (
+                            client, msg, asyncio.get_running_loop().time() + MEDIA_TARGET_CACHE_TTL
+                        )
+                        if len(_resolved_media_targets) > 5000:
+                            oldest = sorted(_resolved_media_targets.items(), key=lambda item: item[1][2])[:1000]
+                            for key, _ in oldest:
+                                _resolved_media_targets.pop(key, None)
                     return client, msg
+                if file_id and client is bot_client:
+                    return client, file_id
+            except asyncio.TimeoutError:
+                logger.warning("Timed out resolving Telegram media target chat=%s message=%s", target_chat, target_msg)
+            except HTTPException as exc:
+                if exc.status_code == 429:
+                    rate_limited_for = (exc.headers or {}).get("Retry-After", "1")
+                logger.warning("Client could not resolve Telegram media target: %s", exc.detail)
+            except Exception as exc:
+                logger.warning("Client could not resolve Telegram media target: %s", exc)
+            await _release_client(client)
 
-            msg = await _resolve_message(client, chat_id, message_id)
-            if msg is not None:
-                return client, msg
+        if file_id and bot_client is not None and getattr(bot_client, "is_connected", False):
+            async with _work_lock:
+                _work_loads[_cid(bot_client)] = _work_loads.get(_cid(bot_client), 0) + 1
+            return bot_client, file_id
 
-            if file_id and (client is bot_client or len(candidates) == 1):
-                return client, file_id
-        except Exception as exc:
-            logger.warning("Client could not resolve media target: %s", exc)
+        if rate_limited_for is not None:
+            raise HTTPException(
+                status_code=429,
+                detail="All configured Telegram sessions are temporarily rate-limited. Retry shortly.",
+                headers={"Retry-After": str(rate_limited_for)},
+            )
 
-        await _release_client(client)
-
-    target_bot = bot_client or (candidates[0] if candidates else None)
-    if file_id and target_bot is not None:
-        async with _work_lock:
-            _work_loads[_cid(target_bot)] = _work_loads.get(_cid(target_bot), 0) + 1
-        return target_bot, file_id
-
-    raise HTTPException(
-        status_code=404,
-        detail="Media is no longer accessible on Telegram or the bot lacks access to the source chat.",
-    )
+        raise HTTPException(
+            status_code=404,
+            detail="Media is not accessible to the configured Telegram bot/user sessions. Add the bot to the source chat or configure an authorized user session with access.",
+        )
 
 
 async def _stream_file_chunks(
@@ -328,77 +382,13 @@ async def media_streamer(
     storage_message_id: int | None = None,
 ):
     """
-    Stream bytes [start, end]:
-    - If multiple helper bots/sessions are available and the request is >= 4 MiB, uses a sliding-window
-      parallel 1 MiB chunk prefetcher across all capable bots (instant <0.3s TTFB + multi-bot speed boost!).
-    - Otherwise streams directly from primary_client.
+    Stream bytes [start, end] immediately from the acquired Telegram client.
+    Concurrent downloads are load-balanced across the connected client pool.
     """
     total = end - start + 1
     try:
-        # Check if we can use multi-bot sliding-window parallel striping (for downloads/streams >= 4 MiB)
-        if all_clients and len(all_clients) > 1 and total >= 4 * TG_CHUNK:
-            capable = await _discover_multi_bot_targets(
-                clients=all_clients,
-                primary_client=primary_client,
-                primary_target=primary_target,
-                chat_id=chat_id,
-                message_id=message_id,
-                storage_chat_id=storage_chat_id,
-                storage_message_id=storage_message_id,
-            )
-            if len(capable) > 1:
-                first_chunk_idx = start // TG_CHUNK
-                last_chunk_idx = end // TG_CHUNK
-                total_chunks = last_chunk_idx - first_chunk_idx + 1
-                window_size = min(MAX_PARALLEL_STRIPES, len(capable) * 2, total_chunks)
-
-                bytes_to_skip = start % TG_CHUNK
-                bytes_sent = 0
-                in_flight: dict[int, asyncio.Task] = {}
-
-                def schedule_chunk(c_idx: int):
-                    pair_client, pair_target = capable[(c_idx - first_chunk_idx) % len(capable)]
-                    in_flight[c_idx] = asyncio.create_task(
-                        _fetch_single_tg_chunk(pair_client, pair_target, c_idx)
-                    )
-
-                for c_idx in range(first_chunk_idx, min(first_chunk_idx + window_size, last_chunk_idx + 1)):
-                    schedule_chunk(c_idx)
-
-                next_to_schedule = first_chunk_idx + window_size
-                try:
-                    for current_idx in range(first_chunk_idx, last_chunk_idx + 1):
-                        task = in_flight.pop(current_idx)
-                        chunk = await task
-                        if next_to_schedule <= last_chunk_idx:
-                            schedule_chunk(next_to_schedule)
-                            next_to_schedule += 1
-
-                        if not chunk:
-                            break
-                        if bytes_to_skip > 0:
-                            if len(chunk) <= bytes_to_skip:
-                                bytes_to_skip -= len(chunk)
-                                continue
-                            chunk = chunk[bytes_to_skip:]
-                            bytes_to_skip = 0
-
-                        remaining = total - bytes_sent
-                        if len(chunk) > remaining:
-                            chunk = chunk[:remaining]
-                        if chunk:
-                            yield chunk
-                            bytes_sent += len(chunk)
-                        if bytes_sent >= total:
-                            break
-                    return
-                finally:
-                    for t in in_flight.values():
-                        if not t.done():
-                            t.cancel()
-                    if in_flight:
-                        await asyncio.gather(*in_flight.values(), return_exceptions=True)
-
+        # Stream immediately from the acquired Telegram client. Probing helper bots
+        # before sending the first byte adds seconds of latency and unnecessary API calls.
         # Standard single-client immediate streaming
         async for chunk in _download_byte_range(primary_client, primary_target, start, end):
             yield chunk
@@ -471,9 +461,10 @@ async def get_streaming_response(
         ),
         "Accept-Ranges": "bytes",
         "Content-Encoding": "identity",
-        "Cache-Control": "no-transform, public, max-age=3600",
+        "Cache-Control": "no-store, no-transform",
         "X-Content-Type-Options": "nosniff",
         "X-Accel-Buffering": "no",
+        "X-Download-Options": "noopen",
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
         "Access-Control-Allow-Headers": "Range, Content-Type, Accept, Origin",
@@ -643,6 +634,7 @@ async def get_remux_response(
             "Cache-Control": "no-store, no-transform",
             "Accept-Ranges": "none",
             "X-Accel-Buffering": "no",
+        "X-Download-Options": "noopen",
             "Access-Control-Allow-Origin": "*",
         },
     )

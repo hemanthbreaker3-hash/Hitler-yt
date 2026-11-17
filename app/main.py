@@ -19,7 +19,10 @@ from app.streamer.probe import probe_tracks
 from app.bot.main import register_handlers
 from app.admin.routes import router as admin_router
 from app.cms import router as cms_router, get_settings, seed_categories, serialize_catalog_doc
-from app.shorteners import gate_request, verify_key, config as shortener_config, create_shortlink, get_key_page
+from app.shorteners import (
+    gate_request, verify_key, config as shortener_config, create_shortlink,
+    get_key_page, is_protected_title_target,
+)
 from app.utils.cloudflare_tunnel import (
     apply_auto_cloudflare_url,
     start_cloudflare_auto_tunnel,
@@ -144,13 +147,9 @@ async def verify_site_key(request: Request):
 
 @app.get("/get-key-start")
 async def start_key_flow(request: Request, target: str = "/"):
-    from urllib.parse import urljoin
     import secrets, time
-    from urllib.parse import urlsplit
-    parsed_target = urlsplit(target)
-    if (not target.startswith("/") or target.startswith("//") or parsed_target.scheme
-            or parsed_target.netloc or not parsed_target.path.startswith("/title/")):
-        raise HTTPException(400, "Shortener verification is available only for title pages")
+    if not is_protected_title_target(target, request.url.hostname):
+        raise HTTPException(400, "Shortener verification is available only for /title/* pages")
     cfg = await shortener_config()
     providers = cfg.get("shorteners", [])
     providers = [x for x in providers if x.get("url") and x.get("api_key")]
@@ -274,8 +273,13 @@ async def stream_file(request: Request, short_code: str, extra_name: str = ""):
     if not file_data:
         raise HTTPException(status_code=404, detail="File not found")
 
-    if request.method.upper() == "GET":
-        await files_col.update_one({"short_code": short_code}, {"$inc": {"access_count": 1}})
+    # Download managers issue many parallel byte-range requests for one file. Count only
+    # the initial full GET, not every Range/HEAD request, to avoid a MongoDB write per chunk.
+    if request.method.upper() == "GET" and not request.headers.get("range"):
+        try:
+            await files_col.update_one({"short_code": short_code}, {"$inc": {"access_count": 1}})
+        except Exception:
+            logger.debug("Could not update access counter for %s", short_code)
 
     all_clients = session_manager.get_all_clients()
     if not all_clients and session_manager.bot_client is None:

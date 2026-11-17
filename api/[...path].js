@@ -1974,6 +1974,50 @@ async function copyDownload() {
   });
 }
 
+
+const SHORTENER_HOST = 'hitler-yt.vercel.app';
+function requestHost(req) {
+  return String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase().split(':')[0];
+}
+function isProtectedTitlePath(path) {
+  return typeof path === 'string' && path.startsWith('/title/') && path.length > 7 && !path.startsWith('//');
+}
+function parseCookies(req) {
+  const out = {};
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+async function readFormBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  return new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+}
+function sendKeyPage(res, target, error = '') {
+  const safeTarget = escapeHtml(target);
+  const encodedTarget = encodeURIComponent(target);
+  const safeError = error ? `<p style="color:#f87171;margin-top:14px">${escapeHtml(error)}</p>` : '';
+  sendHtml(res, 200, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Key Verification · HITLER YT</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090d18;color:#f8fafc;font:15px system-ui;padding:20px}main{width:min(420px,100%);padding:28px;border:1px solid #263449;border-radius:18px;background:#111827}h1{font-size:22px}p{color:#aab7ca;font-size:14px}input,button,a{width:100%;display:block;padding:13px;margin-top:12px;border-radius:10px;font:inherit}input{background:#0b1220;border:1px solid #334155;color:white}button{border:0;background:#38bdf8;color:#06111b;font-weight:800}a{text-align:center;color:#e2e8f0;border:1px solid #334155;text-decoration:none}</style></head><body><main><h1>🔐 Verify access key</h1><p>This title page is protected. Enter a valid key or generate one through the shortener.</p><form method="POST" action="/verify-key"><input type="hidden" name="target" value="${safeTarget}"><input name="key" placeholder="Enter access key" required autocomplete="off"><button>Open title page</button></form><a href="/get-key-start?target=${encodedTarget}">Get access key</a>${safeError}</main></body></html>`);
+}
+async function createVercelShortUrl(provider, destination) {
+  const endpoint = String(provider.url || '').trim();
+  const response = await fetch(endpoint + (endpoint.includes('?') ? '&' : '?') + new URLSearchParams({ api: String(provider.api_key || ''), url: destination, format: 'json' }), { signal: AbortSignal.timeout(20000), redirect: 'follow' });
+  if (!response.ok) throw new Error(`Shortener returned HTTP ${response.status}`);
+  const text = await response.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
+  const candidates = [];
+  if (typeof data === 'string') candidates.push(data);
+  if (data && typeof data === 'object') {
+    for (const key of ['shortenedUrl','shortURL','short_url','shortlink','shortened_url','shorturl','url']) if (data[key]) candidates.push(data[key]);
+    for (const value of Object.values(data)) if (value && typeof value === 'object') for (const key of ['shortenedUrl','short_url','shortlink','url']) if (value[key]) candidates.push(value[key]);
+  }
+  for (const value of candidates) { try { const u = new URL(String(value).trim().replace(/^"|"$/g,'')); if (['http:','https:'].includes(u.protocol)) return u.toString(); } catch {} }
+  throw new Error('Shortener API did not return a valid URL');
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method === 'OPTIONS') {
@@ -2092,6 +2136,62 @@ importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw')`;
 
     const state = await getSettingsState(db, req);
     const cloudflareUrl = state.cloudflare_url;
+    const currentHost = requestHost(req);
+
+    // Shortener/access-key workflow is hosted on Vercel so it protects the actual title pages.
+    if (currentHost === SHORTENER_HOST && pathname === '/get-key-start' && req.method === 'GET') {
+      const target = searchParams.get('target') || '';
+      if (!isProtectedTitlePath(target)) { sendJson(res, 400, { error: 'Shortener is available only for /title/* pages' }); return; }
+      const cfg = await db.collection('site_settings').findOne({ _id: 'shortener_config' }) || {};
+      const providers = (cfg.shorteners || []).filter((x) => x && x.url && x.api_key);
+      if (!cfg.enabled || !providers.length) { sendJson(res, 503, { error: 'No active shortener configured' }); return; }
+      const provider = providers[Math.floor(Math.random() * providers.length)];
+      const token = crypto.randomBytes(24).toString('base64url');
+      const key = crypto.randomBytes(9).toString('base64url');
+      const now = Math.floor(Date.now() / 1000);
+      const expiry = Math.max(60, Math.min(86400, Number(cfg.expiry_seconds) || 300));
+      const origin = `https://${SHORTENER_HOST}`;
+      const landing = `${origin}/get-key/${token}`;
+      await db.collection('access_keys').insertOne({ token, key, target, created_at: now, expires_at: now + expiry });
+      try { const shortUrl = await createVercelShortUrl(provider, landing); res.statusCode = 302; res.setHeader('Location', shortUrl); res.end(); }
+      catch (error) { await db.collection('access_keys').deleteOne({ token }); sendJson(res, 502, { error: 'Shortener API failed', detail: String(error.message || error).slice(0, 160) }); }
+      return;
+    }
+    if (currentHost === SHORTENER_HOST && pathname.startsWith('/get-key/') && req.method === 'GET') {
+      const token = pathname.slice('/get-key/'.length);
+      const rec = await db.collection('access_keys').findOne({ token, expires_at: { $gt: Math.floor(Date.now()/1000) } });
+      if (!rec) { sendHtml(res, 410, '<h1>Key request expired</h1><p>Return to the title page and request a new key.</p>'); return; }
+      const key = escapeHtml(rec.key); const target = escapeHtml(rec.target);
+      sendHtml(res, 200, `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Your access key</title><style>body{background:#090d18;color:white;font:16px system-ui;display:grid;place-items:center;min-height:100vh}main{background:#111827;padding:28px;border-radius:16px;width:min(400px,85vw)}input,button,a{box-sizing:border-box;width:100%;padding:13px;margin-top:12px;border-radius:9px}input{background:#0b1220;color:white;border:1px solid #334155}button{background:#38bdf8;border:0;font-weight:bold}a{display:block;text-align:center;color:white}</style></head><body><main><h2>✅ Your key is ready</h2><p>Copy the key, then continue to your title page.</p><input id="k" readonly value="${key}"><button onclick="navigator.clipboard.writeText(document.getElementById('k').value).then(()=>location.href='/key-copied/${encodeURIComponent(token)}')">Copy key & continue</button><a href="${target}">Return to title page</a></main></body></html>`);
+      return;
+    }
+    if (currentHost === SHORTENER_HOST && pathname.startsWith('/key-copied/') && req.method === 'GET') {
+      const token = pathname.slice('/key-copied/'.length);
+      const now = Math.floor(Date.now()/1000);
+      const rec = await db.collection('access_keys').findOne({ token, expires_at: { $gt: now } });
+      if (!rec) { sendJson(res, 410, { error: 'Key expired' }); return; }
+      res.statusCode = 303; res.setHeader('Set-Cookie', `site_access=${encodeURIComponent(token)}; Max-Age=${Math.max(1,rec.expires_at-now)}; Path=/; HttpOnly; Secure; SameSite=Lax`); res.setHeader('Location', rec.target); res.end(); return;
+    }
+    if (currentHost === SHORTENER_HOST && pathname === '/verify-key' && req.method === 'POST') {
+      const form = await readFormBody(req); const target = form.get('target') || ''; const key = form.get('key') || '';
+      if (!isProtectedTitlePath(target)) { sendJson(res, 400, { error: 'Invalid title target' }); return; }
+      const now = Math.floor(Date.now()/1000);
+      const rec = await db.collection('access_keys').findOne({ key, target, expires_at: { $gt: now } });
+      if (!rec) { sendKeyPage(res, target, 'Invalid, expired, or page-specific key.'); return; }
+      res.statusCode = 303; res.setHeader('Set-Cookie', `site_access=${encodeURIComponent(rec.token)}; Max-Age=${Math.max(1,rec.expires_at-now)}; Path=/; HttpOnly; Secure; SameSite=Lax`); res.setHeader('Location', target); res.end(); return;
+    }
+
+    // Gate only GET/HEAD title routes. Homepage, search, watch, dl, stream and all APIs bypass.
+    if (currentHost === SHORTENER_HOST && isProtectedTitlePath(pathname) && ['GET','HEAD'].includes(req.method)) {
+      const cfg = await db.collection('site_settings').findOne({ _id: 'shortener_config' }) || {};
+      if (cfg.enabled) {
+        const target = pathname + search;
+        const token = parseCookies(req).site_access || '';
+        const now = Math.floor(Date.now()/1000);
+        const authorized = token && await db.collection('access_keys').findOne({ token, target, expires_at: { $gt: now } });
+        if (!authorized) { sendKeyPage(res, target); return; }
+      }
+    }
 
     if (req.method === 'GET' && pathname === '/api/catalog') {
       const query = { published: true };
