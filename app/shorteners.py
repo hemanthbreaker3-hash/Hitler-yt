@@ -28,13 +28,26 @@ _KEY_PAGE_STYLE = '''
 PROTECTED_TITLE_PREFIX = "/title/"
 PROTECTED_TITLE_HOST = "hitler-yt.vercel.app"
 
+def _is_vercel_title_host(hostname: str | None) -> bool:
+    """Match the public Vercel website host, including its www alias and portless form."""
+    if hostname is None:
+        return True
+    host = str(hostname).strip().lower().split(",", 1)[0].split(":", 1)[0].rstrip(".")
+    return host in {PROTECTED_TITLE_HOST, f"www.{PROTECTED_TITLE_HOST}"}
+
+
 def is_protected_title_target(target: str, hostname: str | None = None) -> bool:
-    """Only title pages on the configured Vercel website can use shortener keys."""
+    """Only /title/* pages on the public Vercel website can use shortener keys."""
     if not isinstance(target, str) or not target.startswith("/") or target.startswith("//"):
         return False
     parsed = urllib.parse.urlsplit(target)
-    host_ok = hostname is None or hostname.lower().split(":", 1)[0] == PROTECTED_TITLE_HOST
-    return host_ok and not parsed.scheme and not parsed.netloc and parsed.path.startswith(PROTECTED_TITLE_PREFIX) and len(parsed.path) > len(PROTECTED_TITLE_PREFIX)
+    return (
+        _is_vercel_title_host(hostname)
+        and not parsed.scheme
+        and not parsed.netloc
+        and parsed.path.startswith(PROTECTED_TITLE_PREFIX)
+        and len(parsed.path) > len(PROTECTED_TITLE_PREFIX)
+    )
 
 def _page_key_html(path, error=""):
     # Keep the exact path + query as the scope; never accept a caller-supplied external URL.
@@ -46,11 +59,13 @@ def _page_key_html(path, error=""):
 async def gate_request(request: Request):
     """Require a shortener key for every title page.
 
-    The shortener is deliberately bypassed for the homepage, /search, /watch,
-    /dl, /stream, /remux, APIs, static assets, and every other route.
+    The shortener is applied to every public /title/<slug> page on the Vercel
+    website only when the admin toggle is enabled. When disabled, all title pages
+    load normally. The homepage, /search, /watch, media routes, APIs, and static
+    assets are never gated.
     """
     path = request.url.path
-    if not path.startswith(PROTECTED_TITLE_PREFIX) or len(path) <= len(PROTECTED_TITLE_PREFIX) or request.url.hostname.lower() != PROTECTED_TITLE_HOST:
+    if not is_protected_title_target(path, request.url.hostname):
         return None
     if request.method not in ("GET", "HEAD"):
         return None
@@ -102,29 +117,61 @@ def _usable_short_url(value):
 
 
 async def create_shortlink(base_url: str, api_key: str, destination: str):
-    # Shortlino-compatible API convention; accept either JSON or plain-text URL responses.
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        r = await client.get(base_url, params={"api":api_key,"url":destination,"format":"json"})
-        r.raise_for_status()
+    """Call the shortlinkgenerator-compatible API and extract its URL robustly."""
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+
+    parts = urlsplit(str(base_url).strip())
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        raise ValueError("Invalid shortener API endpoint")
+    # Replace existing values rather than appending duplicate api/url/format parameters.
+    params = dict(parse_qsl(parts.query, keep_blank_values=True))
+    params.update({"api": str(api_key).strip(), "url": str(destination), "format": "json"})
+    endpoint = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), ""))
+    async with httpx.AsyncClient(timeout=25, follow_redirects=True, headers={"Accept": "application/json, text/plain, */*"}) as client:
+        response = await client.get(endpoint)
+        response.raise_for_status()
         try:
-            data = r.json()
-            if isinstance(data, dict):
-                for k in ("shortenedUrl","shortURL","short_url","shortlink","shortened_url","shorturl","url"):
-                    result = _usable_short_url(data.get(k))
-                    if result:
-                        return result
-                for value in data.values():
-                    if isinstance(value, dict):
-                        for k in ("shortenedUrl","short_url","shortlink","url"):
-                            result = _usable_short_url(value.get(k))
-                            if result:
-                                return result
+            data = response.json()
         except Exception:
-            pass
-        result = _usable_short_url(r.text)
+            data = response.text
+
+    url_fields = {
+        "shortenedurl", "shorturl", "short_url", "shortened_url", "shortlink",
+        "short_link", "shortenedlink", "shortened_link", "link", "url", "result",
+    }
+    candidates = []
+    def collect(value, depth=0):
+        if depth > 6 or value is None:
+            return
+        if isinstance(value, str):
+            candidates.append(value)
+            if value.lstrip().startswith(("{", "[")):
+                try:
+                    import json
+                    collect(json.loads(value), depth + 1)
+                except Exception:
+                    pass
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if str(key).lower() in url_fields:
+                    collect(item, depth + 1)
+            for key, item in value.items():
+                if isinstance(item, (dict, list)) and str(key).lower() not in url_fields:
+                    collect(item, depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item, depth + 1)
+
+    collect(data)
+    for candidate in candidates:
+        result = _usable_short_url(candidate)
         if result:
             return result
-    raise ValueError("Shortener API did not return a valid HTTP(S) short URL")
+    message = ""
+    if isinstance(data, dict):
+        message = str(data.get("message") or data.get("error") or data.get("detail") or "")[:180]
+    raise ValueError(message or "Shortener API returned no valid URL; check API key, endpoint, and response format")
+
 
 async def get_key_page(request: Request, token: str):
     rec = await db.access_keys.find_one({"token":token,"expires_at":{"$gt":int(time.time())}})

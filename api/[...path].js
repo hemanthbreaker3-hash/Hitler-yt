@@ -2002,20 +2002,63 @@ function sendKeyPage(res, target, error = '') {
   sendHtml(res, 200, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Key Verification · HITLER YT</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090d18;color:#f8fafc;font:15px system-ui;padding:20px}main{width:min(420px,100%);padding:28px;border:1px solid #263449;border-radius:18px;background:#111827}h1{font-size:22px}p{color:#aab7ca;font-size:14px}input,button,a{width:100%;display:block;padding:13px;margin-top:12px;border-radius:10px;font:inherit}input{background:#0b1220;border:1px solid #334155;color:white}button{border:0;background:#38bdf8;color:#06111b;font-weight:800}a{text-align:center;color:#e2e8f0;border:1px solid #334155;text-decoration:none}</style></head><body><main><h1>🔐 Verify access key</h1><p>This title page is protected. Enter a valid key or generate one through the shortener.</p><form method="POST" action="/verify-key"><input type="hidden" name="target" value="${safeTarget}"><input name="key" placeholder="Enter access key" required autocomplete="off"><button>Open title page</button></form><a href="/get-key-start?target=${encodedTarget}">Get access key</a>${safeError}</main></body></html>`);
 }
 async function createVercelShortUrl(provider, destination) {
-  const endpoint = String(provider.url || '').trim();
-  const response = await fetch(endpoint + (endpoint.includes('?') ? '&' : '?') + new URLSearchParams({ api: String(provider.api_key || ''), url: destination, format: 'json' }), { signal: AbortSignal.timeout(20000), redirect: 'follow' });
+  // The provider URL is the API endpoint (for example, https://shortlinkgenerator.onrender.com/api).
+  // Build the exact documented request: ?api=KEY&url=DESTINATION&format=json.
+  const endpoint = new URL(String(provider.url || '').trim());
+  endpoint.searchParams.set('api', String(provider.api_key || '').trim());
+  endpoint.searchParams.set('url', String(destination));
+  endpoint.searchParams.set('format', 'json');
+  const response = await fetch(endpoint.toString(), {
+    signal: AbortSignal.timeout(25000),
+    redirect: 'follow',
+    headers: { Accept: 'application/json, text/plain, */*' },
+  });
+  const body = await response.text();
   if (!response.ok) throw new Error(`Shortener returned HTTP ${response.status}`);
-  const text = await response.text();
+
   let data;
-  try { data = JSON.parse(text); } catch { data = text; }
+  try { data = JSON.parse(body); } catch { data = body; }
   const candidates = [];
-  if (typeof data === 'string') candidates.push(data);
-  if (data && typeof data === 'object') {
-    for (const key of ['shortenedUrl','shortURL','short_url','shortlink','shortened_url','shorturl','url']) if (data[key]) candidates.push(data[key]);
-    for (const value of Object.values(data)) if (value && typeof value === 'object') for (const key of ['shortenedUrl','short_url','shortlink','url']) if (value[key]) candidates.push(value[key]);
+  const urlFields = new Set([
+    'shortenedurl', 'shorturl', 'short_url', 'shortened_url', 'shortlink',
+    'short_link', 'shortenedlink', 'shortened_link', 'link', 'url', 'result',
+  ]);
+  const collect = (value, depth = 0) => {
+    if (depth > 6 || value == null) return;
+    if (typeof value === 'string') {
+      candidates.push(value);
+      // Some APIs wrap the actual URL in a JSON-encoded string.
+      if ((value.startsWith('{') || value.startsWith('['))) {
+        try { collect(JSON.parse(value), depth + 1); } catch {}
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) collect(item, depth + 1);
+      return;
+    }
+    if (typeof value === 'object') {
+      for (const [key, item] of Object.entries(value)) {
+        if (urlFields.has(key.toLowerCase())) collect(item, depth + 1);
+      }
+      // Also inspect nested `data`, `result`, `response`, and `shortener` envelopes.
+      for (const [key, item] of Object.entries(value)) {
+        if (item && typeof item === 'object' && !urlFields.has(key.toLowerCase())) collect(item, depth + 1);
+      }
+    }
+  };
+  collect(data);
+  for (const value of candidates) {
+    try {
+      const candidate = String(value).trim().replace(/^['"`]|['"`]$/g, '');
+      const parsed = new URL(candidate);
+      if (['http:', 'https:'].includes(parsed.protocol) && parsed.hostname) return parsed.toString();
+    } catch {}
   }
-  for (const value of candidates) { try { const u = new URL(String(value).trim().replace(/^"|"$/g,'')); if (['http:','https:'].includes(u.protocol)) return u.toString(); } catch {} }
-  throw new Error('Shortener API did not return a valid URL');
+  const apiMessage = data && typeof data === 'object'
+    ? String(data.message || data.error || data.detail || '').slice(0, 180)
+    : '';
+  throw new Error(apiMessage || 'Shortener API returned no valid URL (check API key, endpoint, and response format)');
 }
 
 export default async function handler(req, res) {
