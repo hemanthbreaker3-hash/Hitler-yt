@@ -642,10 +642,12 @@ def register_handlers(bot):
         user = message.from_user
         if not user or user.is_bot:
             return
-        # Defer ZIP restore to the dedicated restore handler when admin is in /save → Restore mode
+        # /save → Restore: handle ZIP here so media_handler never swallows the upload
         if user.id in _awaiting_restore and message.document:
             fname = (message.document.file_name or "").lower()
-            if fname.endswith(".zip") or (message.document.mime_type or "").endswith("zip"):
+            mime = (message.document.mime_type or "").lower()
+            if fname.endswith(".zip") or "zip" in mime:
+                await _handle_restore_zip(client, message)
                 return
         explicit_link_request = user.id in _awaiting_link_admins
         if explicit_link_request:
@@ -1833,73 +1835,159 @@ def register_handlers(bot):
             except Exception:
                 pass
 
-    @bot.on_message(filters.document & filters.private)
-    async def restore_zip_handler(client, message: Message):
-        """Handle data.zip upload when admin is in restore mode."""
+
+    async def _handle_restore_zip(client, message: Message):
+        """Restore MongoDB collections from an uploaded data.zip backup."""
         user = message.from_user
-        if not user or user.id not in _awaiting_restore or not _is_admin_user(user.id):
+        if not user or not _is_admin_user(user.id):
             return
         doc = message.document
         if not doc:
-            return
+            return await message.reply("❌ No document attached.")
+
         fname = (doc.file_name or "").lower()
-        if not (fname.endswith(".zip") or (doc.mime_type or "").endswith("zip")):
-            return await message.reply("Please upload a `.zip` backup file (data.zip).")
+        mime = (doc.mime_type or "").lower()
+        if not (fname.endswith(".zip") or "zip" in mime):
+            return await message.reply("Please upload a `.zip` backup file (`data.zip`).")
+
         _awaiting_restore.discard(user.id)
-        status = await message.reply("♻️ Extracting and validating backup…")
+        status = await message.reply("♻️ Downloading backup…")
         work = None
         try:
             work = tempfile.mkdtemp(prefix="hyt_restore_")
             zip_path = os.path.join(work, "upload.zip")
-            await client.download_media(message, file_name=zip_path)
+
+            # Pyrogram/wzgram: download to an explicit path
+            downloaded = await client.download_media(message, file_name=zip_path)
+            if not downloaded:
+                # Fallback: download into work dir
+                downloaded = await client.download_media(message, file_name=work)
+            if isinstance(downloaded, str) and downloaded and os.path.isfile(downloaded):
+                zip_path = downloaded
+            elif not os.path.isfile(zip_path):
+                # Search for any downloaded zip in work
+                found = None
+                for root, _, files in os.walk(work):
+                    for n in files:
+                        if n.lower().endswith(".zip"):
+                            found = os.path.join(root, n)
+                            break
+                    if found:
+                        break
+                if not found:
+                    return await status.edit_text("❌ Failed to download the ZIP file. Try sending it again.")
+                zip_path = found
+
+            await status.edit_text("♻️ Extracting and validating backup…")
             extract_dir = os.path.join(work, "extracted")
             os.makedirs(extract_dir, exist_ok=True)
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(extract_dir)
-            # Find data/ folder or json files at root
-            data_root = extract_dir
-            if os.path.isdir(os.path.join(extract_dir, "data")):
-                data_root = os.path.join(extract_dir, "data")
-            restored = []
-            for name in os.listdir(data_root):
-                if not name.endswith(".json") or name == "manifest.json":
-                    continue
-                coll_name = name[:-5]
-                path = os.path.join(data_root, name)
+            try:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    # Basic zip-slip protection
+                    for info in zf.infolist():
+                        dest = os.path.realpath(os.path.join(extract_dir, info.filename))
+                        if not dest.startswith(os.path.realpath(extract_dir) + os.sep) and dest != os.path.realpath(extract_dir):
+                            raise ValueError(f"Unsafe path in zip: {info.filename}")
+                    zf.extractall(extract_dir)
+            except zipfile.BadZipFile:
+                return await status.edit_text("❌ Invalid ZIP file. Upload a valid `data.zip` backup.")
+
+            # Collect all *.json collection dumps (data/ or nested)
+            json_files: list[tuple[str, str]] = []  # (coll_name, path)
+            for root, _, files in os.walk(extract_dir):
+                for n in files:
+                    if not n.endswith(".json") or n == "manifest.json":
+                        continue
+                    coll_name = n[:-5]
+                    # skip junk names
+                    if not coll_name or "/" in coll_name or "\\" in coll_name:
+                        continue
+                    json_files.append((coll_name, os.path.join(root, n)))
+
+            if not json_files:
+                return await status.edit_text(
+                    "❌ No collection JSON files found in the ZIP.\n"
+                    "Expected structure: `data/files.json`, `data/users.json`, …"
+                )
+
+            # Optional ObjectId support
+            try:
+                from bson import ObjectId  # type: ignore
+            except Exception:
+                ObjectId = None  # type: ignore
+
+            def coerce_id(value):
+                if value is None:
+                    return None
+                if ObjectId is not None and isinstance(value, str) and len(value) == 24:
+                    try:
+                        return ObjectId(value)
+                    except Exception:
+                        return value
+                return value
+
+            restored: list[str] = []
+            total_docs = 0
+            for coll_name, fpath in json_files:
                 try:
-                    with open(path, "r", encoding="utf-8") as f:
+                    with open(fpath, "r", encoding="utf-8") as f:
                         docs = json.load(f)
                     if not isinstance(docs, list):
+                        restored.append(f"{coll_name} (skipped: not a list)")
                         continue
                     coll = db[coll_name]
-                    # Upsert by _id when present
                     count = 0
                     for d in docs:
                         if not isinstance(d, dict):
                             continue
                         oid = d.get("_id")
                         payload = {k: v for k, v in d.items() if k != "_id"}
+                        # Restore ISO datetime strings lightly for known fields
+                        for dk, dv in list(payload.items()):
+                            if isinstance(dv, str) and len(dv) >= 20 and "T" in dv and dv.endswith(("Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9")):
+                                try:
+                                    payload[dk] = datetime.datetime.fromisoformat(dv.replace("Z", "+00:00"))
+                                except Exception:
+                                    pass
                         if oid is not None:
-                            await coll.update_one({"_id": oid}, {"$set": payload}, upsert=True)
+                            cid = coerce_id(oid)
+                            await coll.update_one({"_id": cid}, {"$set": payload}, upsert=True)
+                            # Also try string _id if ObjectId path used
+                            if cid is not oid:
+                                try:
+                                    await coll.update_one({"_id": oid}, {"$set": payload}, upsert=True)
+                                except Exception:
+                                    pass
                         else:
                             await coll.insert_one(payload)
                         count += 1
-                    restored.append(f"{coll_name} ({count})")
+                    total_docs += count
+                    restored.append(f"`{coll_name}` — {count} docs")
                 except Exception as e:
                     logger.warning("Restore %s failed: %s", coll_name, e)
-                    restored.append(f"{coll_name} (error: {e})")
-            await status.edit_text(
-                "✅ **Restore complete**\n\n" + ("\n".join(f"• {r}" for r in restored) or "No collections restored.")
-            )
+                    restored.append(f"`{coll_name}` — error: {e}")
+
+            body = "✅ **Restore complete**\n\n" + "\n".join(f"• {r}" for r in restored)
+            body += f"\n\n📦 Total documents upserted: `{total_docs}`"
+            body += "\n\n_Restart the bot if settings (shorteners, URLs) do not apply immediately._"
+            await status.edit_text(body)
         except Exception as e:
             logger.exception("Restore failed")
             try:
                 await status.edit_text(f"❌ Restore failed: `{e}`")
             except Exception:
-                pass
+                await message.reply(f"❌ Restore failed: `{e}`")
         finally:
             if work:
                 shutil.rmtree(work, ignore_errors=True)
+
+    @bot.on_message(filters.document & filters.private)
+    async def restore_zip_handler(client, message: Message):
+        """Fallback handler if media_handler does not catch the ZIP."""
+        user = message.from_user
+        if not user or user.id not in _awaiting_restore or not _is_admin_user(user.id):
+            return
+        await _handle_restore_zip(client, message)
 
     @bot.on_message(filters.command("batch") & filters.private)
     async def batch_command(client, message: Message):
