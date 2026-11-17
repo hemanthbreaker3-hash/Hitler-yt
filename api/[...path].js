@@ -2024,70 +2024,179 @@ function sendKeyPage(res, target, error = '') {
   const safeError = error ? `<p style="color:#f87171;margin-top:14px">${escapeHtml(error)}</p>` : '';
   sendHtml(res, 200, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Key Verification · HITLER YT</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090d18;color:#f8fafc;font:15px system-ui;padding:20px}main{width:min(420px,100%);padding:28px;border:1px solid #263449;border-radius:18px;background:#111827}h1{font-size:22px}p{color:#aab7ca;font-size:14px}input,button,a{width:100%;display:block;padding:13px;margin-top:12px;border-radius:10px;font:inherit}input{background:#0b1220;border:1px solid #334155;color:white}button{border:0;background:#38bdf8;color:#06111b;font-weight:800;cursor:pointer}a{text-align:center;color:#e2e8f0;border:1px solid #334155;text-decoration:none}</style></head><body><main><h1>🔐 Verify access key</h1><p>Title pages are protected. One valid key unlocks <b>all pages</b> for the admin-configured time (e.g. 4 hours). Enter a key or get a new one.</p><form method="POST" action="/verify-key"><input type="hidden" name="target" value="${safeTarget}"><input name="key" placeholder="Enter access key" required autocomplete="off"><button type="submit">Open title page</button></form><a href="/get-key-start?target=${encodedTarget}">🔑 Get Key</a>${safeError}</main></body></html>`);
 }
+function isJunkShortUrl(parsed, destination, providerHost) {
+  const host = String(parsed.hostname || '').toLowerCase();
+  const path = String(parsed.pathname || '').toLowerCase();
+  const href = parsed.toString().toLowerCase();
+
+  // Hard rejects: SVG namespaces, static assets, docs, self-destination
+  const blockedHosts = new Set([
+    'www.w3.org', 'w3.org', 'schema.org', 'example.com', 'example.org',
+    'localhost', '127.0.0.1',
+  ]);
+  if (blockedHosts.has(host)) return true;
+  if (host.endsWith('.w3.org')) return true;
+  if (path.includes('/2000/svg') || path.endsWith('.svg') || path.endsWith('.ico')) return true;
+  if (path.endsWith('.png') || path.endsWith('.jpg') || path.endsWith('.jpeg') || path.endsWith('.gif') || path.endsWith('.webp') || path.endsWith('.css') || path.endsWith('.js') || path.endsWith('.map')) return true;
+  if (path.includes('favicon')) return true;
+  if (href.includes('xmlns') || href.includes('/svg')) return true;
+
+  // Never treat the landing/destination URL as the short link
+  try {
+    const dest = new URL(String(destination));
+    if (parsed.origin === dest.origin && parsed.pathname === dest.pathname) return true;
+    if (path.includes('/get-key')) return true;
+  } catch {}
+
+  // Reject if hostname is empty or protocol is not http(s)
+  if (!host || !['http:', 'https:'].includes(parsed.protocol)) return true;
+  return false;
+}
+
+function scoreShortUrlCandidate(parsed, providerHost) {
+  const host = String(parsed.hostname || '').toLowerCase();
+  const path = String(parsed.pathname || '/');
+  let score = 10;
+  // Prefer same domain family as the configured shortener API host
+  if (providerHost) {
+    const ph = providerHost.toLowerCase();
+    if (host === ph || host.endsWith('.' + ph) || ph.endsWith('.' + host)) score += 50;
+    // Common shortener: API on onrender/com, short domain different
+    if (ph.includes('shortlink') && host.includes('short')) score += 20;
+  }
+  // Prefer short paths typical of shorteners (/abc12)
+  if (path.length > 1 && path.length <= 40 && !path.includes('.')) score += 15;
+  if (path.split('/').filter(Boolean).length <= 2) score += 5;
+  // Prefer https
+  if (parsed.protocol === 'https:') score += 3;
+  return score;
+}
+
 async function createVercelShortUrl(provider, destination) {
-  // The provider URL is the API endpoint (for example, https://shortlinkgenerator.onrender.com/api).
-  // Build the exact documented request: ?api=KEY&url=DESTINATION&format=json.
-  const endpoint = new URL(String(provider.url || '').trim());
-  endpoint.searchParams.set('api', String(provider.api_key || '').trim());
+  // Exact format: https://shortlinkgenerator.onrender.com/api?api=KEY&url=DEST&format=json
+  const rawBase = String(provider.url || '').trim();
+  if (!rawBase) throw new Error('Shortener provider URL is empty');
+  const apiKey = String(provider.api_key || '').trim();
+  if (!apiKey) throw new Error('Shortener API key is empty');
+
+  let endpoint;
+  try {
+    endpoint = new URL(rawBase);
+  } catch {
+    throw new Error('Invalid shortener provider URL');
+  }
+  // Replace api/url/format rather than appending duplicates
+  endpoint.searchParams.set('api', apiKey);
   endpoint.searchParams.set('url', String(destination));
   endpoint.searchParams.set('format', 'json');
+
+  const providerHost = endpoint.hostname;
   const response = await fetch(endpoint.toString(), {
     signal: AbortSignal.timeout(25000),
     redirect: 'follow',
-    headers: { Accept: 'application/json, text/plain, */*' },
+    headers: {
+      Accept: 'application/json, text/plain, */*',
+      'User-Agent': 'HITLER-YT-Shortener/1.0',
+    },
   });
   const body = await response.text();
-  if (!response.ok) throw new Error(`Shortener returned HTTP ${response.status}`);
+  if (!response.ok) {
+    throw new Error(`Shortener returned HTTP ${response.status}: ${body.replace(/\s+/g, ' ').slice(0, 160)}`);
+  }
 
   let data;
   try { data = JSON.parse(body); } catch { data = body; }
-  const candidates = [];
-  const urlFields = new Set([
-    'shortenedurl', 'shorturl', 'short_url', 'shortened_url', 'shortlink',
-    'short_link', 'shortenedlink', 'shortened_link', 'shortened', 'short',
-    'shortenedurl', 'shortened_link_url', 'shortened_url_link', 'url_short',
-    'link', 'url', 'result',
-  ]);
-  const collect = (value, depth = 0) => {
-    if (depth > 6 || value == null) return;
-    if (typeof value === 'string') {
-      candidates.push(value);
-      // Accept URLs embedded in labels such as `Short URL: https://...`.
-      const embedded = value.match(/https?:\/\/[^\s\"'<>\]]+/gi) || [];
-      candidates.push(...embedded.map((item) => item.replace(/[),.;]+$/, '')));
-      // Some APIs wrap the actual URL in a JSON-encoded string.
-      if ((value.startsWith('{') || value.startsWith('['))) {
-        try { collect(JSON.parse(value), depth + 1); } catch {}
-      }
+
+  // Priority field names used by shortlinkgenerator / similar APIs
+  const priorityFields = [
+    'shortenedUrl', 'shortenedurl', 'shorturl', 'short_url', 'shortened_url',
+    'shortlink', 'short_link', 'shortenedlink', 'shortened_link', 'shortened',
+    'short', 'result', 'link', 'url',
+  ];
+
+  const ranked = []; // {url, score}
+
+  const pushCandidate = (value, bonus = 0) => {
+    if (value == null) return;
+    const raw = String(value).trim().replace(/^['"`]+|['"`]+$/g, '');
+    if (!raw) return;
+    // Plain full URL
+    try {
+      const parsed = new URL(raw);
+      if (isJunkShortUrl(parsed, destination, providerHost)) return;
+      ranked.push({ url: parsed.toString(), score: scoreShortUrlCandidate(parsed, providerHost) + bonus });
       return;
-    }
-    if (Array.isArray(value)) {
-      for (const item of value) collect(item, depth + 1);
-      return;
-    }
-    if (typeof value === 'object') {
-      for (const [key, item] of Object.entries(value)) {
-        if (urlFields.has(key.toLowerCase())) collect(item, depth + 1);
-      }
-      // Also inspect nested `data`, `result`, `response`, and `shortener` envelopes.
-      for (const [key, item] of Object.entries(value)) {
-        if (item && typeof item === 'object' && !urlFields.has(key.toLowerCase())) collect(item, depth + 1);
-      }
+    } catch {}
+    // Extract URLs embedded in text (but filter junk)
+    const embedded = raw.match(/https?:\/\/[^\s"'<>\]]+/gi) || [];
+    for (let item of embedded) {
+      item = item.replace(/[),.;]+$/g, '');
+      try {
+        const parsed = new URL(item);
+        if (isJunkShortUrl(parsed, destination, providerHost)) continue;
+        ranked.push({ url: parsed.toString(), score: scoreShortUrlCandidate(parsed, providerHost) + bonus });
+      } catch {}
     }
   };
-  collect(data);
-  for (const value of candidates) {
-    try {
-      const candidate = String(value).trim().replace(/^['"`]|['"`]$/g, '');
-      const parsed = new URL(candidate);
-      if (['http:', 'https:'].includes(parsed.protocol) && parsed.hostname) return parsed.toString();
-    } catch {}
+
+  // 1) Prefer known JSON fields first (highest priority)
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    for (const field of priorityFields) {
+      // case-insensitive key match
+      for (const [k, v] of Object.entries(data)) {
+        if (k.toLowerCase() === field.toLowerCase()) pushCandidate(v, 100);
+      }
+    }
+    // Nested data / result envelopes
+    for (const nestKey of ['data', 'result', 'response', 'shortener', 'payload']) {
+      const nest = data[nestKey];
+      if (nest && typeof nest === 'object') {
+        for (const field of priorityFields) {
+          for (const [k, v] of Object.entries(nest)) {
+            if (k.toLowerCase() === field.toLowerCase()) pushCandidate(v, 80);
+          }
+        }
+      }
+    }
   }
+
+  // 2) Plain-text body that is only a URL
+  if (typeof data === 'string') {
+    const trimmed = data.trim();
+    if (/^https?:\/\//i.test(trimmed) && !trimmed.includes('<') && trimmed.length < 500) {
+      pushCandidate(trimmed, 90);
+    } else {
+      pushCandidate(trimmed, 0);
+    }
+  }
+
+  // 3) Fallback: scan remaining object string values carefully
+  if (data && typeof data === 'object') {
+    const walk = (value, depth = 0) => {
+      if (depth > 5 || value == null) return;
+      if (typeof value === 'string') {
+        pushCandidate(value, 0);
+        return;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value) walk(item, depth + 1);
+        return;
+      }
+      if (typeof value === 'object') {
+        for (const item of Object.values(value)) walk(item, depth + 1);
+      }
+    };
+    walk(data);
+  }
+
+  ranked.sort((a, b) => b.score - a.score);
+  if (ranked.length) return ranked[0].url;
+
   const apiMessage = data && typeof data === 'object'
-    ? String(data.message || data.error || data.detail || '').slice(0, 180)
+    ? String(data.message || data.error || data.detail || data.status || '').slice(0, 180)
     : '';
   const diagnostic = typeof body === 'string' ? body.replace(/\s+/g, ' ').slice(0, 240) : '';
-  throw new Error(apiMessage || `Shortener API returned no valid URL. Provider response: ${diagnostic || '(empty response)'}`);
+  throw new Error(apiMessage || `Shortener API returned no valid short URL. Response: ${diagnostic || '(empty)'}`);
 }
 
 export default async function handler(req, res) {
@@ -2205,16 +2314,24 @@ export default async function handler(req, res) {
         expires_at: now + expiry,
       });
       try {
-        // Shortlink API: https://shortlinkgenerator.onrender.com/api?api=KEY&url=LANDING&format=json
+        // Shortlink API: https://provider/api?api=KEY&url=LANDING&format=json
         const shortUrl = await createVercelShortUrl(provider, landing);
-        // Redirect browser directly to the original generated shortlink
+        // Final safety: never redirect to junk assets / SVG namespaces
+        let safe = false;
+        try {
+          const parsed = new URL(shortUrl);
+          safe = !isJunkShortUrl(parsed, landing, new URL(String(provider.url || 'https://invalid.local')).hostname);
+        } catch {}
+        if (!safe) {
+          throw new Error(`Provider returned an invalid short URL: ${String(shortUrl).slice(0, 120)}`);
+        }
         res.statusCode = 302;
         res.setHeader('Location', shortUrl);
         res.setHeader('Cache-Control', 'no-store');
         res.end();
       } catch (error) {
-        const detail = String(error.message || error).slice(0, 200);
-        sendHtml(res, 502, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shortener error</title></head><body style="background:#090d18;color:#fff;font:16px system-ui;display:grid;place-items:center;min-height:100vh"><main style="max-width:440px;padding:24px"><h1>Shortener API failed</h1><p>${escapeHtml(detail)}</p><p>You can still open the key page directly:</p><a href="${escapeHtml(landing)}" style="color:#38bdf8">Open key page</a><br><br><a href="${escapeHtml(target)}" style="color:#aab7ca">Back to title</a></main></body></html>`);
+        const detail = String(error.message || error).slice(0, 220);
+        sendHtml(res, 502, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shortener error</title></head><body style="background:#090d18;color:#fff;font:16px system-ui;display:grid;place-items:center;min-height:100vh"><main style="max-width:440px;padding:24px"><h1>Shortener API failed</h1><p>${escapeHtml(detail)}</p><p>Check /shorteners provider URL (must be the API endpoint) and API key.</p><p>Example API URL: <code style="color:#38bdf8">https://shortlinkgenerator.onrender.com/api</code></p><p>You can open the key page directly:</p><a href="${escapeHtml(landing)}" style="color:#38bdf8">Open key page</a><br><br><a href="${escapeHtml(target)}" style="color:#aab7ca">Back to title</a></main></body></html>`);
       }
       return;
     }
