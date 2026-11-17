@@ -53,35 +53,80 @@ async function getMongoClient() {
   return mongoClientPromise;
 }
 
+function dbCandidateNames() {
+  const envName = String(process.env.DATABASE_NAME || '').trim();
+  const uriName = extractDbNameFromUri(getMongoUri());
+  return [...new Set([envName, uriName, 'tg_media_bot', 'file2link'].filter(Boolean))];
+}
+
 async function getDatabase() {
   const client = await getMongoClient();
   if (resolvedDbName) return client.db(resolvedDbName);
 
-  const envName = String(process.env.DATABASE_NAME || '').trim();
-  const uriName = extractDbNameFromUri(getMongoUri());
-  // Match the Python bot's DATABASE_NAME/MONGODB_URI selection.  The shared
-  // configuration is stored in site_settings (not the legacy `settings` collection).
-  const candidates = [...new Set([envName, uriName, 'tg_media_bot', 'file2link'].filter(Boolean))];
-  const primary = envName || uriName || 'tg_media_bot';
+  const candidates = dbCandidateNames();
+  const primary = candidates[0] || 'tg_media_bot';
 
   try {
+    // Prefer a DB that already has shortener_config or catalog data from the bot.
+    let best = null;
+    let bestScore = -1;
     for (const candidate of candidates) {
       const db = client.db(candidate);
-      const counts = await Promise.all([
+      const [pages, settings, files, users, shortener] = await Promise.all([
         db.collection('catalog_pages').estimatedDocumentCount().catch(() => 0),
         db.collection('site_settings').estimatedDocumentCount().catch(() => 0),
         db.collection('files').estimatedDocumentCount().catch(() => 0),
         db.collection('users').estimatedDocumentCount().catch(() => 0),
+        db.collection('site_settings').findOne({ _id: 'shortener_config' }).catch(() => null),
       ]);
-      if (counts.some((count) => count > 0)) {
-        resolvedDbName = candidate;
-        return db;
+      const score =
+        (pages > 0 ? 8 : 0) +
+        (settings > 0 ? 4 : 0) +
+        (files > 0 ? 2 : 0) +
+        (users > 0 ? 1 : 0) +
+        (shortener && shortener.enabled ? 16 : shortener ? 6 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = candidate;
       }
+    }
+    if (best && bestScore > 0) {
+      resolvedDbName = best;
+      return client.db(best);
     }
   } catch {}
 
   resolvedDbName = primary;
   return client.db(primary);
+}
+
+function isShortenerEnabled(cfg) {
+  if (!cfg || typeof cfg !== 'object') return false;
+  const v = cfg.enabled;
+  return v === true || v === 1 || v === '1' || String(v).toLowerCase() === 'true';
+}
+
+/** Load shortener_config from the active DB, then fall back across candidate DBs. */
+async function loadShortenerConfig(db) {
+  try {
+    const local = await db.collection('site_settings').findOne({ _id: 'shortener_config' });
+    if (local && isShortenerEnabled(local)) return local;
+    if (local) {
+      // Keep disabled local config if nothing better is found later
+    }
+    const client = await getMongoClient();
+    for (const name of dbCandidateNames()) {
+      try {
+        if (resolvedDbName && name === resolvedDbName && local) continue;
+        const alt = await client.db(name).collection('site_settings').findOne({ _id: 'shortener_config' });
+        if (alt && isShortenerEnabled(alt)) return alt;
+        if (!local && alt) return alt;
+      } catch {}
+    }
+    return local || { enabled: false, shorteners: [], expiry_seconds: 300 };
+  } catch {
+    return { enabled: false, shorteners: [], expiry_seconds: 300 };
+  }
 }
 
 function sendJson(res, status, payload) {
@@ -1954,7 +1999,11 @@ function isShortenerHost(host) {
   return host === SHORTENER_HOST || host === `www.${SHORTENER_HOST}` || Boolean(configured && (host === configured || host === `www.${configured}`)) || host.endsWith('.vercel.app');
 }
 function isProtectedTitlePath(path) {
-  return typeof path === 'string' && path.startsWith('/title/') && path.length > 7 && !path.startsWith('//');
+  if (typeof path !== 'string') return false;
+  // Normalize: drop query already handled; trim trailing slash except root
+  let p = path.split('?')[0].split('#')[0].trim();
+  if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+  return p.startsWith('/title/') && p.length > 7 && !p.startsWith('//');
 }
 function parseCookies(req) {
   const out = {};
@@ -2133,10 +2182,10 @@ export default async function handler(req, res) {
     if (pathname === '/get-key-start' && req.method === 'GET') {
       const target = searchParams.get('target') || '';
       if (!isProtectedTitlePath(target)) { sendJson(res, 400, { error: 'Shortener is available only for /title/* pages' }); return; }
-      const cfg = await db.collection('site_settings').findOne({ _id: 'shortener_config' }) || {};
+      const cfg = await loadShortenerConfig(db);
       const providers = (cfg.shorteners || []).filter((x) => x && x.url && x.api_key);
-      if (!cfg.enabled || !providers.length) {
-        sendHtml(res, 503, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shortener offline</title></head><body style="background:#090d18;color:#fff;font:16px system-ui;display:grid;place-items:center;min-height:100vh"><main style="max-width:420px;padding:24px"><h1>No shortener configured</h1><p>An admin must enable shorteners in the bot (/shorteners) before Get Key works.</p><a href="${escapeHtml(target)}" style="color:#38bdf8">Back to page</a></main></body></html>`);
+      if (!isShortenerEnabled(cfg) || !providers.length) {
+        sendHtml(res, 503, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shortener offline</title></head><body style="background:#090d18;color:#fff;font:16px system-ui;display:grid;place-items:center;min-height:100vh"><main style="max-width:420px;padding:24px"><h1>No shortener configured</h1><p>Enable shorteners in the bot with /shorteners and add at least one provider API URL + key.</p><a href="${escapeHtml(target)}" style="color:#38bdf8">Back to page</a></main></body></html>`);
         return;
       }
       const provider = providers[Math.floor(Math.random() * providers.length)];
@@ -2207,13 +2256,30 @@ export default async function handler(req, res) {
     // Gate only GET/HEAD title routes. Homepage, search, watch, dl, stream and all APIs bypass.
     // One valid site_access cookie unlocks ALL /title/* pages for the configured expiry window.
     if (isProtectedTitlePath(pathname) && ['GET', 'HEAD'].includes(req.method)) {
-      const cfg = await db.collection('site_settings').findOne({ _id: 'shortener_config' }) || {};
-      if (cfg.enabled) {
-        const target = pathname + search;
+      const cfg = await loadShortenerConfig(db);
+      if (isShortenerEnabled(cfg)) {
+        const target = pathname + (search || '');
         const token = parseCookies(req).site_access || '';
         const now = Math.floor(Date.now() / 1000);
-        const authorized = token && await db.collection('access_keys').findOne({ token, expires_at: { $gt: now } });
-        if (!authorized) { sendKeyPage(res, target); return; }
+        let authorized = false;
+        if (token) {
+          // Check access_keys in active DB and alternates (bot may write to another name)
+          authorized = Boolean(await db.collection('access_keys').findOne({ token, expires_at: { $gt: now } }));
+          if (!authorized) {
+            try {
+              const client = await getMongoClient();
+              for (const name of dbCandidateNames()) {
+                if (resolvedDbName && name === resolvedDbName) continue;
+                const rec = await client.db(name).collection('access_keys').findOne({ token, expires_at: { $gt: now } });
+                if (rec) { authorized = true; break; }
+              }
+            } catch {}
+          }
+        }
+        if (!authorized) {
+          sendKeyPage(res, target);
+          return;
+        }
       }
     }
 
@@ -2574,8 +2640,53 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'GET' && pathname.startsWith('/title/')) {
-      const slug = decodeURIComponent(pathname.slice('/title/'.length));
-      const rawPage = await db.collection('catalog_pages').findOne({ slug, published: true }, { projection: { _id: 0 } });
+      // Final gate: never serve title HTML when shortener is enabled without a valid key
+      {
+        const cfg = await loadShortenerConfig(db);
+        if (isShortenerEnabled(cfg)) {
+          const target = pathname + (search || '');
+          const token = parseCookies(req).site_access || '';
+          const now = Math.floor(Date.now() / 1000);
+          let authorized = false;
+          if (token) {
+            authorized = Boolean(await db.collection('access_keys').findOne({ token, expires_at: { $gt: now } }));
+            if (!authorized) {
+              try {
+                const client = await getMongoClient();
+                for (const name of dbCandidateNames()) {
+                  if (resolvedDbName && name === resolvedDbName) continue;
+                  const rec = await client.db(name).collection('access_keys').findOne({ token, expires_at: { $gt: now } });
+                  if (rec) { authorized = true; break; }
+                }
+              } catch {}
+            }
+          }
+          if (!authorized) {
+            sendKeyPage(res, target);
+            return;
+          }
+        }
+      }
+      let slug = decodeURIComponent(pathname.slice('/title/'.length));
+      if (slug.endsWith('/')) slug = slug.slice(0, -1);
+      let rawPage = await db.collection('catalog_pages').findOne({ slug, published: true }, { projection: { _id: 0 } });
+      if (!rawPage) {
+        // case-insensitive / alternate DB fallback for the page itself
+        rawPage = await db.collection('catalog_pages').findOne(
+          { slug: { $regex: `^${slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' }, published: true },
+          { projection: { _id: 0 } },
+        );
+      }
+      if (!rawPage) {
+        try {
+          const client = await getMongoClient();
+          for (const name of dbCandidateNames()) {
+            if (resolvedDbName && name === resolvedDbName) continue;
+            rawPage = await client.db(name).collection('catalog_pages').findOne({ slug, published: true }, { projection: { _id: 0 } });
+            if (rawPage) break;
+          }
+        } catch {}
+      }
       if (!rawPage) {
         sendHtml(
           res,

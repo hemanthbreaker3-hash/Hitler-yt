@@ -101,6 +101,89 @@ def extract_filename_from_caption(caption: str | None, fallback: str) -> str:
     return fallback
 
 
+async def find_catalog_page(slug_or_title: str) -> dict | None:
+    """Resolve a catalog page by slug (exact, then case-insensitive) or title fragment.
+
+    Searches the bot DATABASE_NAME first, then alternate names Vercel may use
+    (tg_media_bot / file2link) so website pages are findable even if env differs slightly.
+    """
+    from app.database.connection import client as mongo_client
+
+    raw = (slug_or_title or "").strip()
+    if not raw:
+        return None
+    slug = raw.lower().strip("/")
+    title_q = re.sub(r"[-_]+", " ", slug).strip()
+
+    primary_name = getattr(settings, "DATABASE_NAME", None) or "tg_media_bot"
+    names = []
+    for n in (primary_name, "tg_media_bot", "file2link"):
+        if n and n not in names:
+            names.append(n)
+
+    for db_name in names:
+        try:
+            coll = mongo_client[db_name]["catalog_pages"]
+        except Exception:
+            continue
+        page = await coll.find_one({"slug": slug})
+        if page:
+            page["_db_name"] = db_name
+            return page
+        page = await coll.find_one({"slug": {"$regex": f"^{re.escape(slug)}$", "$options": "i"}})
+        if page:
+            page["_db_name"] = db_name
+            return page
+        if title_q:
+            page = await coll.find_one({"title": {"$regex": re.escape(title_q), "$options": "i"}})
+            if page:
+                page["_db_name"] = db_name
+                return page
+    return None
+
+
+async def catalog_page_suggestions(query: str, limit: int = 8) -> list[str]:
+    """Return short suggestion lines when a page lookup fails (searches primary + alternate DBs)."""
+    from app.database.connection import client as mongo_client
+
+    q = (query or "").strip()
+    lines: list[str] = []
+    seen_slugs: set[str] = set()
+    primary_name = getattr(settings, "DATABASE_NAME", None) or "tg_media_bot"
+    names = []
+    for n in (primary_name, "tg_media_bot", "file2link"):
+        if n and n not in names:
+            names.append(n)
+    try:
+        filt: dict = {}
+        if q:
+            safe = re.escape(re.sub(r"[-_]+", " ", q.lower()))
+            filt = {
+                "$or": [
+                    {"slug": {"$regex": re.escape(q), "$options": "i"}},
+                    {"title": {"$regex": safe, "$options": "i"}},
+                ]
+            }
+        for db_name in names:
+            try:
+                coll = mongo_client[db_name]["catalog_pages"]
+                cursor = coll.find(filt or {}, {"slug": 1, "title": 1, "published": 1}).sort("updated_at", -1).limit(limit)
+                async for doc in cursor:
+                    slug = doc.get("slug") or ""
+                    if slug in seen_slugs:
+                        continue
+                    seen_slugs.add(slug)
+                    pub = "✓" if doc.get("published") else "draft"
+                    lines.append(f"• `{slug}` — {doc.get('title') or '?'} ({pub}) [{db_name}]")
+                    if len(lines) >= limit:
+                        return lines
+            except Exception:
+                continue
+    except Exception as e:
+        logger.warning("catalog suggestions failed: %s", e)
+    return lines
+
+
 def parse_groups_text(text: str, box: str = "watch") -> list[dict]:
     """
     Parse admin group/button text into structured groups.
@@ -296,10 +379,25 @@ def register_handlers(bot):
             await _show_shortener_settings(callback.message)
             return
         if action == "toggle":
-            await db.site_settings.update_one({"_id":"shortener_config"},{"$set":{"enabled":not cfg.get("enabled",False)}},upsert=True)
+            new_enabled = not bool(cfg.get("enabled", False))
+            await db.site_settings.update_one(
+                {"_id": "shortener_config"},
+                {
+                    "$set": {
+                        "enabled": new_enabled,
+                        "shorteners": list(cfg.get("shorteners") or []),
+                        "expiry_seconds": int(cfg.get("expiry_seconds") or 300),
+                    }
+                },
+                upsert=True,
+            )
+            logger.info("Admin %s set shortener enabled=%s", user.id, new_enabled)
         elif action == "add":
             _awaiting_shortener[user.id] = "url"
-            return await callback.message.reply("Send the shortener API URL (for example, your Shortlino API endpoint).")
+            return await callback.message.reply(
+                "Send the shortener API URL.\n"
+                "Example: `https://shortlinkgenerator.onrender.com/api`"
+            )
         elif action == "expiry":
             _awaiting_shortener[user.id] = "expiry"
             return await callback.message.reply("Send key expiry, e.g. `300s`, `5m`, `2h`, `1d` or `300` (seconds).")
@@ -802,10 +900,15 @@ def register_handlers(bot):
             if not page_slug:
                 _awaiting_addgroups.pop(user.id, None)
                 return await message.reply("Session expired. Reply to a page link with /addgroups again.")
-            page = await db.catalog_pages.find_one({"slug": page_slug})
+            page = await find_catalog_page(page_slug)
             if not page:
                 _awaiting_addgroups.pop(user.id, None)
-                return await message.reply("Catalog page not found.")
+                return await message.reply(
+                    f"Catalog page `{page_slug}` not found in bot DB.\n"
+                    "Confirm `DATABASE_NAME` matches the database used by the Vercel website."
+                )
+            page_slug = page.get("slug") or page_slug
+            target_db_name = page.get("_db_name") or getattr(settings, "DATABASE_NAME", None) or "tg_media_bot"
             new_groups = parse_groups_text(raw, box=box)
             if not new_groups:
                 return await message.reply(
@@ -825,7 +928,9 @@ def register_handlers(bot):
             if cf:
                 from app.utils.helpers import rewrite_page_groups_to_cloudflare
                 merged = rewrite_page_groups_to_cloudflare(merged, cf)
-            await db.catalog_pages.update_one(
+            from app.database.connection import client as mongo_client
+            target_coll = mongo_client[target_db_name]["catalog_pages"]
+            await target_coll.update_one(
                 {"slug": page_slug},
                 {"$set": {"groups": merged, "updated_at": datetime.datetime.now(datetime.timezone.utc)}},
             )
@@ -835,7 +940,8 @@ def register_handlers(bot):
                 f"✅ **Groups saved** for `/{page_slug}`\n\n"
                 f"> Box: **{box.upper()}**\n"
                 f"> Groups added: `{len(new_groups)}`\n"
-                f"> Buttons added: `{total_btns}`\n\n"
+                f"> Buttons added: `{total_btns}`\n"
+                f"> DB: `{target_db_name}`\n\n"
                 f"They are now live on the page Watch/Download section."
             )
 
@@ -1517,28 +1623,61 @@ def register_handlers(bot):
         source_text = ""
         if reply:
             source_text = (getattr(reply, "text", None) or getattr(reply, "caption", None) or "")
-        # Also allow /addgroups <url-or-slug> in the command itself
+            # Prefer href from entities if the link is hyperlinked
+            for ent in (getattr(reply, "entities", None) or getattr(reply, "caption_entities", None) or []):
+                url = getattr(ent, "url", None)
+                if url and "/title/" in url:
+                    source_text = f"{source_text} {url}"
         parts = (message.text or "").split(maxsplit=1)
         if len(parts) > 1:
             source_text = (source_text + " " + parts[1]).strip()
-        match = re.search(r"/title/([a-z0-9-]+)", source_text, re.I)
-        if not match:
+
+        page_slug = None
+        match = re.search(r"/title/([A-Za-z0-9_-]+)", source_text or "", re.I)
+        if match:
+            page_slug = match.group(1).lower()
+        elif parts and len(parts) > 1:
+            # Bare slug: /addgroups premada-oorali
+            bare = parts[1].strip().strip("/")
+            if re.fullmatch(r"[A-Za-z0-9_-]+", bare):
+                page_slug = bare.lower()
+
+        if not page_slug:
+            suggestions = await catalog_page_suggestions("", limit=8)
+            tip = "\n".join(suggestions) if suggestions else "_No pages in database yet. Create one with /search or the website panel._"
             return await message.reply(
-                "📌 **Usage:** Reply to a published `/title/...` page link with `/addgroups`\n\n"
-                "Or: `/addgroups https://yoursite.vercel.app/title/slug`"
+                "📌 **Usage**\n"
+                "• Reply to a `/title/...` page link with `/addgroups`\n"
+                "• Or: `/addgroups https://hitler-yt.vercel.app/title/slug`\n"
+                "• Or: `/addgroups slug-name`\n\n"
+                f"**Recent pages:**\n{tip}"
             )
-        page_slug = match.group(1)
-        page = await db.catalog_pages.find_one({"slug": page_slug})
+
+        page = await find_catalog_page(page_slug)
         if not page:
-            return await message.reply(f"❌ Catalog page `{page_slug}` not found.")
+            suggestions = await catalog_page_suggestions(page_slug, limit=8)
+            tip = "\n".join(suggestions) if suggestions else (
+                "_No matching pages. Check `DATABASE_NAME` matches the Vercel MongoDB "
+                "(often `tg_media_bot` or `file2link`), and that the page was published._"
+            )
+            return await message.reply(
+                f"❌ Catalog page `{page_slug}` not found in the bot database.\n\n"
+                f"**Closest matches:**\n{tip}\n\n"
+                "If the website shows this page but the bot cannot, the bot and Vercel "
+                "may be using different MongoDB database names."
+            )
+
+        page_slug = page.get("slug") or page_slug
         kb = _kb([
             [
                 InlineKeyboardButton("📥 Download", callback_data=f"addg:dl:{page_slug}"),
                 InlineKeyboardButton("▶️ Watch", callback_data=f"addg:wt:{page_slug}"),
             ]
         ])
+        title = page.get("title") or page_slug
         await message.reply(
-            f"📁 **Add Groups** for page `{page_slug}`\n\n"
+            f"📁 **Add Groups** for **{html.escape(str(title))}**\n"
+            f"`/title/{page_slug}`\n\n"
             f"Choose which section to configure:",
             reply_markup=kb,
         )
@@ -1553,9 +1692,10 @@ def register_handlers(bot):
             return await callback.answer("Invalid data", show_alert=True)
         box = "download" if parts[1] == "dl" else "watch"
         page_slug = parts[2]
-        page = await db.catalog_pages.find_one({"slug": page_slug})
+        page = await find_catalog_page(page_slug)
         if not page:
-            return await callback.answer("Page not found", show_alert=True)
+            return await callback.answer("Page not found in bot DB", show_alert=True)
+        page_slug = page.get("slug") or page_slug
         _awaiting_addgroups[user.id] = {"page_slug": page_slug, "box": box}
         try:
             await callback.message.edit_text(
