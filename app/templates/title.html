@@ -17,7 +17,15 @@
   .group-block h3{font-size:14px;margin:0 0 10px;color:#e5e7eb}
   .tools{display:flex;flex-wrap:wrap;gap:8px}
   .tools .btn-yellow{font-size:13px;padding:10px 16px}
-  @media(max-width:650px){.detail{grid-template-columns:1fr}.detail img{max-width:200px}}
+  .groups-pager{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid #263b56}
+  .groups-pager .pg-btn{background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:8px;padding:8px 12px;font:600 13px system-ui;cursor:pointer}
+  .groups-pager .pg-btn:disabled{opacity:.4;cursor:not-allowed}
+  .groups-pager .pg-info{color:#94a3b8;font-size:13px;min-width:90px;text-align:center}
+  .groups-pager .pg-jump{display:flex;align-items:center;gap:6px;margin-left:auto}
+  .groups-pager .pg-jump label{color:#94a3b8;font-size:12px}
+  .groups-pager .pg-jump input{width:64px;background:#0b1220;border:1px solid #334155;color:#fff;border-radius:8px;padding:8px 10px;font:600 13px system-ui;text-align:center}
+  .groups-pager .pg-jump button{background:#38bdf8;border:0;color:#0b1220;border-radius:8px;padding:8px 12px;font:700 13px system-ui;cursor:pointer}
+  @media(max-width:650px){.detail{grid-template-columns:1fr}.detail img{max-width:200px}.groups-pager .pg-jump{margin-left:0;width:100%}}
 </style>
 {% endblock %}
 {% block content %}
@@ -38,13 +46,13 @@
     {% if page.tagline %}<p style="margin-top:8px"><em>{{ page.tagline }}</em></p>{% endif %}
     {% set all_groups = page.groups or [] %}
     {% for box_key, box_title, box_icon in [('watch', 'Watch', '▶'), ('download', 'Download', '⬇')] %}
-    <section class="link-box {{ box_key }}" aria-label="{{ box_title }} links">
+    <section class="link-box {{ box_key }}" aria-label="{{ box_title }} links" data-box="{{ box_key }}">
       <h2><span aria-hidden="true">{{ box_icon }}</span>{{ box_title }}</h2>
       {% set box_groups = all_groups|selectattr('box', 'equalto', box_key)|list %}
-      {# Legacy groups without a box are retained in Watch. #}
       {% if box_key == 'watch' %}{% set box_groups = box_groups + (all_groups|rejectattr('box', 'defined')|list) %}{% endif %}
+      <div class="groups-list" data-box="{{ box_key }}">
       {% for group in box_groups %}
-      <div class="group-block">
+      <div class="group-block" data-group-index="{{ loop.index0 }}">
         <h3>{{ group.name }}</h3>
         <div class="tools">
           {% for button in group.buttons or [] %}
@@ -53,8 +61,21 @@
         </div>
       </div>
       {% else %}
-      <p class="muted" style="margin:0;font-size:13px">No {{ box_title|lower }} links added yet.</p>
+      <p class="muted groups-empty" style="margin:0;font-size:13px">No {{ box_title|lower }} links added yet.</p>
       {% endfor %}
+      </div>
+      {% if box_groups|length > 5 %}
+      <div class="groups-pager" data-box="{{ box_key }}" data-total="{{ box_groups|length }}" data-per-page="5" hidden>
+        <button type="button" class="pg-btn pg-prev" aria-label="Previous page">← Prev</button>
+        <span class="pg-info">Page <span class="pg-cur">1</span> / <span class="pg-max">1</span></span>
+        <button type="button" class="pg-btn pg-next" aria-label="Next page">Next →</button>
+        <div class="pg-jump">
+          <label for="pg-jump-{{ box_key }}">Go to</label>
+          <input id="pg-jump-{{ box_key }}" class="pg-input" type="number" min="1" inputmode="numeric" placeholder="#">
+          <button type="button" class="pg-go">Go</button>
+        </div>
+      </div>
+      {% endif %}
     </section>
     {% endfor %}
   </div>
@@ -98,3 +119,57 @@
 })();
 </script>
 {% endblock %}
+
+<script>
+(function () {
+  const PER = 5;
+  function setupBox(boxKey) {
+    const list = document.querySelector('.groups-list[data-box="' + boxKey + '"]');
+    const pager = document.querySelector('.groups-pager[data-box="' + boxKey + '"]');
+    if (!list) return;
+    const blocks = Array.from(list.querySelectorAll('.group-block'));
+    if (blocks.length <= PER) return;
+    if (pager) pager.hidden = false;
+    let page = 1;
+    const max = Math.max(1, Math.ceil(blocks.length / PER));
+    const curEl = pager && pager.querySelector('.pg-cur');
+    const maxEl = pager && pager.querySelector('.pg-max');
+    const prevBtn = pager && pager.querySelector('.pg-prev');
+    const nextBtn = pager && pager.querySelector('.pg-next');
+    const input = pager && pager.querySelector('.pg-input');
+    const goBtn = pager && pager.querySelector('.pg-go');
+    if (maxEl) maxEl.textContent = String(max);
+    if (input) { input.max = String(max); input.min = '1'; }
+
+    function render() {
+      page = Math.min(Math.max(1, page), max);
+      const start = (page - 1) * PER;
+      const end = start + PER;
+      blocks.forEach((el, i) => { el.style.display = (i >= start && i < end) ? '' : 'none'; });
+      if (curEl) curEl.textContent = String(page);
+      if (prevBtn) prevBtn.disabled = page <= 1;
+      if (nextBtn) nextBtn.disabled = page >= max;
+      if (input) input.value = '';
+    }
+    function goTo(n) {
+      const num = parseInt(n, 10);
+      if (!Number.isFinite(num) || num < 1) return;
+      page = num;
+      render();
+    }
+    if (prevBtn) prevBtn.addEventListener('click', () => { page -= 1; render(); });
+    if (nextBtn) nextBtn.addEventListener('click', () => { page += 1; render(); });
+    if (goBtn && input) {
+      goBtn.addEventListener('click', () => goTo(input.value));
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); goTo(input.value); }
+      });
+      input.addEventListener('change', () => goTo(input.value));
+    }
+    render();
+  }
+  setupBox('watch');
+  setupBox('download');
+})();
+</script>
+

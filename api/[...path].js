@@ -1086,7 +1086,15 @@ function renderTitleHtml(page, cloudflareUrl) {
     .link-box.watch h2{color:#60a5fa}.link-box.download h2{color:#34d399}
     .group-block{background:#0b1728;border:1px solid #263b56;border-radius:10px;padding:12px;margin-top:10px}
     .group-block h3{font-size:14px;margin:0 0 10px;color:#e5e7eb}
-    @media(max-width:650px){.detail{grid-template-columns:1fr}.detail img{max-width:200px}}
+    .groups-pager{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid #263b56}
+    .groups-pager .pg-btn{background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:8px;padding:8px 12px;font:600 13px system-ui;cursor:pointer}
+    .groups-pager .pg-btn:disabled{opacity:.4;cursor:not-allowed}
+    .groups-pager .pg-info{color:#94a3b8;font-size:13px;min-width:90px;text-align:center}
+    .groups-pager .pg-jump{display:flex;align-items:center;gap:6px;margin-left:auto}
+    .groups-pager .pg-jump label{color:#94a3b8;font-size:12px}
+    .groups-pager .pg-jump input{width:64px;background:#0b1220;border:1px solid #334155;color:#fff;border-radius:8px;padding:8px 10px;font:600 13px system-ui;text-align:center}
+    .groups-pager .pg-jump button{background:#38bdf8;border:0;color:#0b1220;border-radius:8px;padding:8px 12px;font:700 13px system-ui;cursor:pointer}
+    @media(max-width:650px){.detail{grid-template-columns:1fr}.detail img{max-width:200px}.groups-pager .pg-jump{margin-left:0;width:100%}}
   </style>`;
 
   const poster = pagePosterPath(page.poster_path);
@@ -1099,27 +1107,44 @@ function renderTitleHtml(page, cloudflareUrl) {
   const boxesHtml = boxes
     .map(([boxKey, boxTitle, boxIcon]) => {
       const boxGroups = allGroups.filter((g) => (g?.box || 'watch') === boxKey);
-      const groupsContent = boxGroups.length
-        ? boxGroups
-            .map((group) => {
-              const buttons = Array.isArray(group.buttons) ? group.buttons : [];
-              const btnsHtml = buttons
-                .map(
-                  (btn) =>
-                    `<a class="btn-yellow cf-media-btn" href="${escapeHtml(btn.url || '#')}" data-raw-url="${escapeHtml(btn.url || '#')}" rel="noopener" target="_blank">${escapeHtml(btn.name || 'Link')}</a>`,
-                )
-                .join('');
-              return `<div class="group-block">
+      let groupsContent;
+      if (!boxGroups.length) {
+        groupsContent = `<p class="muted groups-empty" style="margin:0;font-size:13px">No ${escapeHtml(boxTitle.toLowerCase())} links added yet.</p>`;
+      } else {
+        groupsContent = boxGroups
+          .map((group, idx) => {
+            const buttons = Array.isArray(group.buttons) ? group.buttons : [];
+            const btnsHtml = buttons
+              .map(
+                (btn) =>
+                  `<a class="btn-yellow cf-media-btn" href="${escapeHtml(btn.url || '#')}" data-raw-url="${escapeHtml(btn.url || '#')}" rel="noopener" target="_blank">${escapeHtml(btn.name || 'Link')}</a>`,
+              )
+              .join('');
+            return `<div class="group-block" data-group-index="${idx}">
                 <h3>${escapeHtml(group.name || '')}</h3>
                 <div class="tools">${btnsHtml}</div>
               </div>`;
-            })
-            .join('')
-        : `<p class="muted" style="margin:0;font-size:13px">No ${escapeHtml(boxTitle.toLowerCase())} links added yet.</p>`;
+          })
+          .join('');
+      }
+      const pagerHtml =
+        boxGroups.length > 5
+          ? `<div class="groups-pager" data-box="${boxKey}" data-total="${boxGroups.length}" data-per-page="5">
+        <button type="button" class="pg-btn pg-prev" aria-label="Previous page">← Prev</button>
+        <span class="pg-info">Page <span class="pg-cur">1</span> / <span class="pg-max">1</span></span>
+        <button type="button" class="pg-btn pg-next" aria-label="Next page">Next →</button>
+        <div class="pg-jump">
+          <label for="pg-jump-${boxKey}">Go to</label>
+          <input id="pg-jump-${boxKey}" class="pg-input" type="number" min="1" inputmode="numeric" placeholder="#">
+          <button type="button" class="pg-go">Go</button>
+        </div>
+      </div>`
+          : '';
 
-      return `<section class="link-box ${boxKey}" aria-label="${escapeHtml(boxTitle)} links">
+      return `<section class="link-box ${boxKey}" aria-label="${escapeHtml(boxTitle)} links" data-box="${boxKey}">
         <h2><span aria-hidden="true">${boxIcon}</span>${escapeHtml(boxTitle)}</h2>
-        ${groupsContent}
+        <div class="groups-list" data-box="${boxKey}">${groupsContent}</div>
+        ${pagerHtml}
       </section>`;
     })
     .join('');
@@ -1182,6 +1207,51 @@ function renderTitleHtml(page, cloudflareUrl) {
       if (latestCf) applyCloudflareButtons(latestCf);
     }
   } catch (_) {}
+})();
+(function(){
+  var PER=5;
+  function setupBox(boxKey){
+    var list=document.querySelector('.groups-list[data-box="'+boxKey+'"]');
+    var pager=document.querySelector('.groups-pager[data-box="'+boxKey+'"]');
+    if(!list) return;
+    var blocks=Array.prototype.slice.call(list.querySelectorAll('.group-block'));
+    if(blocks.length<=PER){ if(pager) pager.style.display='none'; return; }
+    if(pager) pager.style.display='flex';
+    var page=1;
+    var max=Math.max(1,Math.ceil(blocks.length/PER));
+    var curEl=pager&&pager.querySelector('.pg-cur');
+    var maxEl=pager&&pager.querySelector('.pg-max');
+    var prevBtn=pager&&pager.querySelector('.pg-prev');
+    var nextBtn=pager&&pager.querySelector('.pg-next');
+    var input=pager&&pager.querySelector('.pg-input');
+    var goBtn=pager&&pager.querySelector('.pg-go');
+    if(maxEl) maxEl.textContent=String(max);
+    if(input){ input.max=String(max); input.min='1'; }
+    function render(){
+      page=Math.min(Math.max(1,page),max);
+      var start=(page-1)*PER, end=start+PER;
+      blocks.forEach(function(el,i){ el.style.display=(i>=start&&i<end)?'':'none'; });
+      if(curEl) curEl.textContent=String(page);
+      if(prevBtn) prevBtn.disabled=page<=1;
+      if(nextBtn) nextBtn.disabled=page>=max;
+      if(input) input.value='';
+    }
+    function goTo(n){
+      var num=parseInt(n,10);
+      if(!isFinite(num)||num<1) return;
+      page=num; render();
+    }
+    if(prevBtn) prevBtn.addEventListener('click',function(){ page-=1; render(); });
+    if(nextBtn) nextBtn.addEventListener('click',function(){ page+=1; render(); });
+    if(goBtn&&input){
+      goBtn.addEventListener('click',function(){ goTo(input.value); });
+      input.addEventListener('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); goTo(input.value); } });
+      input.addEventListener('change',function(){ goTo(input.value); });
+    }
+    render();
+  }
+  setupBox('watch');
+  setupBox('download');
 })();
 </script>`;
 
