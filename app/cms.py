@@ -37,6 +37,7 @@ class SettingsUpdate(BaseModel):
     backend_url: str | None = Field(default=None, max_length=500)
     base_url: str | None = Field(default=None, max_length=500)
     cloudflare_url: str | None = Field(default=None, max_length=500)
+    filestore_bot_username: str | None = Field(default=None, max_length=64)
 
 
 class CategoryInput(BaseModel):
@@ -157,12 +158,14 @@ async def get_settings():
     if not isinstance(website_urls, list):
         website_urls = [str(website_urls)] if website_urls else []
     website_urls = [u for u in website_urls if not is_trycloudflare_url(str(u))]
+    fs_user = (doc.get('filestore_bot_username') or '').strip().lstrip('@')
     return {
         'downloads_enabled': doc.get('downloads_enabled', True),
         'streaming_enabled': doc.get('streaming_enabled', True),
         'built_in_player_enabled': doc.get('built_in_player_enabled', True),
         'auto_player_redirect': doc.get('auto_player_redirect', False),
         'access_mode': doc.get('access_mode', 'all'),
+        'filestore_bot_username': fs_user,
         'base_url': cf_url or urls.get('base_url') or settings.BASE_URL,
         'backend_url': cf_url or urls.get('backend_url') or (settings.BACKEND_URL or ''),
         'cloudflare_url': cf_url,

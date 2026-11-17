@@ -248,6 +248,7 @@ async def setup_bot_commands(bot):
             BotCommand("password", "Set website panel password (admin)"),
             BotCommand("backendurl", "Set backend / Cloudflare URL (admin)"),
             BotCommand("baseurl", "Set primary / Cloudflare URL (admin)"),
+            BotCommand("filestore", "Set FileStore bot for deep-link downloads (admin)"),
             BotCommand("categories", "Manage categories (admin)"),
             BotCommand("edit", "Open page editor (admin)"),
             BotCommand("search", "Search catalog (admin)"),
@@ -446,6 +447,55 @@ def register_handlers(bot):
                     )
                 except Exception as e:
                     logger.error("Error sending new user log: %s", e)
+
+        # ── FileStore deep-link: /start <short_code> or /start file_<short_code> ──
+        # When downloads are disabled, users are sent here via t.me/Bot?start=CODE
+        # and must receive the file directly in chat.
+        payload = ""
+        try:
+            parts = (message.text or "").split(maxsplit=1)
+            if len(parts) > 1:
+                payload = parts[1].strip()
+        except Exception:
+            payload = ""
+        if payload:
+            code = payload
+            if code.lower().startswith("file_"):
+                code = code[5:]
+            code = code.strip()
+            if code:
+                file_data = await files_col.find_one({"short_code": code})
+                if file_data:
+                    if not await is_user_fsubbed(client, user_id):
+                        return await message.reply(
+                            "🔒 **Access Restricted**\n\n"
+                            "> Join our official updates channel, then open the download link again.",
+                            reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
+                        )
+                    try:
+                        chat_id = file_data.get("chat_id")
+                        message_id = file_data.get("message_id")
+                        if chat_id is not None and message_id is not None:
+                            await client.copy_message(
+                                chat_id=user_id,
+                                from_chat_id=chat_id,
+                                message_id=message_id,
+                            )
+                            fname = file_data.get("filename") or "file"
+                            await message.reply(
+                                f"✅ **File delivered**\n\n📂 `{html.escape(str(fname))}`\n\n"
+                                "You can save it from the message above.",
+                                parse_mode=ParseMode.HTML,
+                            )
+                            return
+                    except Exception as e:
+                        logger.exception("FileStore delivery failed for short_code=%s: %s", code, e)
+                        return await message.reply(
+                            "❌ Could not deliver this file right now. Please try again later."
+                        )
+                else:
+                    # Unknown code — fall through to normal greeting (avoid leaking existence)
+                    pass
 
         if not await is_user_fsubbed(client, user_id):
             return await message.reply(
@@ -662,9 +712,10 @@ def register_handlers(bot):
         runtime_cfg = await db.site_settings.find_one({"_id": "runtime"}) or {}
         downloads_enabled = runtime_cfg.get("downloads_enabled", True)
         streaming_enabled = runtime_cfg.get("streaming_enabled", True)
+        fs_configured = bool((runtime_cfg.get("filestore_bot_username") or "").strip())
         if explicit_link_request:
             downloads_enabled = streaming_enabled = True
-        if not downloads_enabled and not streaming_enabled:
+        if not downloads_enabled and not streaming_enabled and not fs_configured:
             return await message.reply("🚫 **Service Disabled**\n\n> Downloads and streaming are currently disabled by the administrator.")
         user_data = await users_col.find_one({"user_id": user.id})
         if user_data and user_data.get("is_banned"):
@@ -781,13 +832,26 @@ def register_handlers(bot):
         safe_mime = html.escape(mime_type)
 
         if links_ready:
-            download_url = f"{base_url}/dl/{short_code}" if downloads_enabled else None
+            # When downloads are disabled, replace /dl/ with FileStore deep link if configured
+            fs_username = (runtime_cfg.get("filestore_bot_username") or "").strip().lstrip("@")
+            if downloads_enabled:
+                download_url = f"{base_url}/dl/{short_code}"
+            elif fs_username:
+                download_url = f"https://t.me/{fs_username}?start=file_{short_code}"
+            else:
+                download_url = None
             stream_url = f"{base_url}/watch/{short_code}" if streaming_enabled else None
             active_links = []
             button_rows = []
-            if downloads_enabled:
-                active_links.append(f"⚡ <a href=\"{html.escape(download_url, quote=True)}\">Direct Download</a>")
-                button_rows.append(InlineKeyboardButton("⚡ Direct Download", url=download_url))
+            if download_url:
+                if downloads_enabled:
+                    label = "⚡ Direct Download"
+                    link_text = "Direct Download"
+                else:
+                    label = "📥 Get File in Bot"
+                    link_text = "Get File in Bot"
+                active_links.append(f"📥 <a href=\"{html.escape(download_url, quote=True)}\">{link_text}</a>" if not downloads_enabled else f"⚡ <a href=\"{html.escape(download_url, quote=True)}\">{link_text}</a>")
+                button_rows.append(InlineKeyboardButton(label, url=download_url))
             if streaming_enabled:
                 active_links.append(f"🍿 <a href=\"{html.escape(stream_url, quote=True)}\">Watch Online</a>")
                 button_rows.append(InlineKeyboardButton("🍿 Watch Online", url=stream_url))
@@ -965,9 +1029,10 @@ def register_handlers(bot):
         runtime_cfg = await db.site_settings.find_one({"_id": "runtime"}) or {}
         downloads_enabled = runtime_cfg.get("downloads_enabled", True)
         streaming_enabled = runtime_cfg.get("streaming_enabled", True)
+        fs_configured = bool((runtime_cfg.get("filestore_bot_username") or "").strip())
         if _is_admin_user(user.id):
             downloads_enabled = streaming_enabled = True
-        if not downloads_enabled and not streaming_enabled:
+        if not downloads_enabled and not streaming_enabled and not fs_configured:
             return await message.reply("🚫 Downloads and streaming are currently disabled.")
         status = await message.reply("🔎 Checking Telegram message access…")
         try:
@@ -1050,10 +1115,15 @@ def register_handlers(bot):
                 return await status.edit_text("⚠️ Media access is confirmed, but the public link host is not configured yet. Set /baseurl and retry.")
 
             links, buttons = [], []
+            fs_username = (runtime_cfg.get("filestore_bot_username") or "").strip().lstrip("@")
             if downloads_enabled:
                 dl = f"{base_url}/dl/{short_code}"
                 links.append(f'⬇️ <a href="{html.escape(dl, quote=True)}">Direct Download</a>')
                 buttons.append(InlineKeyboardButton("⬇️ Download", url=dl))
+            elif fs_username:
+                dl = f"https://t.me/{fs_username}?start=file_{short_code}"
+                links.append(f'📥 <a href="{html.escape(dl, quote=True)}">Get File in Bot</a>')
+                buttons.append(InlineKeyboardButton("📥 Get File in Bot", url=dl))
             if streaming_enabled:
                 watch = f"{base_url}/watch/{short_code}"
                 links.append(f'▶️ <a href="{html.escape(watch, quote=True)}">Watch / Stream</a>')
@@ -1519,6 +1589,102 @@ def register_handlers(bot):
         except Exception as e:
             logger.error("Error updating baseurl: %s", e)
             await message.reply(f"❌ **Error updating Base URL:** `{e}`")
+
+    @bot.on_message(filters.command("filestore") & filters.private)
+    async def filestore_handler(client, message: Message):
+        """Configure FileStore bot for deep-link downloads when site downloads are disabled.
+
+        Usage:
+          /filestore                  → show current setting
+          /filestore @BotUsername     → set the bot that receives deep links
+          /filestore BotUsername      → same (without @)
+          /filestore off              → clear / disable
+        """
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        if not _is_admin_user(user.id):
+            return await message.reply(
+                "🚫 **Unauthorized Access**\n\n"
+                "> Only authorized bot administrators can configure FileStore."
+            )
+
+        args = (message.text or "").split(maxsplit=1)
+        runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+        current = (runtime.get("filestore_bot_username") or "").strip().lstrip("@")
+
+        if len(args) < 2:
+            status = f"@{current}" if current else "*(not set)*"
+            return await message.reply(
+                "📦 **FileStore Bot**\n\n"
+                f"> Current: `{status}`\n\n"
+                "When **downloads are disabled** on the website, every generated "
+                "Download link becomes a Telegram deep link:\n"
+                f"`https://t.me/{current or 'YourBot'}?start=file_<code>`\n\n"
+                "The user opens that link, starts the bot, and receives the file "
+                "directly in chat.\n\n"
+                "**Commands**\n"
+                "• `/filestore @YourBotUsername` — set the bot\n"
+                "• `/filestore off` — clear setting\n\n"
+                "Tip: you can point this at the *same* bot (this one). "
+                "Deep links with `/start file_<short_code>` are handled automatically."
+            )
+
+        value = args[1].strip()
+        if value.lower() in ("off", "none", "disable", "clear", "0"):
+            await db.site_settings.update_one(
+                {"_id": "runtime"},
+                {"$unset": {"filestore_bot_username": "", "filestore_bot_token": ""},
+                 "$set": {"updated_at": datetime.datetime.utcnow()}},
+                upsert=True,
+            )
+            return await message.reply("✅ FileStore cleared. Download deep-links are disabled.")
+
+        # Accept @username, username, or a bot token (token is stored only for reference;
+        # deep links always use the public username).
+        username = value
+        token = None
+        if ":" in value and value.split(":", 1)[0].isdigit():
+            # Looks like a bot token — try to resolve username via getMe if possible
+            token = value
+            try:
+                me = await client.get_me()
+                # If the provided token matches this bot, use our username
+                username = me.username or current or ""
+            except Exception:
+                username = current or ""
+            if not username:
+                return await message.reply(
+                    "❌ Could not resolve a public username from that token.\n"
+                    "Please set the **username** instead:\n"
+                    "`/filestore @YourBotUsername`"
+                )
+        username = username.lstrip("@").strip()
+        if not username or not re.match(r"^[A-Za-z0-9_]{5,32}$", username):
+            return await message.reply(
+                "❌ Invalid bot username.\n"
+                "Use: `/filestore @YourBotUsername`"
+            )
+
+        update = {
+            "filestore_bot_username": username,
+            "updated_at": datetime.datetime.utcnow(),
+        }
+        if token:
+            update["filestore_bot_token"] = token
+        await db.site_settings.update_one(
+            {"_id": "runtime"},
+            {"$set": update},
+            upsert=True,
+        )
+        await message.reply(
+            "✅ **FileStore saved**\n\n"
+            f"> Bot: `@{username}`\n\n"
+            "When downloads are **disabled** in the panel, all new Download buttons "
+            "and generated download links will use:\n"
+            f"`https://t.me/{username}?start=file_<short_code>`\n\n"
+            "Users who click it will start that bot and receive the file in chat."
+        )
 
     @bot.on_message(filters.command("stats"))
     async def stats_handler(client, message: Message):
@@ -2118,9 +2284,13 @@ def register_handlers(bot):
                     f"📦 Size: {size_str}\n\n"
                     f"🔗 Generated Links\n\n"
                 )
+                fs_username = (runtime_cfg.get("filestore_bot_username") or "").strip().lstrip("@")
                 if downloads_enabled:
                     dl = f"{base_url}/dl/{short_code}"
                     block += f"⬇️ Direct Download: <code>{html.escape(dl)}</code>\n\n"
+                elif fs_username:
+                    dl = f"https://t.me/{fs_username}?start=file_{short_code}"
+                    block += f"📥 Get File in Bot: <code>{html.escape(dl)}</code>\n\n"
                 if streaming_enabled:
                     watch = f"{base_url}/watch/{short_code}"
                     block += f"▶️ Watch / Stream: <code>{html.escape(watch)}</code>\n"

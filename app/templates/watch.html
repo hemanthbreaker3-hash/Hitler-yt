@@ -165,10 +165,16 @@
   .btn.accent:hover{filter:brightness(1.08);box-shadow:0 0 14px rgba(59,130,246,.4)}
 </style>
 
-<!-- Engine bootstrap — must run before body parse so preload hints work -->
+<!-- Official movi-player (https://github.com/mrujjwalg/movi-player · https://moviplayer.com) -->
 <script>
 (function () {
+  /* Official builds:
+     - https://cdn.jsdelivr.net/npm/movi-player/dist/element.js          (ES module)
+     - https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js   (plain script)
+     - https://moviplayer.com/dist/element.js                            (hosted latest)
+     We use the global build so we can load it dynamically without type=module. */
   var CDN = 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/';
+  var OFFICIAL = 'https://cdn.jsdelivr.net/npm/movi-player/dist/';
   var params = new URLSearchParams(window.location.search);
   var forced = params.get('engine');
   var canWasm = false, hasWebCodecs = false, secure = false;
@@ -182,9 +188,8 @@
   if (forced === 'wasm' || forced === 'native') engine = forced;
   else engine = canWasm ? 'wasm' : 'native';
 
-  // Honour user preference from previous visit
   try {
-    var pref = localStorage.getItem('ddstream:engine');
+    var pref = localStorage.getItem('hitler:engine');
     if (!forced && (pref === 'wasm' || pref === 'native')) engine = pref;
   } catch (_) {}
 
@@ -195,7 +200,12 @@
     canWasm: canWasm,
     hasWebCodecs: hasWebCodecs,
     secure: secure,
-    cdn: CDN
+    cdn: CDN,
+    official: OFFICIAL,
+    /* Official global entry (no type=module required) */
+    script: CDN + 'element.global.js',
+    scriptFallback: OFFICIAL + 'element.global.js',
+    moduleScript: OFFICIAL + 'element.js'
   };
 
   if (engine === 'wasm') {
@@ -207,9 +217,9 @@
     };
     addLink('preconnect', 'https://cdn.jsdelivr.net', { crossorigin: '' });
     addLink('dns-prefetch', 'https://cdn.jsdelivr.net');
-    addLink('modulepreload', CDN + 'element.slim.js', { crossorigin: '' });
-    // Preload the heavy WASM binary early
-    addLink('preload', CDN + 'ffmpeg-core.wasm', { as: 'fetch', crossorigin: '' });
+    addLink('preconnect', 'https://moviplayer.com', { crossorigin: '' });
+    /* Preload official global + module so first play is faster */
+    addLink('preload', CDN + 'element.global.js', { as: 'script' });
   }
 })();
 </script>
@@ -224,7 +234,7 @@
       <div class="player-box">
         <div class="player-wrapper" id="playerWrapper">
           <movi-player id="moviPlayer"
-            playsinline controls preload="auto"
+            playsinline controls preload="auto" resume
             theme="dark" themecolor="#3b82f6"
             subtitleedge="outline"
             style="display:block"
@@ -266,6 +276,8 @@
         {% if player_settings.downloads_enabled %}
         <a class="btn accent" id="direct-dl-btn" href="{{ effective_stream_base }}/dl/{{ file.short_code }}" download>⬇ Download (Chrome)</a>
         <a class="btn" id="idm-dl-btn" href="#">⚡ 1DM Download</a>
+        {% elif player_settings.filestore_bot_username %}
+        <a class="btn accent" id="direct-dl-btn" href="https://t.me/{{ player_settings.filestore_bot_username }}?start=file_{{ file.short_code }}" target="_blank" rel="noopener">📥 Get File in Bot</a>
         {% endif %}
         <button class="btn" type="button" onclick="copyDownload()">Copy Download Link</button>
         <button class="btn" type="button" onclick="copyStream()">Copy Stream URL</button>
@@ -307,7 +319,11 @@ try {
   }
 } catch (_) {}
 const STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
-const DL_URL = STREAM_ORIGIN + '/dl/' + SHORT_CODE;
+const DOWNLOADS_ENABLED = {{ player_settings.downloads_enabled|tojson }};
+const FILESTORE_BOT = {{ (player_settings.filestore_bot_username or '')|tojson }};
+const DL_URL = DOWNLOADS_ENABLED
+  ? (STREAM_ORIGIN + '/dl/' + SHORT_CODE)
+  : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (STREAM_ORIGIN + '/dl/' + SHORT_CODE));
 const REMUX_URL = STREAM_ORIGIN + '/remux/' + SHORT_CODE;
 const TRACKS_URL = STREAM_ORIGIN + '/api/tracks/' + SHORT_CODE;
 const PLAYER_MIME = {{ file.mime_type|tojson }};
@@ -315,7 +331,9 @@ const FILE_NAME = {{ file.filename|tojson }};
 const INTENT_MIME = (!PLAYER_MIME || PLAYER_MIME === 'application/octet-stream') ? 'video/*' : PLAYER_MIME;
 
 const CFG = window.__HITLERPlayer || {};
-const MODULE_URL = (CFG.cdn || 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/') + 'element.slim.js';
+/* Official movi-player entry points (https://github.com/mrujjwalg/movi-player) */
+const MOVI_GLOBAL = CFG.script || 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js';
+const MOVI_GLOBAL_FALLBACK = CFG.scriptFallback || 'https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js';
 const PLYR_CSS = 'https://cdn.plyr.io/3.7.8/plyr.css';
 const PLYR_JS  = 'https://cdn.plyr.io/3.7.8/plyr.polyfilled.js';
 
@@ -651,12 +669,18 @@ async function initWasm() {
   }, 45000);
 
   try {
-    await loadScript(MODULE_URL);
+    /* Official movi-player load (https://github.com/mrujjwalg/movi-player) */
+    try {
+      await loadScript(MOVI_GLOBAL);
+    } catch (e1) {
+      console.warn('Primary movi-player CDN failed, trying fallback', e1);
+      await loadScript(MOVI_GLOBAL_FALLBACK);
+    }
     clearTimeout(timer);
 
     // Custom element should now be defined
     if (!customElements.get('movi-player')) {
-      throw new Error('movi-player not defined');
+      throw new Error('movi-player custom element not defined after script load');
     }
 
     setEngine('wasm');

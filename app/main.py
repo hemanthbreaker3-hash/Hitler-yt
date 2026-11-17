@@ -262,6 +262,13 @@ async def stream_file(request: Request, short_code: str, extra_name: str = ""):
     """
     runtime = await get_settings()
     if request.url.path.startswith("/dl/") and runtime.get("downloads_enabled") is False:
+        fs = (runtime.get("filestore_bot_username") or "").strip().lstrip("@")
+        if fs:
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(
+                url=f"https://t.me/{fs}?start=file_{short_code}",
+                status_code=302,
+            )
         raise HTTPException(status_code=403, detail="Downloads are currently disabled")
     if request.url.path.startswith("/stream/") and runtime.get("streaming_enabled") is False:
         raise HTTPException(status_code=403, detail="Streaming is currently disabled")
