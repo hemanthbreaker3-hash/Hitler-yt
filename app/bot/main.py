@@ -223,13 +223,18 @@ def register_handlers(bot):
         providers = cfg.get("shorteners", [])
         state = "🟢 Enabled" if cfg.get("enabled") else "🔴 Disabled"
         lines = [f"🔗 **Shortener Settings**", f"Status: {state}", f"Configured: {len(providers)}", f"Key expiry: `{cfg.get('expiry_seconds', 300)} seconds`"]
-        for i, item in enumerate(providers, 1):
-            lines.append(f"{i}. `{html.escape(item.get('url',''))}`")
-        await message.reply("\n".join(lines), reply_markup=_kb([
+        rows = [
             [InlineKeyboardButton("🟢 Enable" if not cfg.get("enabled") else "🔴 Disable", callback_data="shrt:toggle")],
             [InlineKeyboardButton("➕ Add", callback_data="shrt:add"), InlineKeyboardButton("⏱ Expiry Time", callback_data="shrt:expiry")],
-            [InlineKeyboardButton("🔄 Refresh", callback_data="shrt:refresh")],
-        ]))
+        ]
+        for i, item in enumerate(providers):
+            url = html.escape(str(item.get("url", "")))
+            lines.append(f"{i + 1}. `{url}`")
+            rows.append([InlineKeyboardButton(f"🗑 Delete #{i + 1}", callback_data=f"shrt:delete:{i}")])
+        if not providers:
+            lines.append("No shorteners configured yet.")
+        rows.append([InlineKeyboardButton("🔄 Refresh", callback_data="shrt:refresh")])
+        await message.reply("\n".join(lines), reply_markup=_kb(rows))
 
     @bot.on_message(filters.command("shorteners") & filters.private)
     async def shorteners_command(client, message: Message):
@@ -237,13 +242,32 @@ def register_handlers(bot):
             return await message.reply("🚫 Admins only.")
         await _show_shortener_settings(message)
 
-    @bot.on_callback_query(filters.regex(r"^shrt:(toggle|add|expiry|refresh)$"))
+    @bot.on_callback_query(filters.regex(r"^shrt:(toggle|add|expiry|refresh|delete:\d+)$"))
     async def shortener_callback(client, callback: CallbackQuery):
         user = callback.from_user
         if not user or not _is_admin_user(user.id):
             return await callback.answer("Admins only", show_alert=True)
         action = callback.data.split(":",1)[1]
         cfg = await db.site_settings.find_one({"_id":"shortener_config"}) or {"_id":"shortener_config","enabled":False,"shorteners":[],"expiry_seconds":300}
+        if action.startswith("delete:"):
+            try:
+                index = int(action.split(":", 1)[1])
+            except (TypeError, ValueError):
+                return await callback.answer("Invalid shortener selection", show_alert=True)
+            providers = list(cfg.get("shorteners") or [])
+            if index < 0 or index >= len(providers):
+                await callback.answer("That shortener was already removed. Refreshing…", show_alert=True)
+            else:
+                removed = providers.pop(index)
+                await db.site_settings.update_one(
+                    {"_id": "shortener_config"},
+                    {"$set": {"shorteners": providers}},
+                    upsert=True,
+                )
+                await callback.answer("Shortener deleted")
+                logger.info("Admin %s deleted configured shortener %s", user.id, removed.get("url", "<unknown>"))
+            await _show_shortener_settings(callback.message)
+            return
         if action == "toggle":
             await db.site_settings.update_one({"_id":"shortener_config"},{"$set":{"enabled":not cfg.get("enabled",False)}},upsert=True)
         elif action == "add":

@@ -1,5 +1,5 @@
 """Page-scoped shortener verification keys."""
-import secrets, time, urllib.parse, html, re
+import secrets, time, urllib.parse, html, re, os
 import httpx
 from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -29,11 +29,16 @@ PROTECTED_TITLE_PREFIX = "/title/"
 PROTECTED_TITLE_HOST = "hitler-yt.vercel.app"
 
 def _is_vercel_title_host(hostname: str | None) -> bool:
-    """Match the public Vercel website host, including its www alias and portless form."""
+    """Match the production Vercel host and configured Vercel aliases."""
     if hostname is None:
         return True
     host = str(hostname).strip().lower().split(",", 1)[0].split(":", 1)[0].rstrip(".")
-    return host in {PROTECTED_TITLE_HOST, f"www.{PROTECTED_TITLE_HOST}"}
+    configured = (os.getenv("VERCEL_PROJECT_PRODUCTION_URL") or os.getenv("VERCEL_URL") or "").lower()
+    configured = configured.removeprefix("https://").removeprefix("http://").split("/", 1)[0].split(":", 1)[0]
+    allowed = {PROTECTED_TITLE_HOST, f"www.{PROTECTED_TITLE_HOST}"}
+    if configured:
+        allowed.update({configured, f"www.{configured}"})
+    return host in allowed or host.endswith(".vercel.app")
 
 
 def is_protected_title_target(target: str, hostname: str | None = None) -> bool:

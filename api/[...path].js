@@ -60,17 +60,21 @@ async function getDatabase() {
 
   const envName = String(process.env.DATABASE_NAME || '').trim();
   const uriName = extractDbNameFromUri(getMongoUri());
+  // Match the Python bot's DATABASE_NAME/MONGODB_URI selection.  The shared
+  // configuration is stored in site_settings (not the legacy `settings` collection).
   const candidates = [...new Set([envName, uriName, 'tg_media_bot', 'file2link'].filter(Boolean))];
-  const primary = candidates[0] || 'tg_media_bot';
+  const primary = envName || uriName || 'tg_media_bot';
 
   try {
     for (const candidate of candidates) {
       const db = client.db(candidate);
-      const [pageCount, settingCount] = await Promise.all([
+      const counts = await Promise.all([
         db.collection('catalog_pages').estimatedDocumentCount().catch(() => 0),
-        db.collection('settings').estimatedDocumentCount().catch(() => 0),
+        db.collection('site_settings').estimatedDocumentCount().catch(() => 0),
+        db.collection('files').estimatedDocumentCount().catch(() => 0),
+        db.collection('users').estimatedDocumentCount().catch(() => 0),
       ]);
-      if (pageCount > 0 || settingCount > 0) {
+      if (counts.some((count) => count > 0)) {
         resolvedDbName = candidate;
         return db;
       }
@@ -1979,6 +1983,10 @@ const SHORTENER_HOST = 'hitler-yt.vercel.app';
 function requestHost(req) {
   return String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase().split(':')[0];
 }
+function isShortenerHost(host) {
+  const configured = String(process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || '').toLowerCase().replace(/^https?:\/\//, '').split('/')[0].split(':')[0];
+  return host === SHORTENER_HOST || host === `www.${SHORTENER_HOST}` || Boolean(configured && (host === configured || host === `www.${configured}`)) || host.endsWith('.vercel.app');
+}
 function isProtectedTitlePath(path) {
   return typeof path === 'string' && path.startsWith('/title/') && path.length > 7 && !path.startsWith('//');
 }
@@ -2188,7 +2196,7 @@ importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw')`;
     const currentHost = requestHost(req);
 
     // Shortener/access-key workflow is hosted on Vercel so it protects the actual title pages.
-    if (currentHost === SHORTENER_HOST && pathname === '/get-key-start' && req.method === 'GET') {
+    if (isShortenerHost(currentHost) && pathname === '/get-key-start' && req.method === 'GET') {
       const target = searchParams.get('target') || '';
       if (!isProtectedTitlePath(target)) { sendJson(res, 400, { error: 'Shortener is available only for /title/* pages' }); return; }
       const cfg = await db.collection('site_settings').findOne({ _id: 'shortener_config' }) || {};
@@ -2199,14 +2207,14 @@ importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw')`;
       const key = crypto.randomBytes(9).toString('base64url');
       const now = Math.floor(Date.now() / 1000);
       const expiry = Math.max(60, Math.min(86400, Number(cfg.expiry_seconds) || 300));
-      const origin = `https://${SHORTENER_HOST}`;
+      const origin = `https://${currentHost}`;
       const landing = `${origin}/get-key/${token}`;
       await db.collection('access_keys').insertOne({ token, key, target, created_at: now, expires_at: now + expiry });
       try { const shortUrl = await createVercelShortUrl(provider, landing); res.statusCode = 302; res.setHeader('Location', shortUrl); res.end(); }
       catch (error) { await db.collection('access_keys').deleteOne({ token }); sendJson(res, 502, { error: 'Shortener API failed', detail: String(error.message || error).slice(0, 160) }); }
       return;
     }
-    if (currentHost === SHORTENER_HOST && pathname.startsWith('/get-key/') && req.method === 'GET') {
+    if (isShortenerHost(currentHost) && pathname.startsWith('/get-key/') && req.method === 'GET') {
       const token = pathname.slice('/get-key/'.length);
       const rec = await db.collection('access_keys').findOne({ token, expires_at: { $gt: Math.floor(Date.now()/1000) } });
       if (!rec) { sendHtml(res, 410, '<h1>Key request expired</h1><p>Return to the title page and request a new key.</p>'); return; }
@@ -2214,14 +2222,14 @@ importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw')`;
       sendHtml(res, 200, `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Your access key</title><style>body{background:#090d18;color:white;font:16px system-ui;display:grid;place-items:center;min-height:100vh}main{background:#111827;padding:28px;border-radius:16px;width:min(400px,85vw)}input,button,a{box-sizing:border-box;width:100%;padding:13px;margin-top:12px;border-radius:9px}input{background:#0b1220;color:white;border:1px solid #334155}button{background:#38bdf8;border:0;font-weight:bold}a{display:block;text-align:center;color:white}</style></head><body><main><h2>✅ Your key is ready</h2><p>Copy the key, then continue to your title page.</p><input id="k" readonly value="${key}"><button onclick="navigator.clipboard.writeText(document.getElementById('k').value).then(()=>location.href='/key-copied/${encodeURIComponent(token)}')">Copy key & continue</button><a href="${target}">Return to title page</a></main></body></html>`);
       return;
     }
-    if (currentHost === SHORTENER_HOST && pathname.startsWith('/key-copied/') && req.method === 'GET') {
+    if (isShortenerHost(currentHost) && pathname.startsWith('/key-copied/') && req.method === 'GET') {
       const token = pathname.slice('/key-copied/'.length);
       const now = Math.floor(Date.now()/1000);
       const rec = await db.collection('access_keys').findOne({ token, expires_at: { $gt: now } });
       if (!rec) { sendJson(res, 410, { error: 'Key expired' }); return; }
       res.statusCode = 303; res.setHeader('Set-Cookie', `site_access=${encodeURIComponent(token)}; Max-Age=${Math.max(1,rec.expires_at-now)}; Path=/; HttpOnly; Secure; SameSite=Lax`); res.setHeader('Location', rec.target); res.end(); return;
     }
-    if (currentHost === SHORTENER_HOST && pathname === '/verify-key' && req.method === 'POST') {
+    if (isShortenerHost(currentHost) && pathname === '/verify-key' && req.method === 'POST') {
       const form = await readFormBody(req); const target = form.get('target') || ''; const key = form.get('key') || '';
       if (!isProtectedTitlePath(target)) { sendJson(res, 400, { error: 'Invalid title target' }); return; }
       const now = Math.floor(Date.now()/1000);
@@ -2231,7 +2239,7 @@ importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw')`;
     }
 
     // Gate only GET/HEAD title routes. Homepage, search, watch, dl, stream and all APIs bypass.
-    if (currentHost === SHORTENER_HOST && isProtectedTitlePath(pathname) && ['GET','HEAD'].includes(req.method)) {
+    if (isShortenerHost(currentHost) && isProtectedTitlePath(pathname) && ['GET','HEAD'].includes(req.method)) {
       const cfg = await db.collection('site_settings').findOne({ _id: 'shortener_config' }) || {};
       if (cfg.enabled) {
         const target = pathname + search;
