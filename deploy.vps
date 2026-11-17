@@ -190,10 +190,6 @@ for _ in $(seq 1 90); do
     /usr/local/bin/cloudflared --version || die "cloudflared installation verification failed."
 
     run_root install -m 0755 "$SCRIPT_DIR/cloudflare-quick-tunnel.sh" /usr/local/sbin/file2link-cloudflare-quick-tunnel
-    # Origin host for Quick Tunnel (public VPS IP). Set before deploy, e.g.:
-    #   export tryurl=138.68.175.206
-    #   export TRYURL=138.68.175.206
-    TRYURL_VALUE="${TRYURL:-${tryurl:-}}"
     UNIT_TMP="$(mktemp)"
     cat > "$UNIT_TMP" <<UNIT
 [Unit]
@@ -206,8 +202,6 @@ Requires=docker.service
 Type=simple
 WorkingDirectory=$SCRIPT_DIR
 Environment=PORT=$PORT_VALUE
-Environment=TRYURL=$TRYURL_VALUE
-Environment=tryurl=$TRYURL_VALUE
 ExecStart=/usr/local/sbin/file2link-cloudflare-quick-tunnel
 Restart=always
 RestartSec=10

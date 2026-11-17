@@ -9,17 +9,6 @@ if [[ ! -f "$SCRIPT_DIR/docker-compose.yml" ]]; then
 fi
 cd "$SCRIPT_DIR"
 PORT_VALUE="${PORT:-8000}"
-# Origin host for cloudflared --url. Use a public VPS IP when the app must be
-# reached via that interface instead of loopback, e.g.:
-#   export tryurl=138.68.175.206
-#   export TRYURL=138.68.175.206
-# Default remains 127.0.0.1 for local / same-host tunnels.
-ORIGIN_HOST="${TRYURL:-${tryurl:-127.0.0.1}}"
-ORIGIN_HOST="${ORIGIN_HOST#http://}"
-ORIGIN_HOST="${ORIGIN_HOST#https://}"
-ORIGIN_HOST="${ORIGIN_HOST%%/*}"
-ORIGIN_HOST="${ORIGIN_HOST%%:*}"
-ORIGIN_URL="http://${ORIGIN_HOST}:${PORT_VALUE}"
 LOG_FILE="$SCRIPT_DIR/cloudflared-quick-tunnel.log"
 COMPOSE=(docker compose --project-directory "$SCRIPT_DIR" -f "$SCRIPT_DIR/docker-compose.yml" --env-file "$SCRIPT_DIR/.env")
 if ! docker info >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
@@ -33,25 +22,20 @@ if [[ ! -x /usr/local/bin/cloudflared ]]; then
   exit 1
 fi
 
-log "Health-check origin: ${ORIGIN_URL}/health (TRYURL/tryurl=${ORIGIN_HOST})"
 for _ in $(seq 1 90); do
-  if curl -fsS "${ORIGIN_URL}/health" >/dev/null 2>&1; then
-    break
-  fi
-  # Also accept loopback readiness if the public IP is not yet bound/routable locally
   if curl -fsS "http://127.0.0.1:${PORT_VALUE}/health" >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
-if ! curl -fsS "${ORIGIN_URL}/health" >/dev/null 2>&1 && ! curl -fsS "http://127.0.0.1:${PORT_VALUE}/health" >/dev/null 2>&1; then
-  log "File2link health endpoint is not ready on ${ORIGIN_URL} or 127.0.0.1:${PORT_VALUE}; refusing to start the public tunnel."
+curl -fsS "http://127.0.0.1:${PORT_VALUE}/health" >/dev/null || {
+  log 'File2link health endpoint is not ready; refusing to start the public tunnel.'
   exit 1
-fi
+}
 
 : > "$LOG_FILE"
-log "Starting Quick Tunnel to ${ORIGIN_URL}"
-/usr/local/bin/cloudflared tunnel --no-autoupdate --protocol http2 --loglevel info --url "${ORIGIN_URL}" >"$LOG_FILE" 2>&1 &
+log "Starting Quick Tunnel to http://127.0.0.1:${PORT_VALUE}"
+/usr/local/bin/cloudflared tunnel --no-autoupdate --protocol http2 --loglevel info --url "http://127.0.0.1:${PORT_VALUE}" >"$LOG_FILE" 2>&1 &
 CF_PID=$!
 cleanup() {
   if kill -0 "$CF_PID" 2>/dev/null; then kill "$CF_PID" 2>/dev/null || true; fi
