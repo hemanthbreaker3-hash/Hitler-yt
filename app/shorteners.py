@@ -33,11 +33,18 @@ def _page_key_html(path, error=""):
     return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0a0a0a"><title>Key Verification · HITLER YT</title><style>{_KEY_PAGE_STYLE}</style></head><body><main><h1>🔐 Key Verification</h1><p class="lead">This page is protected. Enter a valid access key to continue, or get one below.</p><form method="post" action="/verify-key"><input type="hidden" name="target" value="{safe_path}"/><input name="key" placeholder="Paste your key here" required autocomplete="off"/><button type="submit">Open Link</button></form><a class="link-btn" href="/get-key-start?target={get_key_target}">Get Key</a>{f'<p class="err">{safe_error}</p>' if safe_error else ''}</main></body></html>'''
 
 async def gate_request(request: Request):
-    cfg = await config()
-    if not cfg.get("enabled") or request.method not in ("GET", "HEAD"):
-        return None
+    """Require a shortener key only for published title detail pages.
+
+    The shortener is deliberately bypassed for the homepage, /search, /watch,
+    /dl, /stream, /remux, APIs, static assets, and every other route.
+    """
     path = request.url.path
-    if path.startswith(("/static/", "/api/health", "/health", "/key/", "/get-key", "/verify-key", "/key-copied/", "/favicon")):
+    if not path.startswith("/title/") or path == "/title/":
+        return None
+    if request.method not in ("GET", "HEAD"):
+        return None
+    cfg = await config()
+    if not cfg.get("enabled"):
         return None
     target = path + (f"?{request.url.query}" if request.url.query else "")
     token = request.cookies.get("site_access", "")
@@ -64,8 +71,9 @@ async def verify_key(request: Request):
     key = str(form.get("key", "")).strip()
     target = str(form.get("target", "/"))
     parsed_target = urllib.parse.urlsplit(target)
-    if not target.startswith("/") or target.startswith("//") or parsed_target.scheme or parsed_target.netloc:
-        raise HTTPException(400, "Invalid target")
+    if (not target.startswith("/") or target.startswith("//") or parsed_target.scheme
+            or parsed_target.netloc or not parsed_target.path.startswith("/title/")):
+        raise HTTPException(400, "Shortener verification is available only for title pages")
     now = int(time.time())
     rec = await db.access_keys.find_one({"key":key,"target":target,"expires_at":{"$gt":now}})
     if not rec:

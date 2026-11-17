@@ -148,8 +148,9 @@ async def start_key_flow(request: Request, target: str = "/"):
     import secrets, time
     from urllib.parse import urlsplit
     parsed_target = urlsplit(target)
-    if not target.startswith("/") or target.startswith("//") or parsed_target.scheme or parsed_target.netloc:
-        raise HTTPException(400, "Invalid target")
+    if (not target.startswith("/") or target.startswith("//") or parsed_target.scheme
+            or parsed_target.netloc or not parsed_target.path.startswith("/title/")):
+        raise HTTPException(400, "Shortener verification is available only for title pages")
     cfg = await shortener_config()
     providers = cfg.get("shorteners", [])
     providers = [x for x in providers if x.get("url") and x.get("api_key")]
@@ -280,20 +281,26 @@ async def stream_file(request: Request, short_code: str, extra_name: str = ""):
     if not all_clients and session_manager.bot_client is None:
         raise HTTPException(status_code=503, detail="Telegram sessions are unavailable")
 
-    return await get_streaming_response(
-        clients=all_clients,
-        chat_id=file_data.get("chat_id"),
-        message_id=file_data.get("message_id"),
-        file_size=int(file_data.get("file_size") or 0),
-        filename=file_data.get("filename") or extra_name or "media",
-        mime_type=file_data.get("mime_type") or "application/octet-stream",
-        request=request,
-        chunk_size=settings.STREAM_CHUNK_SIZE,
-        file_id=file_data.get("file_id"),
-        storage_chat_id=file_data.get("storage_chat_id"),
-        storage_message_id=file_data.get("storage_message_id"),
-        bot_client=session_manager.bot_client,
-    )
+    try:
+        return await get_streaming_response(
+            clients=all_clients,
+            chat_id=file_data.get("chat_id"),
+            message_id=file_data.get("message_id"),
+            file_size=int(file_data.get("file_size") or 0),
+            filename=file_data.get("filename") or extra_name or "media",
+            mime_type=file_data.get("mime_type") or "application/octet-stream",
+            request=request,
+            chunk_size=settings.STREAM_CHUNK_SIZE,
+            file_id=file_data.get("file_id"),
+            storage_chat_id=file_data.get("storage_chat_id"),
+            storage_message_id=file_data.get("storage_message_id"),
+            bot_client=session_manager.bot_client,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Download/stream setup failed for short_code=%s path=%s", short_code, request.url.path)
+        raise HTTPException(status_code=503, detail="Telegram media is temporarily unavailable. Please retry shortly.") from exc
 
 
 @app.get("/api/tracks/{short_code}")

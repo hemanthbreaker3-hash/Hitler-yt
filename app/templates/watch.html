@@ -301,7 +301,7 @@ function setPlayerSource(src, mime) {
     player.muted = false;
     player.defaultMuted = false;
     player.volume = 1.0;
-    player.preload = 'metadata';
+    player.preload = 'auto';
   } catch (_) {}
 
   setPlayerSource(primaryPlayUrl(0), PLAYER_MIME || 'video/mp4');

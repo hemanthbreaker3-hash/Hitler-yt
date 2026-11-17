@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 TG_CHUNK = 1024 * 1024
 DEFAULT_CHUNK = 4 * TG_CHUNK
 MAX_CONCURRENT_PER_CLIENT = 32
-MAX_PARALLEL_STRIPES = 8
+MAX_PARALLEL_STRIPES = 4
 
 _work_loads: dict[int, int] = {}
 _work_lock = asyncio.Lock()
@@ -115,13 +115,15 @@ async def _resolve_message(client: Client, chat_id: int | None, message_id: int 
                 return None
             return msg
         except Exception as e:
-            wait = getattr(e, "value", None) or getattr(e, "x", None) or (0.4 + attempt * 0.4)
+            is_flood_wait = "flood" in type(e).__name__.lower() or "flood_wait" in str(e).lower()
+            wait = getattr(e, "value", None) or getattr(e, "x", None)
             try:
-                wait = float(wait)
-            except Exception:
-                wait = 0.4 + attempt * 0.4
-            wait = min(max(wait, 0.2), 6.0)
-            logger.debug("get_messages(%s, %s) retry %s: %s", chat_id, message_id, attempt, e)
+                wait = float(wait) if wait is not None else (0.5 + attempt * 0.5)
+            except (TypeError, ValueError):
+                wait = 0.5 + attempt * 0.5
+            # Honor Telegram's cooldown instead of rapidly repeating a rate-limited call.
+            wait = min(max(wait, 0.5), 60.0 if is_flood_wait else 5.0)
+            logger.warning("get_messages(%s, %s) retry %s (flood_wait=%s): %s", chat_id, message_id, attempt + 1, is_flood_wait, e)
             await asyncio.sleep(wait)
     return None
 
@@ -219,13 +221,14 @@ async def _stream_file_chunks(
             if yielded_any:
                 logger.warning("stream_media interrupted mid-stream: %s", e)
                 raise
-            wait = getattr(e, "value", None) or getattr(e, "x", None) or (1 + attempt)
+            is_flood_wait = "flood" in type(e).__name__.lower() or "flood_wait" in str(e).lower()
+            wait = getattr(e, "value", None) or getattr(e, "x", None)
             try:
-                wait = float(wait)
-            except Exception:
+                wait = float(wait) if wait is not None else (1.0 + attempt)
+            except (TypeError, ValueError):
                 wait = 1.0 + attempt
-            wait = min(max(wait, 0.4), 12.0)
-            logger.warning("stream_media retry %s: %s (sleep %.1fs)", attempt, e, wait)
+            wait = min(max(wait, 0.5), 60.0 if is_flood_wait else 12.0)
+            logger.warning("stream_media retry %s (flood_wait=%s): %s (sleep %.1fs)", attempt + 1, is_flood_wait, e, wait)
             await asyncio.sleep(wait)
     raise HTTPException(status_code=502, detail="Telegram stream failed after retries")
 
@@ -323,7 +326,6 @@ async def media_streamer(
     message_id: int | None = None,
     storage_chat_id: int | None = None,
     storage_message_id: int | None = None,
-    allow_parallel: bool = False,
 ):
     """
     Stream bytes [start, end]:
@@ -334,9 +336,7 @@ async def media_streamer(
     total = end - start + 1
     try:
         # Check if we can use multi-bot sliding-window parallel striping (for downloads/streams >= 4 MiB)
-        # Parallel Telegram probing adds latency and contention to browser/external-player
-        # range requests. Reserve it for large explicit downloads only.
-        if allow_parallel and all_clients and len(all_clients) > 1 and total >= 8 * TG_CHUNK:
+        if all_clients and len(all_clients) > 1 and total >= 4 * TG_CHUNK:
             capable = await _discover_multi_bot_targets(
                 clients=all_clients,
                 primary_client=primary_client,
@@ -369,17 +369,12 @@ async def media_streamer(
                 try:
                     for current_idx in range(first_chunk_idx, last_chunk_idx + 1):
                         task = in_flight.pop(current_idx)
-                        try:
-                            chunk = await task
-                        except Exception as exc:
-                            logger.warning("Parallel download chunk %s failed; continuing sequentially: %s", current_idx, exc)
-                            break
+                        chunk = await task
                         if next_to_schedule <= last_chunk_idx:
                             schedule_chunk(next_to_schedule)
                             next_to_schedule += 1
 
                         if not chunk:
-                            logger.warning("Parallel download returned an empty chunk %s; continuing sequentially", current_idx)
                             break
                         if bytes_to_skip > 0:
                             if len(chunk) <= bytes_to_skip:
@@ -396,14 +391,6 @@ async def media_streamer(
                             bytes_sent += len(chunk)
                         if bytes_sent >= total:
                             break
-                    # Never silently return a truncated 200/206 response if one helper bot
-                    # cannot fetch a stripe. Resume the remaining bytes through the primary.
-                    if bytes_sent < total:
-                        fallback_start = start + bytes_sent
-                        async for fallback_chunk in _download_byte_range(
-                            primary_client, primary_target, fallback_start, end
-                        ):
-                            yield fallback_chunk
                     return
                 finally:
                     for t in in_flight.values():
@@ -512,7 +499,6 @@ async def get_streaming_response(
             message_id=message_id,
             storage_chat_id=storage_chat_id,
             storage_message_id=storage_message_id,
-            allow_parallel=is_download,
         ),
         status_code=status_code,
         headers=headers,
