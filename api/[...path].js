@@ -2073,50 +2073,79 @@ function scoreShortUrlCandidate(parsed, providerHost) {
 }
 
 
+
+function normalizePlainDestination(destination) {
+  let dest = String(destination || '').trim();
+  if (!dest) throw new Error('Destination URL is empty');
+  // Fully decode if already percent-encoded (avoid double-encoding for Arolinks)
+  for (let i = 0; i < 3; i++) {
+    try {
+      const decoded = decodeURIComponent(dest);
+      if (decoded === dest) break;
+      dest = decoded;
+    } catch { break; }
+  }
+  dest = dest.replace(/\\\//g, '/').trim();
+  if (!/^https?:\/\//i.test(dest)) dest = 'https://' + dest.replace(/^\/+/, '');
+  let parsed;
+  try { parsed = new URL(dest); } catch {
+    throw new Error(`Destination URL is invalid (not a plain absolute URL): ${dest.slice(0, 120)}`);
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
+    throw new Error(`Destination URL is invalid: ${dest.slice(0, 120)}`);
+  }
+  // Return canonical plain URL (no extra encoding)
+  return parsed.toString();
+}
+
 async function createVercelShortUrl(provider, destination) {
-  // Filestore-style shortlink generator ONLY (no verification flow).
-  // Arolinks-safe: prefer ?api=KEY&url=DEST without format=text (empty body on Arolinks).
+  // Filestore/Arolinks-style shortlink generator.
+  // Critical: pass a PLAIN absolute destination URL; encode it only once in the query string.
+  // Arolinks returns {"status":"error","message":["URL is invalid."]} if url is double-encoded or malformed.
   const domainRaw = String(provider.url || '').trim().replace(/\/+$/, '');
   const apiKey = String(provider.api_key || '').trim();
-  const dest = String(destination || '').trim();
-  if (!domainRaw || !apiKey || !dest) throw new Error('Shortener domain, API key, and destination are required');
-  const domain = /^https?:\/\//i.test(domainRaw) ? domainRaw : `https://${domainRaw}`;
+  if (!domainRaw || !apiKey) throw new Error('Shortener domain and API key are required');
+
+  const plainDest = normalizePlainDestination(destination);
+
+  let domain = domainRaw;
+  if (!/^https?:\/\//i.test(domain)) domain = 'https://' + domain;
+  // Prefer HTTPS for providers
+  domain = domain.replace(/^http:\/\//i, 'https://');
 
   let parsedApi;
   try { parsedApi = new URL(domain); } catch { throw new Error('Invalid shortener API endpoint'); }
-  if (!['http:', 'https:'].includes(parsedApi.protocol) || !parsedApi.hostname) {
-    throw new Error('Invalid shortener API endpoint');
-  }
+  if (!parsedApi.hostname) throw new Error('Invalid shortener API endpoint');
 
   const providerHost = parsedApi.hostname;
-  let path = (parsedApi.pathname || '').replace(/\/+$/, '');
-  const baseQuery = new URLSearchParams(parsedApi.searchParams);
+  let basePath = (parsedApi.pathname || '').replace(/\/+$/, '') || '';
+  const existingQuery = new URLSearchParams(parsedApi.searchParams);
 
-  const paramSets = [
-    { api: apiKey, url: dest },
-    { api: apiKey, url: dest, format: 'json' },
-  ];
-
-  const endpoints = [];
-  const build = (pathSuffix, params) => {
+  // Build GET URLs with single encoding of the plain destination
+  const buildEndpoint = (pathSuffix, extra = {}) => {
     const u = new URL(parsedApi.origin);
     u.pathname = pathSuffix || '/';
-    for (const [k, v] of baseQuery.entries()) u.searchParams.set(k, v);
-    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+    for (const [k, v] of existingQuery.entries()) {
+      if (k === 'api' || k === 'url' || k === 'format') continue;
+      u.searchParams.set(k, v);
+    }
+    u.searchParams.set('api', apiKey);
+    u.searchParams.set('url', plainDest); // URLSearchParams encodes once
+    if (extra.format) u.searchParams.set('format', extra.format);
     return u.toString();
   };
 
-  if (path.endsWith('/api') || path.endsWith('/st')) {
-    for (const sp of paramSets) endpoints.push(build(path || '/', sp));
+  const endpoints = [];
+  if (basePath.endsWith('/api') || basePath.endsWith('/st')) {
+    endpoints.push(buildEndpoint(basePath));
+    endpoints.push(buildEndpoint(basePath, { format: 'json' }));
   } else {
-    // Root domain (arolinks.com): try /api, /st, root — Filestore order
-    for (const suffix of ['/api', '/st', path || '/']) {
-      for (const sp of paramSets) endpoints.push(build(suffix === '/' ? '/' : suffix, sp));
+    for (const suffix of ['/api', '/st', basePath || '/']) {
+      endpoints.push(buildEndpoint(suffix === '' ? '/' : suffix));
+      endpoints.push(buildEndpoint(suffix === '' ? '/' : suffix, { format: 'json' }));
     }
   }
-
-  const unique = [...new Set(endpoints)].slice(0, 6);
-  let lastError = 'No valid short URL returned';
+  const unique = [...new Set(endpoints)].slice(0, 8);
 
   const findShortUrl = (payload, depth = 0) => {
     if (depth > 3 || !payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
@@ -2138,27 +2167,47 @@ async function createVercelShortUrl(provider, destination) {
     return null;
   };
 
+  const extractApiError = (data, raw) => {
+    if (data && typeof data === 'object') {
+      let msg = data.message || data.error || data.detail || data.msg;
+      if (Array.isArray(msg)) msg = msg.filter(Boolean).join('; ');
+      if (msg) return String(msg).slice(0, 200);
+      if (data.status === 'error') return 'Provider status=error (URL may be invalid or blocked)';
+    }
+    if (raw && raw.length < 300 && !raw.includes('<')) return raw.slice(0, 200);
+    return null;
+  };
+
+  let lastError = 'No valid short URL returned';
   for (const apiUrl of unique) {
     try {
       const response = await fetch(apiUrl, {
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(20000),
         redirect: 'manual',
         headers: {
           Accept: 'application/json, text/plain, */*',
-          'User-Agent': 'HITLER-YT-Shortener/1.0',
+          'User-Agent': 'Mozilla/5.0 (compatible; HITLER-YT-Shortener/1.0)',
         },
       });
       const raw = (await response.text() || '').trim();
       let data = null;
       try { data = JSON.parse(raw); } catch {}
 
+      // Surface provider error JSON clearly
+      if (data && (data.status === 'error' || data.success === false || (data.shortenedUrl === '' && data.message))) {
+        const apiErr = extractApiError(data, raw);
+        lastError = apiErr || 'Provider rejected the URL';
+        // Try next endpoint variant; if all fail, throw with this message
+        continue;
+      }
+
       let shortUrl = null;
       if (data && typeof data === 'object') shortUrl = findShortUrl(data);
-      if (!shortUrl && /^https?:\/\//i.test(raw) && !raw.includes('<')) {
+      if (!shortUrl && /^https?:\/\//i.test(raw) && !raw.includes('<html') && !raw.includes('<!')) {
         shortUrl = raw.split(/\r?\n/)[0].trim().replace(/\\\//g, '/');
       }
       if (!shortUrl) {
-        lastError = `Empty/invalid response from ${apiUrl.slice(0, 90)}`;
+        lastError = extractApiError(data, raw) || `Empty/invalid response (HTTP ${response.status})`;
         continue;
       }
 
@@ -2167,7 +2216,7 @@ async function createVercelShortUrl(provider, destination) {
         lastError = `Invalid short URL: ${String(shortUrl).slice(0, 80)}`;
         continue;
       }
-      if (isJunkShortUrl(parsedShort, dest, providerHost)) {
+      if (isJunkShortUrl(parsedShort, plainDest, providerHost)) {
         lastError = `Rejected junk URL: ${parsedShort.toString().slice(0, 80)}`;
         continue;
       }
@@ -2178,7 +2227,7 @@ async function createVercelShortUrl(provider, destination) {
     }
   }
 
-  throw new Error(`Shortener API failed: ${lastError}`);
+  throw new Error(`Shortener API failed: ${lastError}. Destination used: ${plainDest.slice(0, 120)}`);
 }
 
 
@@ -2285,7 +2334,14 @@ export default async function handler(req, res) {
       const key = crypto.randomBytes(9).toString('base64url');
       const now = Math.floor(Date.now() / 1000);
       const expiry = Math.max(60, Math.min(86400, Number(cfg.expiry_seconds) || 300));
-      const origin = `https://${currentHost}`;
+      // Prefer stable public website origin (plain HTTPS URL for Arolinks)
+      const vercelFromEnv = String(process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || '')
+        .replace(/^https?:\/\//i, '')
+        .split('/')[0]
+        .trim();
+      const stateVercel = String(state.vercel_url || '').replace(/^https?:\/\//i, '').split('/')[0].trim();
+      const publicHost = stateVercel || vercelFromEnv || currentHost;
+      const origin = `https://${publicHost}`.replace(/\/+$/, '');
       const landing = `${origin}/get-key/${token}`;
       // Site-wide key: valid for every /title page until expires_at
       await db.collection('access_keys').insertOne({

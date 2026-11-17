@@ -173,6 +173,7 @@ def _usable_short_url(value, destination: str = "", provider_host: str | None = 
 
 
 
+
 def _find_short_url_in_payload(payload, depth: int = 0):
     """Filestore-compatible JSON short URL extraction (shortenedUrl, short_url, …)."""
     if depth > 3 or not isinstance(payload, dict):
@@ -195,24 +196,61 @@ def _find_short_url_in_payload(payload, depth: int = 0):
     return None
 
 
+def _normalize_plain_destination(destination: str) -> str:
+    """Return a plain absolute http(s) URL; fully decode to avoid double-encoding for Arolinks."""
+    dest = str(destination or "").strip()
+    if not dest:
+        raise ValueError("Destination URL is empty")
+    for _ in range(3):
+        try:
+            decoded = urllib.parse.unquote(dest)
+            if decoded == dest:
+                break
+            dest = decoded
+        except Exception:
+            break
+    dest = dest.replace("\\/", "/").strip()
+    if not dest.startswith(("http://", "https://")):
+        dest = "https://" + dest.lstrip("/")
+    parts = urllib.parse.urlsplit(dest)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        raise ValueError(f"Destination URL is invalid (not a plain absolute URL): {dest[:120]}")
+    return urllib.parse.urlunsplit(parts)
+
+
+def _extract_provider_error(data, raw: str = "") -> str | None:
+    if isinstance(data, dict):
+        msg = data.get("message") or data.get("error") or data.get("detail") or data.get("msg")
+        if isinstance(msg, list):
+            msg = "; ".join(str(x) for x in msg if x)
+        if msg:
+            return str(msg)[:200]
+        if data.get("status") == "error":
+            return "Provider status=error (URL may be invalid or blocked)"
+    if raw and len(raw) < 300 and "<" not in raw:
+        return raw[:200]
+    return None
+
+
 async def create_shortlink(base_url: str, api_key: str, destination: str):
     """
-    Filestore-style shortlink generator only (no verification flow).
+    Filestore/Arolinks shortlink generator only.
 
-    Compatible with Arolinks / AdLinkFly / shortlinkgenerator:
-      GET {provider}?api=KEY&url=DESTINATION
-    Important: do NOT send format=text first for pure providers (Arolinks returns empty body).
-    Tries /api, /st, and root path variants like Filestore.
+    Sends a PLAIN absolute destination URL, encoded once in the query string.
+    Arolinks error {"status":"error","message":["URL is invalid."]} means the url
+    param was malformed or double-encoded — this function prevents that.
     """
     from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
     domain = str(base_url or "").strip().rstrip("/")
     key = str(api_key or "").strip()
-    dest = str(destination or "").strip()
-    if not domain or not key or not dest:
-        raise ValueError("Shortener domain, API key, and destination are required")
+    if not domain or not key:
+        raise ValueError("Shortener domain and API key are required")
+    plain_dest = _normalize_plain_destination(destination)
+
     if not domain.startswith(("http://", "https://")):
         domain = "https://" + domain
+    domain = domain.replace("http://", "https://", 1) if domain.startswith("http://") else domain
 
     parsed_api = urlsplit(domain)
     if parsed_api.scheme not in ("http", "https") or not parsed_api.hostname:
@@ -220,37 +258,31 @@ async def create_shortlink(base_url: str, api_key: str, destination: str):
 
     provider_host = parsed_api.hostname.lower()
     path = (parsed_api.path or "").rstrip("/")
-    query_items = parse_qsl(parsed_api.query, keep_blank_values=True)
+    query_items = [(k, v) for k, v in parse_qsl(parsed_api.query, keep_blank_values=True) if k not in ("api", "url", "format")]
 
-    # Filestore standard params — prefer no format= (Arolinks-safe)
-    alt_params_list = [
-        {"api": key, "url": dest},
-        {"api": key, "url": dest, "format": "json"},
-    ]
+    def build(path_suffix: str, with_format: str | None = None) -> str:
+        params = list(query_items)
+        params.append(("api", key))
+        params.append(("url", plain_dest))  # urlencode encodes once
+        if with_format:
+            params.append(("format", with_format))
+        return urlunsplit((parsed_api.scheme, parsed_api.netloc, path_suffix or "/", urlencode(params), ""))
 
     endpoints: list[str] = []
     if path.endswith("/api") or path.endswith("/st"):
-        for sp in alt_params_list:
-            params = dict(query_items)
-            params.update(sp)
-            endpoints.append(urlunsplit((parsed_api.scheme, parsed_api.netloc, parsed_api.path, urlencode(params), "")))
+        endpoints.append(build(path or "/api"))
+        endpoints.append(build(path or "/api", "json"))
     else:
-        # Root domain (arolinks.com etc.): try /api, /st, then root
-        for suffix in ("/api", "/st", ""):
-            for sp in alt_params_list:
-                params = dict(query_items)
-                params.update(sp)
-                endpoints.append(
-                    urlunsplit((parsed_api.scheme, parsed_api.netloc, path + suffix, urlencode(params), ""))
-                )
-
-    endpoints = list(dict.fromkeys(endpoints))[:6]
+        for suffix in ("/api", "/st", path or "/"):
+            endpoints.append(build(suffix))
+            endpoints.append(build(suffix, "json"))
+    endpoints = list(dict.fromkeys(endpoints))[:8]
     last_error = "No valid short URL returned"
 
     async with httpx.AsyncClient(
-        timeout=15,
+        timeout=20,
         follow_redirects=False,
-        headers={"Accept": "application/json, text/plain, */*", "User-Agent": "HITLER-YT-Shortener/1.0"},
+        headers={"Accept": "application/json, text/plain, */*", "User-Agent": "Mozilla/5.0 (compatible; HITLER-YT-Shortener/1.0)"},
     ) as client:
         for api_url in endpoints:
             try:
@@ -262,14 +294,22 @@ async def create_shortlink(base_url: str, api_key: str, destination: str):
                 except Exception:
                     data = None
 
+                if isinstance(data, dict) and (
+                    data.get("status") == "error"
+                    or data.get("success") is False
+                    or (data.get("shortenedUrl") == "" and data.get("message"))
+                ):
+                    last_error = _extract_provider_error(data, raw_response) or "Provider rejected the URL"
+                    continue
+
                 short_url = None
                 if isinstance(data, dict):
                     short_url = _find_short_url_in_payload(data)
-                if not short_url and raw_response.startswith(("http://", "https://")):
+                if not short_url and raw_response.startswith(("http://", "https://")) and "<" not in raw_response:
                     short_url = raw_response.splitlines()[0].strip().replace("\\/", "/")
 
                 if not short_url:
-                    last_error = f"Empty/invalid response from {api_url[:90]}"
+                    last_error = _extract_provider_error(data, raw_response) or f"Empty/invalid response (HTTP {response.status_code})"
                     continue
 
                 parsed_short = urlsplit(str(short_url).strip())
@@ -277,7 +317,7 @@ async def create_shortlink(base_url: str, api_key: str, destination: str):
                     last_error = f"Invalid short URL host: {short_url[:80]}"
                     continue
                 candidate = urlunsplit(parsed_short)
-                if _is_junk_short_url(candidate, dest, provider_host):
+                if _is_junk_short_url(candidate, plain_dest, provider_host):
                     last_error = f"Rejected junk URL: {candidate[:80]}"
                     continue
                 return candidate
@@ -285,7 +325,7 @@ async def create_shortlink(base_url: str, api_key: str, destination: str):
                 last_error = f"{type(exc).__name__}: {exc}"
                 continue
 
-    raise ValueError(f"Shortener API failed: {last_error}")
+    raise ValueError(f"Shortener API failed: {last_error}. Destination used: {plain_dest[:120]}")
 
 
 
