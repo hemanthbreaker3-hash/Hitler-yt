@@ -2072,132 +2072,115 @@ function scoreShortUrlCandidate(parsed, providerHost) {
   return score;
 }
 
+
 async function createVercelShortUrl(provider, destination) {
-  // Exact format: https://shortlinkgenerator.onrender.com/api?api=KEY&url=DEST&format=json
-  const rawBase = String(provider.url || '').trim();
-  if (!rawBase) throw new Error('Shortener provider URL is empty');
+  // Filestore-style shortlink generator ONLY (no verification flow).
+  // Arolinks-safe: prefer ?api=KEY&url=DEST without format=text (empty body on Arolinks).
+  const domainRaw = String(provider.url || '').trim().replace(/\/+$/, '');
   const apiKey = String(provider.api_key || '').trim();
-  if (!apiKey) throw new Error('Shortener API key is empty');
+  const dest = String(destination || '').trim();
+  if (!domainRaw || !apiKey || !dest) throw new Error('Shortener domain, API key, and destination are required');
+  const domain = /^https?:\/\//i.test(domainRaw) ? domainRaw : `https://${domainRaw}`;
 
-  let endpoint;
-  try {
-    endpoint = new URL(rawBase);
-  } catch {
-    throw new Error('Invalid shortener provider URL');
-  }
-  // Replace api/url/format rather than appending duplicates
-  endpoint.searchParams.set('api', apiKey);
-  endpoint.searchParams.set('url', String(destination));
-  endpoint.searchParams.set('format', 'json');
-
-  const providerHost = endpoint.hostname;
-  const response = await fetch(endpoint.toString(), {
-    signal: AbortSignal.timeout(25000),
-    redirect: 'follow',
-    headers: {
-      Accept: 'application/json, text/plain, */*',
-      'User-Agent': 'HITLER-YT-Shortener/1.0',
-    },
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(`Shortener returned HTTP ${response.status}: ${body.replace(/\s+/g, ' ').slice(0, 160)}`);
+  let parsedApi;
+  try { parsedApi = new URL(domain); } catch { throw new Error('Invalid shortener API endpoint'); }
+  if (!['http:', 'https:'].includes(parsedApi.protocol) || !parsedApi.hostname) {
+    throw new Error('Invalid shortener API endpoint');
   }
 
-  let data;
-  try { data = JSON.parse(body); } catch { data = body; }
+  const providerHost = parsedApi.hostname;
+  let path = (parsedApi.pathname || '').replace(/\/+$/, '');
+  const baseQuery = new URLSearchParams(parsedApi.searchParams);
 
-  // Priority field names used by shortlinkgenerator / similar APIs
-  const priorityFields = [
-    'shortenedUrl', 'shortenedurl', 'shorturl', 'short_url', 'shortened_url',
-    'shortlink', 'short_link', 'shortenedlink', 'shortened_link', 'shortened',
-    'short', 'result', 'link', 'url',
+  const paramSets = [
+    { api: apiKey, url: dest },
+    { api: apiKey, url: dest, format: 'json' },
   ];
 
-  const ranked = []; // {url, score}
-
-  const pushCandidate = (value, bonus = 0) => {
-    if (value == null) return;
-    const raw = String(value).trim().replace(/^['"`]+|['"`]+$/g, '');
-    if (!raw) return;
-    // Plain full URL
-    try {
-      const parsed = new URL(raw);
-      if (isJunkShortUrl(parsed, destination, providerHost)) return;
-      ranked.push({ url: parsed.toString(), score: scoreShortUrlCandidate(parsed, providerHost) + bonus });
-      return;
-    } catch {}
-    // Extract URLs embedded in text (but filter junk)
-    const embedded = raw.match(/https?:\/\/[^\s"'<>\]]+/gi) || [];
-    for (let item of embedded) {
-      item = item.replace(/[),.;]+$/g, '');
-      try {
-        const parsed = new URL(item);
-        if (isJunkShortUrl(parsed, destination, providerHost)) continue;
-        ranked.push({ url: parsed.toString(), score: scoreShortUrlCandidate(parsed, providerHost) + bonus });
-      } catch {}
-    }
+  const endpoints = [];
+  const build = (pathSuffix, params) => {
+    const u = new URL(parsedApi.origin);
+    u.pathname = pathSuffix || '/';
+    for (const [k, v] of baseQuery.entries()) u.searchParams.set(k, v);
+    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+    return u.toString();
   };
 
-  // 1) Prefer known JSON fields first (highest priority)
-  if (data && typeof data === 'object' && !Array.isArray(data)) {
-    for (const field of priorityFields) {
-      // case-insensitive key match
-      for (const [k, v] of Object.entries(data)) {
-        if (k.toLowerCase() === field.toLowerCase()) pushCandidate(v, 100);
-      }
-    }
-    // Nested data / result envelopes
-    for (const nestKey of ['data', 'result', 'response', 'shortener', 'payload']) {
-      const nest = data[nestKey];
-      if (nest && typeof nest === 'object') {
-        for (const field of priorityFields) {
-          for (const [k, v] of Object.entries(nest)) {
-            if (k.toLowerCase() === field.toLowerCase()) pushCandidate(v, 80);
-          }
-        }
-      }
+  if (path.endsWith('/api') || path.endsWith('/st')) {
+    for (const sp of paramSets) endpoints.push(build(path || '/', sp));
+  } else {
+    // Root domain (arolinks.com): try /api, /st, root — Filestore order
+    for (const suffix of ['/api', '/st', path || '/']) {
+      for (const sp of paramSets) endpoints.push(build(suffix === '/' ? '/' : suffix, sp));
     }
   }
 
-  // 2) Plain-text body that is only a URL
-  if (typeof data === 'string') {
-    const trimmed = data.trim();
-    if (/^https?:\/\//i.test(trimmed) && !trimmed.includes('<') && trimmed.length < 500) {
-      pushCandidate(trimmed, 90);
-    } else {
-      pushCandidate(trimmed, 0);
+  const unique = [...new Set(endpoints)].slice(0, 6);
+  let lastError = 'No valid short URL returned';
+
+  const findShortUrl = (payload, depth = 0) => {
+    if (depth > 3 || !payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    if (payload.status === 'error' || payload.success === false) return null;
+    const keys = [
+      'shortenedUrl', 'shortened_url', 'short_url', 'short',
+      'shortlink', 'shortLink', 'link', 'url', 'output', 'result',
+    ];
+    for (const key of keys) {
+      const candidate = payload[key];
+      if (typeof candidate === 'string' && /^https?:\/\//i.test(candidate.trim())) {
+        return candidate.trim().replace(/\\\//g, '/');
+      }
+    }
+    for (const key of ['data', 'result', 'shortener', 'response']) {
+      const found = findShortUrl(payload[key], depth + 1);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  for (const apiUrl of unique) {
+    try {
+      const response = await fetch(apiUrl, {
+        signal: AbortSignal.timeout(15000),
+        redirect: 'manual',
+        headers: {
+          Accept: 'application/json, text/plain, */*',
+          'User-Agent': 'HITLER-YT-Shortener/1.0',
+        },
+      });
+      const raw = (await response.text() || '').trim();
+      let data = null;
+      try { data = JSON.parse(raw); } catch {}
+
+      let shortUrl = null;
+      if (data && typeof data === 'object') shortUrl = findShortUrl(data);
+      if (!shortUrl && /^https?:\/\//i.test(raw) && !raw.includes('<')) {
+        shortUrl = raw.split(/\r?\n/)[0].trim().replace(/\\\//g, '/');
+      }
+      if (!shortUrl) {
+        lastError = `Empty/invalid response from ${apiUrl.slice(0, 90)}`;
+        continue;
+      }
+
+      let parsedShort;
+      try { parsedShort = new URL(shortUrl); } catch {
+        lastError = `Invalid short URL: ${String(shortUrl).slice(0, 80)}`;
+        continue;
+      }
+      if (isJunkShortUrl(parsedShort, dest, providerHost)) {
+        lastError = `Rejected junk URL: ${parsedShort.toString().slice(0, 80)}`;
+        continue;
+      }
+      return parsedShort.toString();
+    } catch (err) {
+      lastError = String(err && err.message ? err.message : err);
+      continue;
     }
   }
 
-  // 3) Fallback: scan remaining object string values carefully
-  if (data && typeof data === 'object') {
-    const walk = (value, depth = 0) => {
-      if (depth > 5 || value == null) return;
-      if (typeof value === 'string') {
-        pushCandidate(value, 0);
-        return;
-      }
-      if (Array.isArray(value)) {
-        for (const item of value) walk(item, depth + 1);
-        return;
-      }
-      if (typeof value === 'object') {
-        for (const item of Object.values(value)) walk(item, depth + 1);
-      }
-    };
-    walk(data);
-  }
-
-  ranked.sort((a, b) => b.score - a.score);
-  if (ranked.length) return ranked[0].url;
-
-  const apiMessage = data && typeof data === 'object'
-    ? String(data.message || data.error || data.detail || data.status || '').slice(0, 180)
-    : '';
-  const diagnostic = typeof body === 'string' ? body.replace(/\s+/g, ' ').slice(0, 240) : '';
-  throw new Error(apiMessage || `Shortener API returned no valid short URL. Response: ${diagnostic || '(empty)'}`);
+  throw new Error(`Shortener API failed: ${lastError}`);
 }
+
 
 export default async function handler(req, res) {
   try {

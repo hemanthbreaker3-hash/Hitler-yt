@@ -172,101 +172,121 @@ def _usable_short_url(value, destination: str = "", provider_host: str | None = 
     return None
 
 
+
+def _find_short_url_in_payload(payload, depth: int = 0):
+    """Filestore-compatible JSON short URL extraction (shortenedUrl, short_url, …)."""
+    if depth > 3 or not isinstance(payload, dict):
+        return None
+    if payload.get("status") == "error" or payload.get("success") is False:
+        return None
+    keys = (
+        "shortenedUrl", "shortened_url", "short_url", "short",
+        "shortlink", "shortLink", "link", "url", "output", "result",
+    )
+    for key in keys:
+        candidate = payload.get(key)
+        if isinstance(candidate, str) and candidate.strip().startswith(("http://", "https://")):
+            return candidate.strip().replace("\\/", "/")
+    for key in ("data", "result", "shortener", "response"):
+        nested = payload.get(key)
+        found = _find_short_url_in_payload(nested, depth + 1)
+        if found:
+            return found
+    return None
+
+
 async def create_shortlink(base_url: str, api_key: str, destination: str):
-    """Call shortlinkgenerator-compatible API: ?api=KEY&url=DEST&format=json and return only a real short URL."""
+    """
+    Filestore-style shortlink generator only (no verification flow).
+
+    Compatible with Arolinks / AdLinkFly / shortlinkgenerator:
+      GET {provider}?api=KEY&url=DESTINATION
+    Important: do NOT send format=text first for pure providers (Arolinks returns empty body).
+    Tries /api, /st, and root path variants like Filestore.
+    """
     from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
-    parts = urlsplit(str(base_url).strip())
-    if parts.scheme not in ("http", "https") or not parts.netloc:
-        raise ValueError("Invalid shortener API endpoint")
-    if not str(api_key).strip():
-        raise ValueError("Shortener API key is empty")
+    domain = str(base_url or "").strip().rstrip("/")
+    key = str(api_key or "").strip()
+    dest = str(destination or "").strip()
+    if not domain or not key or not dest:
+        raise ValueError("Shortener domain, API key, and destination are required")
+    if not domain.startswith(("http://", "https://")):
+        domain = "https://" + domain
 
-    params = dict(parse_qsl(parts.query, keep_blank_values=True))
-    params.update({"api": str(api_key).strip(), "url": str(destination), "format": "json"})
-    endpoint = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), ""))
-    provider_host = parts.netloc.lower().split(":")[0]
+    parsed_api = urlsplit(domain)
+    if parsed_api.scheme not in ("http", "https") or not parsed_api.hostname:
+        raise ValueError("Invalid shortener API endpoint")
+
+    provider_host = parsed_api.hostname.lower()
+    path = (parsed_api.path or "").rstrip("/")
+    query_items = parse_qsl(parsed_api.query, keep_blank_values=True)
+
+    # Filestore standard params — prefer no format= (Arolinks-safe)
+    alt_params_list = [
+        {"api": key, "url": dest},
+        {"api": key, "url": dest, "format": "json"},
+    ]
+
+    endpoints: list[str] = []
+    if path.endswith("/api") or path.endswith("/st"):
+        for sp in alt_params_list:
+            params = dict(query_items)
+            params.update(sp)
+            endpoints.append(urlunsplit((parsed_api.scheme, parsed_api.netloc, parsed_api.path, urlencode(params), "")))
+    else:
+        # Root domain (arolinks.com etc.): try /api, /st, then root
+        for suffix in ("/api", "/st", ""):
+            for sp in alt_params_list:
+                params = dict(query_items)
+                params.update(sp)
+                endpoints.append(
+                    urlunsplit((parsed_api.scheme, parsed_api.netloc, path + suffix, urlencode(params), ""))
+                )
+
+    endpoints = list(dict.fromkeys(endpoints))[:6]
+    last_error = "No valid short URL returned"
 
     async with httpx.AsyncClient(
-        timeout=25,
-        follow_redirects=True,
+        timeout=15,
+        follow_redirects=False,
         headers={"Accept": "application/json, text/plain, */*", "User-Agent": "HITLER-YT-Shortener/1.0"},
     ) as client:
-        response = await client.get(endpoint)
-        response.raise_for_status()
-        try:
-            data = response.json()
-        except Exception:
-            data = response.text
+        for api_url in endpoints:
+            try:
+                response = await client.get(api_url)
+                raw_response = (response.text or "").strip()
+                data = None
+                try:
+                    data = response.json()
+                except Exception:
+                    data = None
 
-    priority_fields = [
-        "shortenedurl", "shortenedUrl", "shorturl", "short_url", "shortened_url",
-        "shortlink", "short_link", "shortenedlink", "shortened_link", "shortened",
-        "short", "result", "link", "url",
-    ]
-    ranked: list[tuple[int, str]] = []
+                short_url = None
+                if isinstance(data, dict):
+                    short_url = _find_short_url_in_payload(data)
+                if not short_url and raw_response.startswith(("http://", "https://")):
+                    short_url = raw_response.splitlines()[0].strip().replace("\\/", "/")
 
-    def push(value, bonus=0):
-        if value is None:
-            return
-        raw = str(value).strip().strip('"').strip("'")
-        if not raw:
-            return
-        direct = _usable_short_url(raw, destination, provider_host)
-        if direct:
-            ranked.append((_score_short_url(direct, provider_host) + bonus, direct))
-            return
-        for m in re.findall(r"https?://[^\s\"'<>\]]+", raw):
-            m = m.rstrip("),.;")
-            ok = _usable_short_url(m, destination, provider_host)
-            if ok:
-                ranked.append((_score_short_url(ok, provider_host) + bonus, ok))
+                if not short_url:
+                    last_error = f"Empty/invalid response from {api_url[:90]}"
+                    continue
 
-    if isinstance(data, dict):
-        lower_map = {str(k).lower(): v for k, v in data.items()}
-        for field in priority_fields:
-            if field.lower() in lower_map:
-                push(lower_map[field.lower()], 100)
-        for nest_key in ("data", "result", "response", "shortener", "payload"):
-            nest = data.get(nest_key)
-            if isinstance(nest, dict):
-                nest_lower = {str(k).lower(): v for k, v in nest.items()}
-                for field in priority_fields:
-                    if field.lower() in nest_lower:
-                        push(nest_lower[field.lower()], 80)
+                parsed_short = urlsplit(str(short_url).strip())
+                if parsed_short.scheme not in ("http", "https") or not parsed_short.hostname:
+                    last_error = f"Invalid short URL host: {short_url[:80]}"
+                    continue
+                candidate = urlunsplit(parsed_short)
+                if _is_junk_short_url(candidate, dest, provider_host):
+                    last_error = f"Rejected junk URL: {candidate[:80]}"
+                    continue
+                return candidate
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                continue
 
-    if isinstance(data, str):
-        trimmed = data.strip()
-        if trimmed.lower().startswith("http") and "<" not in trimmed and len(trimmed) < 500:
-            push(trimmed, 90)
-        else:
-            push(trimmed, 0)
+    raise ValueError(f"Shortener API failed: {last_error}")
 
-    if isinstance(data, dict):
-        def walk(value, depth=0):
-            if depth > 5 or value is None:
-                return
-            if isinstance(value, str):
-                push(value, 0)
-            elif isinstance(value, list):
-                for item in value:
-                    walk(item, depth + 1)
-            elif isinstance(value, dict):
-                for item in value.values():
-                    walk(item, depth + 1)
-        walk(data)
-
-    if ranked:
-        ranked.sort(key=lambda x: x[0], reverse=True)
-        return ranked[0][1]
-
-    message = ""
-    if isinstance(data, dict):
-        message = str(data.get("message") or data.get("error") or data.get("detail") or "")[:180]
-    if not message:
-        diagnostic = " ".join(str(data if isinstance(data, str) else getattr(response, "text", "")).split())[:240]
-        message = f"Shortener API returned no valid short URL. Response: {diagnostic or '(empty)'}"
-    raise ValueError(message)
 
 
 async def get_key_page(request: Request, token: str):
