@@ -163,6 +163,17 @@ async def _spawn_internal_cloudflared(port: int) -> None:
     if not cf_bin:
         return
 
+    # Origin host for --url. Prefer TRYURL/tryurl (e.g. export tryurl=138.68.175.206)
+    # so the Quick Tunnel targets the public VPS IP instead of loopback.
+    origin_host = (
+        os.environ.get("TRYURL")
+        or os.environ.get("tryurl")
+        or "127.0.0.1"
+    ).strip()
+    origin_host = origin_host.removeprefix("http://").removeprefix("https://")
+    origin_host = origin_host.split("/")[0].split(":")[0] or "127.0.0.1"
+    origin_url = f"http://{origin_host}:{port}"
+
     log_path = Path("/tmp/cloudflared-quick-tunnel.log")
     try:
         log_file = log_path.open("w", encoding="utf-8")
@@ -173,11 +184,15 @@ async def _spawn_internal_cloudflared(port: int) -> None:
             "--loglevel",
             "info",
             "--url",
-            f"http://127.0.0.1:{port}",
+            origin_url,
             stdout=log_file,
             stderr=asyncio.subprocess.STDOUT,
         )
-        logger.info("Started internal cloudflared Quick Tunnel on port %d (pid=%s)", port, _cloudflared_proc.pid)
+        logger.info(
+            "Started internal cloudflared Quick Tunnel -> %s (pid=%s)",
+            origin_url,
+            _cloudflared_proc.pid,
+        )
     except Exception as exc:
         logger.warning("Could not start internal cloudflared process: %s", exc)
 
