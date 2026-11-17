@@ -77,3 +77,10 @@ The supplied Monetag `sw.js` is served from the required root URL. See [MONETAG-
 - `/link https://t.me/channel/123` checks that the bot can access the Telegram message and that it contains supported media, then creates Download and Watch links against that original message. It does not copy the message into the storage channel. For private channel links, the bot must already have access to the channel.
 - `/link` without an argument still accepts a file/media message in the next message.
 - Automatic external-player chooser behavior is controlled by the existing **Automatic player redirect** setting in the admin panel. Web browsers cannot enumerate installed Android apps, so the page lists supported players and uses Android VIEW intents with package targeting and a browser fallback; the device decides whether the requested app is installed and can handle the media.
+
+## Streaming and download reliability notes
+
+- Browser and external-player `/stream/` requests use the direct Telegram streaming path; helper-bot discovery/parallel striping is reserved for large `/dl/` requests so player startup and seeking are not delayed by probing every helper session.
+- Large downloads may use parallel helper sessions, but any failed/empty helper chunk now falls back to the primary Telegram session for the remaining byte range rather than silently ending a partial response.
+- The watch player uses metadata preload so opening a watch page does not immediately request an unnecessarily large playback buffer. The browser controls subsequent buffering and byte-range seeks.
+- Keep reverse-proxy response buffering disabled for streaming endpoints. The included Nginx config already sets `proxy_buffering off`, `proxy_request_buffering off`, and HTTP/1.1 for upstream requests.

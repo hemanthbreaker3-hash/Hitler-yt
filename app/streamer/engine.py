@@ -323,6 +323,7 @@ async def media_streamer(
     message_id: int | None = None,
     storage_chat_id: int | None = None,
     storage_message_id: int | None = None,
+    allow_parallel: bool = False,
 ):
     """
     Stream bytes [start, end]:
@@ -333,7 +334,9 @@ async def media_streamer(
     total = end - start + 1
     try:
         # Check if we can use multi-bot sliding-window parallel striping (for downloads/streams >= 4 MiB)
-        if all_clients and len(all_clients) > 1 and total >= 4 * TG_CHUNK:
+        # Parallel Telegram probing adds latency and contention to browser/external-player
+        # range requests. Reserve it for large explicit downloads only.
+        if allow_parallel and all_clients and len(all_clients) > 1 and total >= 8 * TG_CHUNK:
             capable = await _discover_multi_bot_targets(
                 clients=all_clients,
                 primary_client=primary_client,
@@ -366,12 +369,17 @@ async def media_streamer(
                 try:
                     for current_idx in range(first_chunk_idx, last_chunk_idx + 1):
                         task = in_flight.pop(current_idx)
-                        chunk = await task
+                        try:
+                            chunk = await task
+                        except Exception as exc:
+                            logger.warning("Parallel download chunk %s failed; continuing sequentially: %s", current_idx, exc)
+                            break
                         if next_to_schedule <= last_chunk_idx:
                             schedule_chunk(next_to_schedule)
                             next_to_schedule += 1
 
                         if not chunk:
+                            logger.warning("Parallel download returned an empty chunk %s; continuing sequentially", current_idx)
                             break
                         if bytes_to_skip > 0:
                             if len(chunk) <= bytes_to_skip:
@@ -388,6 +396,14 @@ async def media_streamer(
                             bytes_sent += len(chunk)
                         if bytes_sent >= total:
                             break
+                    # Never silently return a truncated 200/206 response if one helper bot
+                    # cannot fetch a stripe. Resume the remaining bytes through the primary.
+                    if bytes_sent < total:
+                        fallback_start = start + bytes_sent
+                        async for fallback_chunk in _download_byte_range(
+                            primary_client, primary_target, fallback_start, end
+                        ):
+                            yield fallback_chunk
                     return
                 finally:
                     for t in in_flight.values():
@@ -496,6 +512,7 @@ async def get_streaming_response(
             message_id=message_id,
             storage_chat_id=storage_chat_id,
             storage_message_id=storage_message_id,
+            allow_parallel=is_download,
         ),
         status_code=status_code,
         headers=headers,
