@@ -62,11 +62,10 @@ This flow does **not** copy or forward the media into `CHANNEL_ID` or any storag
 The supplied Monetag `sw.js` is served from the required root URL. See [MONETAG-VERCEL-SETUP.md](MONETAG-VERCEL-SETUP.md) for production checks and the required dashboard ad-tag note.
 
 
-### Telegram ad-code setup
+## Shortener key verification and external players
 
-Admins can use `/adsense` or `/monetag`, choose Upload / Replace, and either paste
-the exact code from the publisher dashboard into chat or upload a `.txt`, `.html`,
-or `.js` file (64 KB maximum). Monetag page tags and root `sw.js` service-worker
-snippets are stored separately; the enabled worker is served at `/sw.js`. AdSense
-responsive display units must include a real `data-ad-slot` ID. New code remains
-disabled until explicitly enabled.
+- Admins can use `/shorteners` to add multiple shortener API endpoints, enable/disable verification, and set key expiry (`300s`, `5m`, `2h`, `1d`, `1w`).
+- With verification enabled, website GET pages require a page-scoped key. Keys remain reusable for that same page until expiry and cannot unlock a different path.
+- The shortener API URL must be the provider's API endpoint and return a short URL as plain text or JSON (`shortenedUrl`, `short_url`, `shortlink`, or `url`). The API key is sent as the `api` query parameter and the destination as `url`.
+- `/link` lets an admin request Download and Watch links by sending the command and then uploading/forwarding a Telegram media message. Existing media uploads continue to generate links automatically.
+- The website panel's **Automatic player redirect** setting now opens the external-player chooser section on Android rather than silently cycling through apps. Android does not allow ordinary websites to enumerate installed packages, so the player list uses explicit Android intents and the OS handles unavailable apps.

@@ -1987,22 +1987,17 @@ export default async function handler(req, res) {
 
     const { pathname, search, searchParams } = getRequestPath(req);
 
-    // Monetag worker must be served from the website root. Prefer the enabled
-    // admin-supplied worker from the shared MongoDB config; retain a safe fallback.
+    // Monetag service worker: root endpoint, available before MongoDB initialization.
     if (pathname === '/sw.js' && (req.method === 'GET' || req.method === 'HEAD')) {
-      let body = `self.options = {\n    "domain": "3nbf4.com",\n    "zoneId": 12276863\n}\nself.lary = ""\nimportScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw')`;
-      try {
-        const workerDb = await getDatabase();
-        const workerCfg = await workerDb.collection('site_settings').findOne({ _id: 'ad_config' });
-        if (workerCfg?.monetag?.enabled && workerCfg.monetag.service_worker) {
-          body = String(workerCfg.monetag.service_worker).trim();
-        }
-      } catch (error) {
-        console.warn('Could not load Monetag service-worker configuration; using fallback:', error?.message || error);
-      }
+      const body = `self.options = {
+    "domain": "3nbf4.com",
+    "zoneId": 12276863
+}
+self.lary = ""
+importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw')`;
       res.statusCode = 200;
       res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate');
       res.setHeader('Service-Worker-Allowed', '/');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Content-Length', Buffer.byteLength(body));

@@ -1,7 +1,8 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from app.database.connection import (
     settings,
     files_col,
@@ -18,6 +19,7 @@ from app.streamer.probe import probe_tracks
 from app.bot.main import register_handlers
 from app.admin.routes import router as admin_router
 from app.cms import router as cms_router, get_settings, seed_categories, serialize_catalog_doc
+from app.shorteners import gate_request, verify_key, config as shortener_config, create_shortlink, get_key_page
 from app.utils.cloudflare_tunnel import (
     apply_auto_cloudflare_url,
     start_cloudflare_auto_tunnel,
@@ -97,6 +99,10 @@ async def auto_cloudflare_and_vercel_routing_middleware(request: Request, call_n
                 query = f"?{request.url.query}" if request.url.query else ""
                 return RedirectResponse(url=f"{vercel_site}{path}{query}", status_code=307)
 
+    gated = await gate_request(request)
+    if gated is not None:
+        return gated
+
     # Read ad settings written by /adsense and /monetag. The website never
     # executes uploaded tags unless the corresponding provider is enabled.
     try:
@@ -132,28 +138,49 @@ app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="stati
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
 
-@app.get("/sw.js")
-async def monetag_service_worker():
-    """Serve Monetag's service worker from the required website-root path."""
-    try:
-        ad_doc = await db.site_settings.find_one({"_id": "ad_config"}) or {}
-        monetag = ad_doc.get("monetag", {})
-        worker = monetag.get("service_worker") if monetag.get("enabled") else None
-        if worker:
-            return Response(
-                content=str(worker).strip(),
-                media_type="application/javascript",
-                headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-store"},
-            )
-    except Exception as exc:
-        logger.warning("Could not load custom Monetag service worker: %s", exc)
-    fallback = (Path(__file__).resolve().parent.parent / "sw.js").read_text(encoding="utf-8")
-    return Response(
-        content=fallback,
-        media_type="application/javascript",
-        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-store"},
-    )
+@app.post("/verify-key")
+async def verify_site_key(request: Request):
+    return await verify_key(request)
 
+@app.get("/get-key-start")
+async def start_key_flow(request: Request, target: str = "/"):
+    from urllib.parse import urljoin
+    import secrets, time
+    if not target.startswith("/") or target.startswith("//"):
+        raise HTTPException(400, "Invalid target")
+    cfg = await shortener_config()
+    providers = cfg.get("shorteners", [])
+    providers = [x for x in providers if x.get("url") and x.get("api_key")]
+    if not cfg.get("enabled") or not providers:
+        raise HTTPException(503, "No active shortener configured")
+    import random
+    provider = random.choice(providers)
+    token, key = secrets.token_urlsafe(24), secrets.token_urlsafe(9)
+    expiry = max(1, int(cfg.get("expiry_seconds", 300)))
+    now = int(time.time())
+    host = str(request.base_url).rstrip("/")
+    landing = f"{host}/get-key/{token}"
+    await db.access_keys.insert_one({"token":token,"key":key,"target":target,"created_at":now,"expires_at":now+expiry})
+    try:
+        short_url = await create_shortlink(provider["url"], provider["api_key"], landing)
+    except Exception as exc:
+        await db.access_keys.delete_one({"token":token})
+        logger.exception("Shortener API failed")
+        raise HTTPException(502, f"Shortener API failed: {type(exc).__name__}")
+    return RedirectResponse(short_url, status_code=302)
+
+@app.get("/get-key/{token}")
+async def show_generated_key(request: Request, token: str):
+    return await get_key_page(request, token)
+
+@app.get("/key-copied/{token}")
+async def key_copied(token: str):
+    import time
+    rec = await db.access_keys.find_one({"token":token,"expires_at":{"$gt":int(time.time())}})
+    if not rec: raise HTTPException(410, "Key expired")
+    response = RedirectResponse(rec["target"], status_code=303)
+    response.set_cookie("site_access", token, max_age=max(1,rec["expires_at"]-int(time.time())), httponly=True, samesite="lax", secure=True)
+    return response
 
 @app.get("/health")
 @app.get("/api/health")
