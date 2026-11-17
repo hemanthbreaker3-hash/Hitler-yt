@@ -174,7 +174,7 @@
     <div class="player-shell">
       <div class="neon-ribbon" aria-hidden="true"></div>
       <div class="player-box">
-        <video id="player" controls playsinline preload="metadata" crossorigin="anonymous">
+        <video id="player" controls playsinline preload="auto" crossorigin="anonymous">
           <source id="video-source" src="" type="video/mp4">
           Your browser cannot play this media.
         </video>
@@ -236,10 +236,15 @@
 
 <script>
 const SHORT_CODE = {{ file.short_code|tojson }};
+// Prefer the origin that is currently serving this page so links stay valid
+// even when the Cloudflare Quick Tunnel hostname rotates. short_code itself never expires.
 let STREAM_ORIGIN = ({{ effective_stream_base|tojson }} || window.location.origin).replace(/\/+$/, '');
-if (window.location.hostname.endsWith('.trycloudflare.com')) {
-  STREAM_ORIGIN = window.location.origin;
-}
+try {
+  var host = (window.location.hostname || '').toLowerCase();
+  if (host.endsWith('.trycloudflare.com') || host.endsWith('.cfargotunnel.com') || host === 'localhost' || host === '127.0.0.1') {
+    STREAM_ORIGIN = window.location.origin;
+  }
+} catch (_) {}
 let STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
 let DL_URL = STREAM_ORIGIN + '/dl/' + SHORT_CODE;
 let REMUX_URL = STREAM_ORIGIN + '/remux/' + SHORT_CODE;
@@ -297,6 +302,10 @@ function setPlayerSource(src, mime) {
 }
 
 (function initSource() {
+  var loadAttempts = 0;
+  var maxLoadAttempts = 4;
+  var statusEl = document.getElementById('track-status');
+
   try {
     player.muted = false;
     player.defaultMuted = false;
@@ -304,11 +313,15 @@ function setPlayerSource(src, mime) {
     player.preload = 'auto';
   } catch (_) {}
 
-  setPlayerSource(primaryPlayUrl(0), PLAYER_MIME || 'video/mp4');
+  function loadPrimary() {
+    setPlayerSource(primaryPlayUrl(0), PLAYER_MIME || 'video/mp4');
+  }
+
+  loadPrimary();
 
   player.addEventListener('canplay', function onCan() {
-    player.removeEventListener('canplay', onCan);
     try { player.muted = false; player.volume = 1.0; } catch (_) {}
+    if (statusEl && statusEl.textContent === 'Buffering…') statusEl.textContent = '';
   });
 
   player.addEventListener('playing', function onPlaying() {
@@ -322,14 +335,47 @@ function setPlayerSource(src, mime) {
         }
       } catch (_) {}
     }, 2000);
+    if (statusEl && (statusEl.textContent === 'Buffering…' || statusEl.textContent.indexOf('Reconnecting') !== -1)) {
+      statusEl.textContent = '';
+    }
   });
 
-  var statusEl = document.getElementById('track-status');
+  // Reduce perceived buffering: show status and auto-retry transient network/media errors
   player.addEventListener('waiting', function () {
     if (statusEl && !useCompatible) statusEl.textContent = 'Buffering…';
   });
-  player.addEventListener('playing', function () {
-    if (statusEl && statusEl.textContent === 'Buffering…') statusEl.textContent = '';
+  player.addEventListener('stalled', function () {
+    if (statusEl && !useCompatible) statusEl.textContent = 'Buffering…';
+  });
+  player.addEventListener('error', function () {
+    loadAttempts += 1;
+    if (loadAttempts > maxLoadAttempts) {
+      if (statusEl) {
+        statusEl.classList.add('error');
+        statusEl.textContent = 'Playback error. Try Copy Stream URL or an external player.';
+      }
+      return;
+    }
+    if (statusEl) {
+      statusEl.classList.remove('error');
+      statusEl.textContent = 'Reconnecting… (' + loadAttempts + '/' + maxLoadAttempts + ')';
+    }
+    var t = player.currentTime || 0;
+    setTimeout(function () {
+      try {
+        loadPrimary();
+        if (t > 1) {
+          var onMeta = function () {
+            player.removeEventListener('loadedmetadata', onMeta);
+            try { player.currentTime = t; } catch (_) {}
+            player.play().catch(function () {});
+          };
+          player.addEventListener('loadedmetadata', onMeta);
+        } else {
+          player.play().catch(function () {});
+        }
+      } catch (_) {}
+    }, 600 * loadAttempts);
   });
 })();
 

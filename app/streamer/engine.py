@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 TG_CHUNK = 1024 * 1024
 DEFAULT_CHUNK = 4 * TG_CHUNK
-MAX_CONCURRENT_PER_CLIENT = 32
-MAX_PARALLEL_STRIPES = 4
+MAX_CONCURRENT_PER_CLIENT = 48
+MAX_PARALLEL_STRIPES = 6
 MEDIA_TARGET_CACHE_TTL = 600
 _resolved_media_targets: dict[tuple, tuple[Client, object, float]] = {}
 _resolved_media_lock = asyncio.Lock()
@@ -380,7 +380,7 @@ async def _discover_multi_bot_targets(
 
     async def probe_client(c: Client):
         try:
-            msg = await asyncio.wait_for(_resolve_message(c, target_chat, target_msg), timeout=3.5)
+            msg = await asyncio.wait_for(_resolve_message(c, target_chat, target_msg), timeout=1.0)
             if msg is not None:
                 return (c, msg)
         except Exception:
@@ -406,23 +406,82 @@ async def media_streamer(
     storage_message_id: int | None = None,
 ):
     """
-    Stream bytes [start, end] immediately from the acquired Telegram client.
-    Concurrent downloads are load-balanced across the connected client pool.
+    Stream bytes [start, end] with immediate first-byte response from primary client.
+    When multiple helper bots/sessions are available, subsequent 1 MiB stripes are
+    load-balanced across them (round-robin) for higher single-connection throughput
+    (Chrome) while multi-connection download managers already benefit from per-Range
+    client selection. Auto-resume on transient Telegram errors is preserved.
+    Inspired by FileToLink multi-client load balancing for speed + low latency.
     """
     total = end - start + 1
+    pairs: list[tuple[Client, object]] = [(primary_client, primary_target)]
+    discover_task = None
+    extra_acquired: list[Client] = []
+
+    if all_clients and len(all_clients) > 1 and total > TG_CHUNK:
+        discover_task = asyncio.create_task(
+            _discover_multi_bot_targets(
+                clients=all_clients,
+                primary_client=primary_client,
+                primary_target=primary_target,
+                chat_id=chat_id,
+                message_id=message_id,
+                storage_chat_id=storage_chat_id,
+                storage_message_id=storage_message_id,
+            )
+        )
+
     try:
-        # Stream immediately from the acquired Telegram client. Probing helper bots
-        # before sending the first byte adds seconds of latency and unnecessary API calls.
-        # Standard single-client immediate streaming
-        async for chunk in _download_byte_range(primary_client, primary_target, start, end):
-            yield chunk
+        current = start
+        stripe_idx = 0
+        while current <= end:
+            stripe_end = min(current + TG_CHUNK - 1, end)
+
+            # Opportunistically adopt discovered multi-bot targets (non-blocking after first stripe)
+            if discover_task is not None:
+                if stripe_idx == 0:
+                    # First stripe always from primary for minimal TTFB; give discover a tiny head-start
+                    try:
+                        await asyncio.wait_for(asyncio.shield(discover_task), timeout=0.05)
+                    except (asyncio.TimeoutError, Exception):
+                        pass
+                if discover_task.done():
+                    try:
+                        discovered = discover_task.result()
+                        if discovered and len(discovered) > 1:
+                            pairs = discovered
+                    except Exception:
+                        pass
+                    discover_task = None
+
+            pair = pairs[stripe_idx % len(pairs)]
+            client, target = pair
+            # Primary already acquired by caller; acquire extras so work_loads stays accurate
+            if client is not primary_client and client not in extra_acquired:
+                async with _work_lock:
+                    _work_loads[_cid(client)] = _work_loads.get(_cid(client), 0) + 1
+                extra_acquired.append(client)
+
+            async for chunk in _download_byte_range(client, target, current, stripe_end):
+                yield chunk
+
+            current = stripe_end + 1
+            stripe_idx += 1
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         logger.error("Error during media_streamer byte transfer: %s", exc)
         raise
     finally:
+        if discover_task is not None and not discover_task.done():
+            discover_task.cancel()
+            try:
+                await discover_task
+            except Exception:
+                pass
         await _release_client(primary_client)
+        for c in extra_acquired:
+            await _release_client(c)
 
 
 async def get_streaming_response(
@@ -471,12 +530,27 @@ async def get_streaming_response(
 
     safe_name = re.sub(r'[\r\n/\\"]', "_", filename or "media")[:180]
     is_download = request.url.path.startswith("/dl/")
+    is_stream = (
+        request.url.path.startswith("/stream/")
+        or request.url.path.startswith("/watch/")
+        or request.url.path.startswith("/remux/")
+    )
     disposition = "attachment" if is_download else "inline"
     content_type = (mime_type or "application/octet-stream").strip()
     if is_download and not content_type:
         content_type = "application/octet-stream"
+    # Prefer a concrete video type for external players (VLC/MX/Kodi/etc.) when unknown
+    if is_stream and (not content_type or content_type == "application/octet-stream"):
+        content_type = "video/mp4"
 
     content_length = end - start + 1
+    # Streams: no-store so proxies/players do not cache partial ranges incorrectly.
+    # Full downloads may be briefly cached.
+    if is_download and not partial:
+        cache_control = "public, max-age=3600, no-transform"
+    else:
+        cache_control = "no-store, no-transform, must-revalidate"
+
     headers = {
         "Content-Type": content_type,
         "Content-Length": str(content_length),
@@ -485,17 +559,22 @@ async def get_streaming_response(
         ),
         "Accept-Ranges": "bytes",
         "Content-Encoding": "identity",
-        "Cache-Control": "no-store, no-transform",
+        "Cache-Control": cache_control,
+        "Connection": "keep-alive",
+        "Keep-Alive": "timeout=120, max=1000",
         "X-Content-Type-Options": "nosniff",
         "X-Accel-Buffering": "no",
         "X-Download-Options": "noopen",
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
         "Access-Control-Allow-Headers": "Range, Content-Type, Accept, Origin",
-        "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, Content-Disposition",
+        "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, Content-Disposition, Content-Type",
     }
     if partial:
         headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+    elif file_size > 0:
+        # Advertise full size on 200 so external players can compute duration/seek early
+        headers["Content-Range"] = f"bytes 0-{file_size - 1}/{file_size}"
 
     status_code = 206 if partial else 200
 
