@@ -2021,12 +2021,17 @@ async function createVercelShortUrl(provider, destination) {
   const candidates = [];
   const urlFields = new Set([
     'shortenedurl', 'shorturl', 'short_url', 'shortened_url', 'shortlink',
-    'short_link', 'shortenedlink', 'shortened_link', 'link', 'url', 'result',
+    'short_link', 'shortenedlink', 'shortened_link', 'shortened', 'short',
+    'shortenedurl', 'shortened_link_url', 'shortened_url_link', 'url_short',
+    'link', 'url', 'result',
   ]);
   const collect = (value, depth = 0) => {
     if (depth > 6 || value == null) return;
     if (typeof value === 'string') {
       candidates.push(value);
+      // Accept URLs embedded in labels such as `Short URL: https://...`.
+      const embedded = value.match(/https?:\/\/[^\s\"'<>\]]+/gi) || [];
+      candidates.push(...embedded.map((item) => item.replace(/[),.;]+$/, '')));
       // Some APIs wrap the actual URL in a JSON-encoded string.
       if ((value.startsWith('{') || value.startsWith('['))) {
         try { collect(JSON.parse(value), depth + 1); } catch {}
@@ -2058,7 +2063,8 @@ async function createVercelShortUrl(provider, destination) {
   const apiMessage = data && typeof data === 'object'
     ? String(data.message || data.error || data.detail || '').slice(0, 180)
     : '';
-  throw new Error(apiMessage || 'Shortener API returned no valid URL (check API key, endpoint, and response format)');
+  const diagnostic = typeof body === 'string' ? body.replace(/\s+/g, ' ').slice(0, 240) : '';
+  throw new Error(apiMessage || `Shortener API returned no valid URL. Provider response: ${diagnostic || '(empty response)'}`);
 }
 
 export default async function handler(req, res) {

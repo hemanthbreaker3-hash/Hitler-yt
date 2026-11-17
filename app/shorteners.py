@@ -1,5 +1,5 @@
 """Page-scoped shortener verification keys."""
-import secrets, time, urllib.parse, html
+import secrets, time, urllib.parse, html, re
 import httpx
 from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -145,6 +145,8 @@ async def create_shortlink(base_url: str, api_key: str, destination: str):
             return
         if isinstance(value, str):
             candidates.append(value)
+            # Also accept a URL embedded in text, e.g. "Short URL: https://...".
+            candidates.extend(re.findall(r"https?://[^\s\"'<>\]]+", value))
             if value.lstrip().startswith(("{", "[")):
                 try:
                     import json
@@ -170,7 +172,10 @@ async def create_shortlink(base_url: str, api_key: str, destination: str):
     message = ""
     if isinstance(data, dict):
         message = str(data.get("message") or data.get("error") or data.get("detail") or "")[:180]
-    raise ValueError(message or "Shortener API returned no valid URL; check API key, endpoint, and response format")
+    if not message:
+        diagnostic = " ".join(str(data if isinstance(data, str) else response.text).split())[:240]
+        message = f"Shortener API returned no valid URL. Provider response: {diagnostic or '(empty response)'}"
+    raise ValueError(message)
 
 
 async def get_key_page(request: Request, token: str):
