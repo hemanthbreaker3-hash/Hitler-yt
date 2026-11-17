@@ -16,7 +16,6 @@ const API_SUBPATHS = new Set([
 ]);
 
 let mongoClientPromise = null;
-let activeAdConfig = { adsense: {}, monetag: {} };
 let resolvedDbName = null;
 
 function getMongoUri() {
@@ -516,9 +515,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0a0a0a">
   <meta name="description" content="HITLER YT · Movies & Series">
-  <meta name="google-adsense-account" content="${escapeHtml((activeAdConfig.adsense?.tag || '').match(/ca-pub-[0-9]{10,25}/)?.[0] || '')}">
   <title>${escapeHtml(title)}</title>
-  ${activeAdConfig.adsense?.enabled && activeAdConfig.adsense?.tag ? `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${escapeHtml((activeAdConfig.adsense.tag.match(/ca-pub-[0-9]{10,25}/) || [''])[0])}" crossorigin="anonymous"></script>` : ''}
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <style>
     :root{
@@ -720,10 +717,6 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
   </style>
   ${headExtra}
 
-<style>
-.random-ad-slot{grid-column:1/-1;display:block;width:100%;min-width:0;min-height:100px;margin:10px 0;padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);overflow:hidden;text-align:center}
-.random-ad-slot .ad-label{display:block;margin:0 0 5px;color:#9aa5b7;font:600 10px/1.3 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase}
-</style>
 </head>
 <body>
 <header class="topbar">
@@ -748,34 +741,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
 <footer class="footer">
   <a href="https://t.me/HiTLERYT" target="_blank" rel="noopener"><strong>HITLER YT</strong> · @hitleryt</a>
 </footer>
-<script>
-(function(){
-  'use strict';
-  // Ads are placed in visible content gaps only. Ordinary links/buttons are never hijacked.
-  var slot = ${JSON.stringify(activeAdConfig.adsense?.enabled ? ((activeAdConfig.adsense.tag.match(/data-ad-slot=[\"']([0-9]{6,20})[\"']/) || [])[1] || '') : '')};
-  var client = ${JSON.stringify(activeAdConfig.adsense?.enabled ? ((activeAdConfig.adsense.tag.match(/ca-pub-[0-9]{10,25}/) || [''])[0]) : '')};
-  if (!/^\d{6,20}$/.test(slot) || !/^ca-pub-\d{10,25}$/.test(client)) return;
-  var grids = Array.prototype.slice.call(document.querySelectorAll('main .poster-grid'));
-  var inserted = 0;
-  grids.forEach(function(grid){
-    var cards = Array.prototype.slice.call(grid.querySelectorAll(':scope > .poster-card'));
-    if (cards.length < 5 || inserted >= 2) return;
-    var candidates = [];
-    for (var i=3; i<cards.length-1; i+=1) candidates.push(i);
-    if (!candidates.length) return;
-    // Random position per page view; no click/tap interception or pop-under behavior.
-    var chosen = candidates[Math.floor(Math.random()*candidates.length)];
-    var wrap = document.createElement('div');
-    wrap.className = 'random-ad-slot';
-    wrap.setAttribute('aria-label','Advertisement');
-    wrap.innerHTML = '<span class="ad-label">Advertisement</span><ins class="adsbygoogle" style="display:block;min-height:100px" data-ad-client="'+client+'" data-ad-slot="'+slot+'" data-ad-format="auto" data-full-width-responsive="true"></ins>';
-    cards[chosen].insertAdjacentElement('afterend', wrap);
-    try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch(e) {}
-    inserted += 1;
-  });
-})();
-</script>
-${activeAdConfig.monetag?.enabled && activeAdConfig.monetag?.tag ? activeAdConfig.monetag.tag : ''}
+
 </body>
 </html>`;
 }
@@ -2088,35 +2054,6 @@ export default async function handler(req, res) {
 
     const { pathname, search, searchParams } = getRequestPath(req);
 
-    // Monetag service worker: root endpoint, available before MongoDB initialization.
-    if (pathname === '/sw.js' && (req.method === 'GET' || req.method === 'HEAD')) {
-      const body = `self.options = {
-    "domain": "3nbf4.com",
-    "zoneId": 12276863
-}
-self.lary = ""
-importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw')`;
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-      res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate');
-      res.setHeader('Service-Worker-Allowed', '/');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('Content-Length', Buffer.byteLength(body));
-      res.end(req.method === 'HEAD' ? undefined : body);
-      return;
-    }
-
-    if (pathname === '/ads.txt') {
-      const body = 'google.com, pub-6636601525186884, DIRECT, f08c47fec0942fa0\n';
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.setHeader('Cache-Control', 'public, max-age=300');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('Content-Length', Buffer.byteLength(body));
-      res.end(req.method === 'HEAD' ? undefined : body);
-      return;
-    }
-
     if (pathname === '/robots.txt') {
       const body = 'User-agent: *\nAllow: /\n';
       res.statusCode = 200;
@@ -2157,11 +2094,6 @@ importScripts('https://3nbf4.com/act/files/service-worker.min.js?r=sw')`;
     let db;
     try {
       db = await getDatabase();
-      const savedAds = (await db.collection('site_settings').findOne({ _id: 'ad_config' })) || {};
-      activeAdConfig = {
-        adsense: savedAds.adsense?.enabled ? savedAds.adsense : {},
-        monetag: savedAds.monetag?.enabled ? savedAds.monetag : {},
-      };
       await syncVercelWebsiteUrls(req, db);
       await ensureDefaultCategories(db);
     } catch (error) {

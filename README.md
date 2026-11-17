@@ -57,9 +57,7 @@ Send a public Telegram message link (for example `https://t.me/channelname/123`)
 This flow does **not** copy or forward the media into `CHANNEL_ID` or any storage channel. The bot must be able to access the source chat; for private channels, add the bot to the channel with permission to read messages. If Telegram denies access, the bot reports that instead of creating a broken link.
 
 
-## Monetag service worker (Vercel)
 
-The supplied Monetag `sw.js` is served from the required root URL. See [MONETAG-VERCEL-SETUP.md](MONETAG-VERCEL-SETUP.md) for production checks and the required dashboard ad-tag note.
 
 
 ## Shortener key verification and external players
