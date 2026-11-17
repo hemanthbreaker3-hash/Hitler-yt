@@ -47,6 +47,10 @@ from app.utils.media_tools import (
 )
 from app.utils.mediainfo_fmt import extract_mediainfo, format_output
 import io
+import json
+import zipfile
+import shutil
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +60,11 @@ _BOT_TOKEN_PATTERN = re.compile(r"\d{6,16}:[A-Za-z0-9_-]{30,60}")
 _awaiting_shortener: dict[int, str] = {}
 _shortener_draft: dict[int, dict] = {}
 _awaiting_link_admins: set[int] = set()
+
+# /addgroups state: user_id -> {"page_slug": str, "box": "watch"|"download"}
+_awaiting_addgroups: dict[int, dict] = {}
+# /save restore: set of admin user_ids waiting for a backup ZIP
+_awaiting_restore: set[int] = set()
 
 
 def get_ist_greeting():
@@ -75,6 +84,61 @@ def _kb(rows):
 
 def _is_admin_user(user_id: int) -> bool:
     return user_id == settings.OWNER_ID or user_id in settings.admin_list
+
+
+def extract_filename_from_caption(caption: str | None, fallback: str) -> str:
+    """Extract real filename from caption: first letter through extension, ignore emojis/metadata."""
+    if not caption:
+        return fallback
+    # Prefer .mkv then common video/audio extensions
+    m = re.search(
+        r"([A-Za-z0-9][\w\s.\-()\[\],+@]*?\.(?:mkv|mp4|avi|mov|webm|m4v|ts|m2ts|mpg|mpeg|wmv|flv|3gp|mp3|m4a|flac|wav|aac|ogg))",
+        caption,
+        re.I,
+    )
+    if m:
+        return m.group(1).strip()
+    return fallback
+
+
+def parse_groups_text(text: str, box: str = "watch") -> list[dict]:
+    """
+    Parse admin group/button text into structured groups.
+    Format:
+      1. Group name
+         Button name: Button URL
+      2. Another group
+         Btn: https://...
+    """
+    groups: list[dict] = []
+    current: dict | None = None
+    lines = (text or "").splitlines()
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        # New group: "1. Name" or "1) Name" or just numbered
+        gm = re.match(r"^\d+[\.\)]\s*(.+)$", line)
+        if gm:
+            if current and current.get("buttons"):
+                groups.append(current)
+            gname = gm.group(1).strip()
+            current = {"box": box, "name": gname or f"{'Watch' if box == 'watch' else 'Download'} Group", "buttons": []}
+            continue
+        # Button: "Name: URL" or "Name - URL"
+        bm = re.match(r"^(.+?)\s*[:：\-–]\s*(https?://\S+)\s*$", line, re.I)
+        if bm and current is not None:
+            bname = bm.group(1).strip()
+            burl = bm.group(2).strip()
+            if bname and burl:
+                current["buttons"].append({"name": bname, "url": burl})
+            continue
+        # If we have a group but no buttons yet and line looks like a name only, treat as group name refresh
+        if current is None and line and not line.startswith("http"):
+            current = {"box": box, "name": line, "buttons": []}
+    if current and current.get("buttons"):
+        groups.append(current)
+    return groups
 
 
 async def is_access_allowed(user_id: int) -> bool:
@@ -109,6 +173,9 @@ async def setup_bot_commands(bot):
             BotCommand("ban", "Ban a user (admin)"),
             BotCommand("unban", "Unban a user (admin)"),
             BotCommand("autodel", "Auto-delete settings (admin)"),
+            BotCommand("addgroups", "Add download/watch groups to a page (admin)"),
+            BotCommand("save", "Backup or restore full project data (admin)"),
+            BotCommand("batch", "Generate links for a message ID range (admin)"),
             BotCommand("ss", "Generate screenshots"),
             BotCommand("sv", "Generate sample video"),
             BotCommand("mi", "MediaInfo for a file"),
@@ -477,6 +544,11 @@ def register_handlers(bot):
         user = message.from_user
         if not user or user.is_bot:
             return
+        # Defer ZIP restore to the dedicated restore handler when admin is in /save → Restore mode
+        if user.id in _awaiting_restore and message.document:
+            fname = (message.document.file_name or "").lower()
+            if fname.endswith(".zip") or (message.document.mime_type or "").endswith("zip"):
+                return
         explicit_link_request = user.id in _awaiting_link_admins
         if explicit_link_request:
             _awaiting_link_admins.discard(user.id)
@@ -721,6 +793,52 @@ def register_handlers(bot):
                 await db.site_settings.update_one({"_id":"shortener_config"},{"$set":{"expiry_seconds":seconds}},upsert=True)
                 _awaiting_shortener.pop(user.id, None)
                 return await _show_shortener_settings(message)
+
+        # /addgroups text input (groups + buttons)
+        if raw_override is None and user.id in _awaiting_addgroups and _is_admin_user(user.id):
+            state = _awaiting_addgroups.get(user.id) or {}
+            page_slug = state.get("page_slug")
+            box = state.get("box") or "watch"
+            if not page_slug:
+                _awaiting_addgroups.pop(user.id, None)
+                return await message.reply("Session expired. Reply to a page link with /addgroups again.")
+            page = await db.catalog_pages.find_one({"slug": page_slug})
+            if not page:
+                _awaiting_addgroups.pop(user.id, None)
+                return await message.reply("Catalog page not found.")
+            new_groups = parse_groups_text(raw, box=box)
+            if not new_groups:
+                return await message.reply(
+                    "❌ Could not parse any groups/buttons.\n\n"
+                    "Use this format:\n\n"
+                    "`1. Group Name`\n"
+                    "`Button Name: https://example.com`\n\n"
+                    "`2. Another Group`\n"
+                    "`Watch Now: https://...`"
+                )
+            existing = list(page.get("groups") or [])
+            # Keep groups of the other box; replace same-box groups that match names or append
+            other_box = [g for g in existing if (g.get("box") or "watch") != box]
+            merged = other_box + new_groups
+            # Rewrite URLs to active Cloudflare base if configured
+            cf = await get_active_cloudflare_url()
+            if cf:
+                from app.utils.helpers import rewrite_page_groups_to_cloudflare
+                merged = rewrite_page_groups_to_cloudflare(merged, cf)
+            await db.catalog_pages.update_one(
+                {"slug": page_slug},
+                {"$set": {"groups": merged, "updated_at": datetime.datetime.now(datetime.timezone.utc)}},
+            )
+            _awaiting_addgroups.pop(user.id, None)
+            total_btns = sum(len(g.get("buttons") or []) for g in new_groups)
+            return await message.reply(
+                f"✅ **Groups saved** for `/{page_slug}`\n\n"
+                f"> Box: **{box.upper()}**\n"
+                f"> Groups added: `{len(new_groups)}`\n"
+                f"> Buttons added: `{total_btns}`\n\n"
+                f"They are now live on the page Watch/Download section."
+            )
+
         match = re.search(r"https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))(?:\?.*)?$", raw)
         if not match:
             return
@@ -1389,6 +1507,419 @@ def register_handlers(bot):
                 )
         except Exception:
             await message.reply("⚠️ **Usage:** `/autodel 24h` or `/autodel off`")
+
+    @bot.on_message(filters.command("addgroups") & filters.private)
+    async def addgroups_command(client, message: Message):
+        user = message.from_user
+        if not user or not _is_admin_user(user.id):
+            return await message.reply("🚫 Admins only.")
+        reply = message.reply_to_message
+        source_text = ""
+        if reply:
+            source_text = (getattr(reply, "text", None) or getattr(reply, "caption", None) or "")
+        # Also allow /addgroups <url-or-slug> in the command itself
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) > 1:
+            source_text = (source_text + " " + parts[1]).strip()
+        match = re.search(r"/title/([a-z0-9-]+)", source_text, re.I)
+        if not match:
+            return await message.reply(
+                "📌 **Usage:** Reply to a published `/title/...` page link with `/addgroups`\n\n"
+                "Or: `/addgroups https://yoursite.vercel.app/title/slug`"
+            )
+        page_slug = match.group(1)
+        page = await db.catalog_pages.find_one({"slug": page_slug})
+        if not page:
+            return await message.reply(f"❌ Catalog page `{page_slug}` not found.")
+        kb = _kb([
+            [
+                InlineKeyboardButton("📥 Download", callback_data=f"addg:dl:{page_slug}"),
+                InlineKeyboardButton("▶️ Watch", callback_data=f"addg:wt:{page_slug}"),
+            ]
+        ])
+        await message.reply(
+            f"📁 **Add Groups** for page `{page_slug}`\n\n"
+            f"Choose which section to configure:",
+            reply_markup=kb,
+        )
+
+    @bot.on_callback_query(filters.regex(r"^addg:(dl|wt):"))
+    async def addgroups_box_callback(client, callback: CallbackQuery):
+        user = callback.from_user
+        if not user or not _is_admin_user(user.id):
+            return await callback.answer("Admins only", show_alert=True)
+        parts = (callback.data or "").split(":")
+        if len(parts) < 3:
+            return await callback.answer("Invalid data", show_alert=True)
+        box = "download" if parts[1] == "dl" else "watch"
+        page_slug = parts[2]
+        page = await db.catalog_pages.find_one({"slug": page_slug})
+        if not page:
+            return await callback.answer("Page not found", show_alert=True)
+        _awaiting_addgroups[user.id] = {"page_slug": page_slug, "box": box}
+        try:
+            await callback.message.edit_text(
+                f"✏️ **Configure {box.upper()} groups** for `{page_slug}`\n\n"
+                f"Send groups and buttons in this format (unlimited):\n\n"
+                f"`1. Group Name`\n"
+                f"`Button Name: https://example.com/link`\n\n"
+                f"`2. Another Group`\n"
+                f"`Stream: https://...`\n"
+                f"`Mirror: https://...`\n\n"
+                f"Send everything in **one message**. After saving, buttons appear in the {box} section of the page."
+            )
+        except Exception:
+            await callback.message.reply(
+                f"✏️ Send groups/buttons for **{box}** on `{page_slug}` using the format above."
+            )
+        await callback.answer()
+
+    @bot.on_message(filters.command("save") & filters.private)
+    async def save_command(client, message: Message):
+        user = message.from_user
+        if not user or not _is_admin_user(user.id):
+            return await message.reply("🚫 Admins only.")
+        kb = _kb([
+            [
+                InlineKeyboardButton("📦 Backup", callback_data="save:backup"),
+                InlineKeyboardButton("♻️ Restore", callback_data="save:restore"),
+            ]
+        ])
+        await message.reply(
+            "💾 **Project Backup / Restore**\n\n"
+            "• **Backup** — export databases, settings, catalog, files, groups & configs to `data.zip`\n"
+            "• **Restore** — upload a previous `data.zip` to restore supported data\n\n"
+            "Choose an action:",
+            reply_markup=kb,
+        )
+
+    @bot.on_callback_query(filters.regex(r"^save:(backup|restore)$"))
+    async def save_action_callback(client, callback: CallbackQuery):
+        user = callback.from_user
+        if not user or not _is_admin_user(user.id):
+            return await callback.answer("Admins only", show_alert=True)
+        action = (callback.data or "").split(":")[-1]
+        if action == "restore":
+            _awaiting_restore.add(user.id)
+            try:
+                await callback.message.edit_text(
+                    "♻️ **Restore mode**\n\n"
+                    "Upload the `data.zip` backup file now.\n"
+                    "Supported: MongoDB collections export (files, users, catalog_pages, site_settings, access_keys, etc.)."
+                )
+            except Exception:
+                await callback.message.reply("♻️ Upload the `data.zip` backup file now.")
+            return await callback.answer()
+
+        # Backup
+        await callback.answer("Building backup…")
+        status = None
+        try:
+            status = await callback.message.reply("📦 Collecting project data…")
+            work = tempfile.mkdtemp(prefix="hyt_backup_")
+            export_dir = os.path.join(work, "data")
+            os.makedirs(export_dir, exist_ok=True)
+
+            collections = [
+                "files", "users", "catalog_pages", "catalog_categories",
+                "site_settings", "access_keys", "cms_pending", "settings",
+            ]
+            meta = {"version": 1, "exported_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "collections": []}
+            for coll_name in collections:
+                try:
+                    coll = db[coll_name]
+                    docs = []
+                    async for doc in coll.find({}):
+                        # Make JSON-serializable
+                        d = {}
+                        for k, v in doc.items():
+                            if k == "_id":
+                                d["_id"] = str(v)
+                            elif isinstance(v, datetime.datetime):
+                                d[k] = v.isoformat()
+                            else:
+                                try:
+                                    json.dumps(v)
+                                    d[k] = v
+                                except (TypeError, ValueError):
+                                    d[k] = str(v)
+                        docs.append(d)
+                    out_path = os.path.join(export_dir, f"{coll_name}.json")
+                    with open(out_path, "w", encoding="utf-8") as f:
+                        json.dump(docs, f, ensure_ascii=False, indent=2)
+                    meta["collections"].append({"name": coll_name, "count": len(docs)})
+                except Exception as e:
+                    logger.warning("Backup collection %s failed: %s", coll_name, e)
+                    meta["collections"].append({"name": coll_name, "error": str(e)})
+
+            with open(os.path.join(export_dir, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+
+            zip_path = os.path.join(work, "data.zip")
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for root, _, files in os.walk(export_dir):
+                    for name in files:
+                        full = os.path.join(root, name)
+                        arc = os.path.relpath(full, work)
+                        zf.write(full, arcname=arc)
+
+            await status.edit_text("📤 Uploading backup…")
+            await client.send_document(
+                chat_id=message.chat.id if False else callback.message.chat.id,
+                document=zip_path,
+                caption=(
+                    "📦 **Project Backup (`data.zip`)**\n\n"
+                    f"Collections: {', '.join(c['name'] for c in meta['collections'] if 'count' in c)}\n"
+                    f"Exported: `{meta['exported_at']}`\n\n"
+                    "Keep this file safe. Use /save → Restore to import it later."
+                ),
+            )
+            try:
+                await status.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            logger.exception("Backup failed")
+            try:
+                if status:
+                    await status.edit_text(f"❌ Backup failed: `{e}`")
+                else:
+                    await callback.message.reply(f"❌ Backup failed: `{e}`")
+            except Exception:
+                pass
+        finally:
+            try:
+                shutil.rmtree(work, ignore_errors=True)
+            except Exception:
+                pass
+
+    @bot.on_message(filters.document & filters.private)
+    async def restore_zip_handler(client, message: Message):
+        """Handle data.zip upload when admin is in restore mode."""
+        user = message.from_user
+        if not user or user.id not in _awaiting_restore or not _is_admin_user(user.id):
+            return
+        doc = message.document
+        if not doc:
+            return
+        fname = (doc.file_name or "").lower()
+        if not (fname.endswith(".zip") or (doc.mime_type or "").endswith("zip")):
+            return await message.reply("Please upload a `.zip` backup file (data.zip).")
+        _awaiting_restore.discard(user.id)
+        status = await message.reply("♻️ Extracting and validating backup…")
+        work = None
+        try:
+            work = tempfile.mkdtemp(prefix="hyt_restore_")
+            zip_path = os.path.join(work, "upload.zip")
+            await client.download_media(message, file_name=zip_path)
+            extract_dir = os.path.join(work, "extracted")
+            os.makedirs(extract_dir, exist_ok=True)
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(extract_dir)
+            # Find data/ folder or json files at root
+            data_root = extract_dir
+            if os.path.isdir(os.path.join(extract_dir, "data")):
+                data_root = os.path.join(extract_dir, "data")
+            restored = []
+            for name in os.listdir(data_root):
+                if not name.endswith(".json") or name == "manifest.json":
+                    continue
+                coll_name = name[:-5]
+                path = os.path.join(data_root, name)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        docs = json.load(f)
+                    if not isinstance(docs, list):
+                        continue
+                    coll = db[coll_name]
+                    # Upsert by _id when present
+                    count = 0
+                    for d in docs:
+                        if not isinstance(d, dict):
+                            continue
+                        oid = d.get("_id")
+                        payload = {k: v for k, v in d.items() if k != "_id"}
+                        if oid is not None:
+                            await coll.update_one({"_id": oid}, {"$set": payload}, upsert=True)
+                        else:
+                            await coll.insert_one(payload)
+                        count += 1
+                    restored.append(f"{coll_name} ({count})")
+                except Exception as e:
+                    logger.warning("Restore %s failed: %s", coll_name, e)
+                    restored.append(f"{coll_name} (error: {e})")
+            await status.edit_text(
+                "✅ **Restore complete**\n\n" + ("\n".join(f"• {r}" for r in restored) or "No collections restored.")
+            )
+        except Exception as e:
+            logger.exception("Restore failed")
+            try:
+                await status.edit_text(f"❌ Restore failed: `{e}`")
+            except Exception:
+                pass
+        finally:
+            if work:
+                shutil.rmtree(work, ignore_errors=True)
+
+    @bot.on_message(filters.command("batch") & filters.private)
+    async def batch_command(client, message: Message):
+        user = message.from_user
+        if not user or not _is_admin_user(user.id):
+            return await message.reply("🚫 Admins only.")
+        text = (message.text or "").strip()
+        # Support: /batch https://t.me/c/ID/START-https://t.me/c/ID/END
+        # or /batch https://t.me/c/ID/START-END
+        range_m = re.search(
+            r"https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))"
+            r"\s*[-–]\s*"
+            r"(?:https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))|(\d+))",
+            text,
+            re.I,
+        )
+        if not range_m:
+            return await message.reply(
+                "📌 **Usage:**\n"
+                "`/batch https://t.me/c/4357571996/2081-https://t.me/c/4357571996/2083`\n\n"
+                "Or: `/batch https://t.me/c/4357571996/2081-2083`"
+            )
+        # Resolve chat + start/end ids
+        if range_m.group(1):
+            chat_ref = int("-100" + range_m.group(1))
+            start_id = int(range_m.group(2))
+        else:
+            chat_ref = "@" + range_m.group(3)
+            start_id = int(range_m.group(4))
+        if range_m.group(5):
+            end_chat = int("-100" + range_m.group(5))
+            end_id = int(range_m.group(6))
+            if end_chat != chat_ref:
+                return await message.reply("❌ Start and end must be in the same channel.")
+        elif range_m.group(7):
+            end_chat_name = range_m.group(7)
+            end_id = int(range_m.group(8))
+            if ("@" + end_chat_name) != chat_ref and end_chat_name != str(chat_ref).lstrip("@"):
+                return await message.reply("❌ Start and end must be in the same channel.")
+        else:
+            end_id = int(range_m.group(9))
+        if end_id < start_id:
+            start_id, end_id = end_id, start_id
+        if end_id - start_id > 200:
+            return await message.reply("❌ Range too large (max 200 messages).")
+
+        status = await message.reply(f"🔄 Batch processing messages `{start_id}`–`{end_id}`…")
+        base_url = (await get_active_cloudflare_url()) or (await get_active_website_url()) or settings.BASE_URL
+        base_url = str(base_url).rstrip("/")
+        runtime_cfg = await db.site_settings.find_one({"_id": "runtime"}) or {}
+        downloads_enabled = runtime_cfg.get("downloads_enabled", True)
+        streaming_enabled = runtime_cfg.get("streaming_enabled", True)
+
+        results: list[str] = []
+        idx = 0
+        for msg_id in range(start_id, end_id + 1):
+            try:
+                source_msg = await client.get_messages(chat_ref, msg_id)
+                if isinstance(source_msg, list):
+                    source_msg = source_msg[0] if source_msg else None
+                if not source_msg or not _is_media_message(source_msg):
+                    continue
+                media = (
+                    source_msg.document or source_msg.video or source_msg.audio
+                    or source_msg.animation or source_msg.photo or source_msg.voice
+                    or source_msg.video_note
+                )
+                if source_msg.document:
+                    file_name = media.file_name or "file"
+                    mime_type = media.mime_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+                    file_size = getattr(media, "file_size", None) or 0
+                elif source_msg.video:
+                    file_name = getattr(media, "file_name", None) or f"video_{media.file_unique_id}.mp4"
+                    mime_type = media.mime_type or "video/mp4"
+                    file_size = getattr(media, "file_size", None) or 0
+                elif source_msg.audio:
+                    file_name = media.file_name or f"audio_{media.file_unique_id}.mp3"
+                    mime_type = media.mime_type or "audio/mpeg"
+                    file_size = getattr(media, "file_size", None) or 0
+                elif source_msg.animation:
+                    file_name = getattr(media, "file_name", None) or f"animation_{media.file_unique_id}.mp4"
+                    mime_type = media.mime_type or "video/mp4"
+                    file_size = getattr(media, "file_size", None) or 0
+                elif source_msg.photo:
+                    media = source_msg.photo[-1] if isinstance(source_msg.photo, (list, tuple)) else source_msg.photo
+                    file_name, mime_type = f"photo_{media.file_unique_id}.jpg", "image/jpeg"
+                    file_size = getattr(media, "file_size", None) or 0
+                elif source_msg.voice:
+                    file_name, mime_type = f"voice_{media.file_unique_id}.ogg", media.mime_type or "audio/ogg"
+                    file_size = getattr(media, "file_size", None) or 0
+                else:
+                    file_name, mime_type = f"video_note_{media.file_unique_id}.mp4", "video/mp4"
+                    file_size = getattr(media, "file_size", None) or 0
+
+                caption = getattr(source_msg, "caption", None) or getattr(source_msg, "text", None) or ""
+                file_name = extract_filename_from_caption(caption, file_name)
+
+                file_id = getattr(media, "file_id", None)
+                if not file_id:
+                    continue
+                existing = await files_col.find_one({
+                    "chat_id": source_msg.chat.id,
+                    "message_id": source_msg.id,
+                    "file_id": file_id,
+                })
+                if existing:
+                    short_code = existing["short_code"]
+                else:
+                    short_code = generate_short_code()
+                    file_meta = FileMetadata(
+                        file_id=file_id,
+                        file_unique_id=str(getattr(media, "file_unique_id", source_msg.id)),
+                        filename=file_name,
+                        mime_type=mime_type,
+                        file_size=file_size or 0,
+                        uploader_id=user.id,
+                        short_code=short_code,
+                        chat_id=source_msg.chat.id,
+                        message_id=source_msg.id,
+                        expiry_time=None,
+                    )
+                    await files_col.insert_one(file_meta.dict())
+
+                idx += 1
+                size_str = format_bytes(file_size) if file_size else "—"
+                block = (
+                    f"{idx}. 📁 File: {html.escape(file_name)}\n\n"
+                    f"📦 Size: {size_str}\n\n"
+                    f"🔗 Generated Links\n\n"
+                )
+                if downloads_enabled:
+                    dl = f"{base_url}/dl/{short_code}"
+                    block += f"⬇️ Direct Download: <code>{html.escape(dl)}</code>\n\n"
+                if streaming_enabled:
+                    watch = f"{base_url}/watch/{short_code}"
+                    block += f"▶️ Watch / Stream: <code>{html.escape(watch)}</code>\n"
+                results.append(block)
+            except Exception as e:
+                logger.warning("batch msg %s failed: %s", msg_id, e)
+                continue
+
+        if not results:
+            return await status.edit_text("❌ No media found in that message range.")
+
+        header = f"✅ <b>Batch Generated</b>\n\n"
+        # Split into Telegram-safe messages (~3500 chars)
+        chunks: list[str] = []
+        current = header
+        for block in results:
+            if len(current) + len(block) + 2 > 3500:
+                chunks.append(current.rstrip())
+                current = header + f"<i>(continued)</i>\n\n" + block + "\n"
+            else:
+                current += block + "\n"
+        if current.strip():
+            chunks.append(current.rstrip())
+
+        await status.delete()
+        for i, chunk in enumerate(chunks):
+            await message.reply(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
     def _is_media_message(msg: Message) -> bool:
         if not msg:
