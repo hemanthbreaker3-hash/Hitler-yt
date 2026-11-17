@@ -35,7 +35,7 @@ curl -fsS "http://127.0.0.1:${PORT_VALUE}/health" >/dev/null || {
 
 : > "$LOG_FILE"
 log "Starting Quick Tunnel to http://127.0.0.1:${PORT_VALUE}"
-/usr/local/bin/cloudflared tunnel --no-autoupdate --loglevel info --url "http://127.0.0.1:${PORT_VALUE}" >"$LOG_FILE" 2>&1 &
+/usr/local/bin/cloudflared tunnel --no-autoupdate --protocol http2 --loglevel info --url "http://127.0.0.1:${PORT_VALUE}" >"$LOG_FILE" 2>&1 &
 CF_PID=$!
 cleanup() {
   if kill -0 "$CF_PID" 2>/dev/null; then kill "$CF_PID" 2>/dev/null || true; fi
@@ -144,4 +144,29 @@ fi
 
 log "Auto-set Cloudflare URL in .env and MongoDB: $TUNNEL_URL"
 log "All download links, stream links, and title-page button URLs now use this Cloudflare Try URL, while Vercel serves the website."
-wait "$CF_PID"
+
+# Quick Tunnels are ephemeral and can occasionally lose their edge-to-origin connection.
+# Watch the public health endpoint; after repeated failures exit so systemd recreates the
+# tunnel, obtains a fresh hostname, and synchronizes it to MongoDB/.env automatically.
+FAILURES=0
+while kill -0 "$CF_PID" 2>/dev/null; do
+  sleep 20
+  if ! kill -0 "$CF_PID" 2>/dev/null; then
+    break
+  fi
+  HTTP_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 8 --max-time 15 "$TUNNEL_URL/health" 2>/dev/null || true)"
+  if [[ "$HTTP_CODE" == "200" ]]; then
+    FAILURES=0
+  else
+    FAILURES=$((FAILURES + 1))
+    log "Public tunnel health check failed (HTTP ${HTTP_CODE:-no-response}, ${FAILURES}/3)."
+    if (( FAILURES >= 3 )); then
+      log 'Public tunnel is unhealthy; restarting it through systemd to obtain a fresh URL.'
+      kill "$CF_PID" 2>/dev/null || true
+      wait "$CF_PID" 2>/dev/null || true
+      exit 1
+    fi
+  fi
+done
+log 'cloudflared process exited; systemd will restart the tunnel and resynchronize its URL.'
+exit 1

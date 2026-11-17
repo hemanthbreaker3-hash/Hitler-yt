@@ -301,31 +301,55 @@ async def _fetch_single_tg_chunk(client: Client, media_target, chunk_index: int)
 
 
 async def _download_byte_range(client: Client, media_target, start: int, end: int):
-    """Yield exact byte slice [start, end] sequentially with immediate TTFB."""
+    """Yield an exact byte range and resume Telegram reads after transient interruptions."""
     if end < start:
         return
-    content_length = end - start + 1
-    bytes_to_skip = start % TG_CHUNK
-    bytes_sent = 0
 
-    async for chunk in _stream_file_chunks(
-        client, media_target, offset=start, limit=content_length
-    ):
-        if bytes_to_skip > 0:
-            if len(chunk) <= bytes_to_skip:
-                bytes_to_skip -= len(chunk)
-                continue
-            chunk = chunk[bytes_to_skip:]
-            bytes_to_skip = 0
+    total = end - start + 1
+    sent = 0
+    attempt = 0
+    retry_limit = 6
 
-        remaining = content_length - bytes_sent
-        if len(chunk) > remaining:
-            chunk = chunk[:remaining]
-        if chunk:
-            yield chunk
-            bytes_sent += len(chunk)
-        if bytes_sent >= content_length:
-            return
+    while sent < total:
+        absolute_offset = start + sent
+        remaining = total - sent
+        skip = absolute_offset % TG_CHUNK
+        try:
+            async for chunk in _stream_file_chunks(
+                client, media_target, offset=absolute_offset, limit=remaining
+            ):
+                if not chunk:
+                    continue
+                if skip:
+                    if len(chunk) <= skip:
+                        skip -= len(chunk)
+                        continue
+                    chunk = chunk[skip:]
+                    skip = 0
+                needed = total - sent
+                if len(chunk) > needed:
+                    chunk = chunk[:needed]
+                if chunk:
+                    sent += len(chunk)
+                    yield chunk
+                if sent >= total:
+                    return
+
+            if sent < total:
+                raise IOError(f"Telegram stream ended early ({sent}/{total} bytes delivered)")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            attempt += 1
+            if attempt > retry_limit:
+                logger.exception("Telegram range transfer exhausted retries at byte %d/%d", sent, total)
+                raise
+            delay = min(0.5 * (2 ** (attempt - 1)), 8.0)
+            logger.warning(
+                "Resuming Telegram range at byte %d/%d (attempt %d/%d) after %s; retry in %.1fs",
+                sent, total, attempt, retry_limit, type(exc).__name__, delay,
+            )
+            await asyncio.sleep(delay)
 
 
 async def _discover_multi_bot_targets(
@@ -445,7 +469,7 @@ async def get_streaming_response(
         await _release_client(client)
         raise
 
-    safe_name = re.sub(r'[\r\n"\\]', "_", filename or "media")[:180]
+    safe_name = re.sub(r'[\r\n/\\"]', "_", filename or "media")[:180]
     is_download = request.url.path.startswith("/dl/")
     disposition = "attachment" if is_download else "inline"
     content_type = (mime_type or "application/octet-stream").strip()
@@ -457,7 +481,7 @@ async def get_streaming_response(
         "Content-Type": content_type,
         "Content-Length": str(content_length),
         "Content-Disposition": (
-            f'{disposition}; filename="{safe_name}"; filename*=UTF-8\'\'{quote(safe_name)}'
+            f'{disposition}; filename="{safe_name.encode("ascii", "replace").decode("ascii")}"; filename*=UTF-8\'\'{quote(safe_name, safe="")}'
         ),
         "Accept-Ranges": "bytes",
         "Content-Encoding": "identity",
