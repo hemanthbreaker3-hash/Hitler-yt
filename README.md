@@ -69,3 +69,11 @@ The supplied Monetag `sw.js` is served from the required root URL. See [MONETAG-
 - The shortener API URL must be the provider's API endpoint and return a short URL as plain text or JSON (`shortenedUrl`, `short_url`, `shortlink`, or `url`). The API key is sent as the `api` query parameter and the destination as `url`.
 - `/link` lets an admin request Download and Watch links by sending the command and then uploading/forwarding a Telegram media message. Existing media uploads continue to generate links automatically.
 - The website panel's **Automatic player redirect** setting now opens the external-player chooser section on Android rather than silently cycling through apps. Android does not allow ordinary websites to enumerate installed packages, so the player list uses explicit Android intents and the OS handles unavailable apps.
+
+## Shortener keys and existing Telegram message links
+
+- Admins can use `/shorteners` to enable/disable verification, add multiple shortener API endpoints, and set key expiry (`300s`, `5m`, `2h`, `1d`, or `1w`).
+- When enabled, website routes are gated by a reusable, page-scoped key. Keys are checked against the exact requested path and query string and stop working at their configured expiry.
+- `/link https://t.me/channel/123` checks that the bot can access the Telegram message and that it contains supported media, then creates Download and Watch links against that original message. It does not copy the message into the storage channel. For private channel links, the bot must already have access to the channel.
+- `/link` without an argument still accepts a file/media message in the next message.
+- Automatic external-player chooser behavior is controlled by the existing **Automatic player redirect** setting in the admin panel. Web browsers cannot enumerate installed Android apps, so the page lists supported players and uses Android VIEW intents with package targeting and a browser fallback; the device decides whether the requested app is installed and can handle the media.

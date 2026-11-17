@@ -4,22 +4,22 @@
 <style>
   .admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
   .admin-card{padding:18px}
-  .switch{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #1e3d64}
-  .switch input{accent-color:#3b82f6;width:20px;height:20px}
-  .admin-card input,.admin-card select{width:100%;padding:11px;background:#091a31;border:1px solid #28558b;color:white;border-radius:10px;margin:6px 0}
-  .result{padding:12px;border:1px solid #244c7c;border-radius:10px;margin:10px 0;background:#071426}
+  .switch{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #2a2a2a}
+  .switch input{accent-color:#facc15;width:20px;height:20px}
+  .admin-card input,.admin-card select{width:100%;padding:11px;background:#141414;border:1px solid #2a2a2a;color:white;border-radius:10px;margin:6px 0}
+  .result{padding:12px;border:1px solid #2a2a2a;border-radius:10px;margin:10px 0;background:#141414}
   #tmdb-results .result,#categories .result{cursor:pointer}
-  #tmdb-results .result:hover{background:#10294a}
+  #tmdb-results .result:hover{background:#1a1a1a}
   #page-search{font-weight:700}
   .admin-card h2,.admin-card h3{font-weight:900;letter-spacing:.2px}
   .admin-card button{font-weight:800}
-  .box-panel{border:1px solid #244c7c;border-radius:14px;padding:16px;background:#061120}
-  .box-panel.watch-panel{border-color:#2563eb}
+  .box-panel{border:1px solid #2a2a2a;border-radius:14px;padding:16px;background:#141414}
+  .box-panel.watch-panel{border-color:#facc15}
   .box-panel.download-panel{border-color:#10b981}
-  .group-card{border:1px solid #2b5485;border-radius:12px;padding:12px;margin:12px 0;background:#0b1c33}
+  .group-card{border:1px solid #333333;border-radius:12px;padding:12px;margin:12px 0;background:#141414}
   .group-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-  .btn-row{border:1px solid #1e3a5f;border-radius:10px;padding:10px;margin-top:8px;background:#071324}
-  .field-label{display:block;font-size:12px;font-weight:700;color:#93c5fd;margin-top:6px}
+  .btn-row{border:1px solid #2a2a2a;border-radius:10px;padding:10px;margin-top:8px;background:#111111}
+  .field-label{display:block;font-size:12px;font-weight:700;color:#facc15;margin-top:6px}
   @media(max-width:600px){
     .admin-card{padding:13px}
     .admin-grid{grid-template-columns:1fr}
@@ -108,7 +108,7 @@
   <div class="admin-grid" style="margin:16px 0;align-items:start">
     <!-- WATCH BOX -->
     <section class="box-panel watch-panel">
-      <h3 style="color:#60a5fa">▶ WATCH BOX GROUPS</h3>
+      <h3 style="color:#facc15">▶ WATCH BOX GROUPS</h3>
       <p class="muted" style="font-size:12px;margin:4px 0 8px">Add groups to the Watch box (e.g. Watch 1080p, Episode 1–10, Hindi Dub).</p>
       <label class="field-label">New Watch Group Name</label>
       <input id="new-watch-group-name" placeholder="Enter Watch group name (e.g. Watch Online 1080p)">

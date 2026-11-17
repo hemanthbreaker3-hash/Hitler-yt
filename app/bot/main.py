@@ -560,8 +560,12 @@ def register_handlers(bot):
         user = message.from_user
         if not user or not _is_admin_user(user.id):
             return await message.reply("🚫 Admins only.")
+        command_parts = (message.text or "").split(maxsplit=1)
+        if len(command_parts) > 1 and command_parts[1].strip():
+            # Process an existing public/private Telegram message URL directly; no storage copy.
+            return await telegram_message_link_handler(client, message, raw_override=command_parts[1].strip())
         _awaiting_link_admins.add(user.id)
-        await message.reply("📎 Send or forward the Telegram file, video, audio, photo, or document now. I will generate its Download and Watch links.")
+        await message.reply("📎 Send or forward the Telegram file, video, audio, photo, or document now. I will generate its Download and Watch links. You can also use /link https://t.me/channel/123")
 
     @bot.on_message((filters.document | filters.video | filters.audio | filters.animation | filters.photo | filters.voice | filters.video_note) & ~filters.channel)
     async def media_handler(client, message: Message):
@@ -770,13 +774,13 @@ def register_handlers(bot):
 
 
     @bot.on_message(filters.text & filters.private & ~filters.regex(r"^/"))
-    async def telegram_message_link_handler(client, message: Message):
+    async def telegram_message_link_handler(client, message: Message, raw_override: str | None = None):
         """Create links for media already hosted in a Telegram message; never mirror it to storage."""
         user = message.from_user
         if not user or user.is_bot:
             return
-        raw = (message.text or "").strip()
-        pending = _awaiting_shortener.get(user.id)
+        raw = (raw_override if raw_override is not None else (message.text or "")).strip()
+        pending = _awaiting_shortener.get(user.id) if raw_override is None else None
         if pending and _is_admin_user(user.id):
             if pending == "url":
                 if not raw.startswith(("http://", "https://")):
@@ -809,14 +813,14 @@ def register_handlers(bot):
         match = re.search(r"https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))(?:\?.*)?$", raw)
         if not match:
             return
-        if not await is_access_allowed(user.id):
+        if not _is_admin_user(user.id) and not await is_access_allowed(user.id):
             return await message.reply("🔒 This bot is restricted by the administrator.")
         user_data = await users_col.find_one({"user_id": user.id})
         if user_data and user_data.get("is_banned"):
             return await message.reply("🚫 Your account has been suspended.")
-        if not await check_rate_limit(user.id):
+        if not _is_admin_user(user.id) and not await check_rate_limit(user.id):
             return await message.reply("⏳ Please wait a few seconds before requesting another link.")
-        if not await is_user_fsubbed(client, user.id):
+        if not _is_admin_user(user.id) and not await is_user_fsubbed(client, user.id):
             return await message.reply(
                 "🔒 **Access Restricted**\n\nJoin the updates channel first.",
                 reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
@@ -824,6 +828,8 @@ def register_handlers(bot):
         runtime_cfg = await db.site_settings.find_one({"_id": "runtime"}) or {}
         downloads_enabled = runtime_cfg.get("downloads_enabled", True)
         streaming_enabled = runtime_cfg.get("streaming_enabled", True)
+        if _is_admin_user(user.id):
+            downloads_enabled = streaming_enabled = True
         if not downloads_enabled and not streaming_enabled:
             return await message.reply("🚫 Downloads and streaming are currently disabled.")
         status = await message.reply("🔎 Checking Telegram message access…")
@@ -1486,7 +1492,7 @@ def register_handlers(bot):
         user = message.from_user
         if not user or user.is_bot:
             return
-        if not await is_access_allowed(user.id):
+        if not _is_admin_user(user.id) and not await is_access_allowed(user.id):
             return await message.reply("🔒 This bot is restricted by the administrator.")
         if not await is_user_fsubbed(client, user.id):
             return await message.reply(
@@ -1525,7 +1531,7 @@ def register_handlers(bot):
         user = message.from_user
         if not user or user.is_bot:
             return
-        if not await is_access_allowed(user.id):
+        if not _is_admin_user(user.id) and not await is_access_allowed(user.id):
             return await message.reply("🔒 This bot is restricted by the administrator.")
         if not await is_user_fsubbed(client, user.id):
             return await message.reply(
@@ -1670,7 +1676,7 @@ def register_handlers(bot):
         user = message.from_user
         if not user or user.is_bot:
             return
-        if not await is_access_allowed(user.id):
+        if not _is_admin_user(user.id) and not await is_access_allowed(user.id):
             return await message.reply("🔒 This bot is restricted by the administrator.")
         if not await is_user_fsubbed(client, user.id):
             return await message.reply(

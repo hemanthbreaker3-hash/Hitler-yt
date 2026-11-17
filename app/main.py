@@ -146,7 +146,9 @@ async def verify_site_key(request: Request):
 async def start_key_flow(request: Request, target: str = "/"):
     from urllib.parse import urljoin
     import secrets, time
-    if not target.startswith("/") or target.startswith("//"):
+    from urllib.parse import urlsplit
+    parsed_target = urlsplit(target)
+    if not target.startswith("/") or target.startswith("//") or parsed_target.scheme or parsed_target.netloc:
         raise HTTPException(400, "Invalid target")
     cfg = await shortener_config()
     providers = cfg.get("shorteners", [])

@@ -115,6 +115,9 @@ async def create_indexes() -> None:
             logger.warning("Could not remove legacy expiry TTL index: %s", exc)
     await users_col.create_index("user_id", unique=True)
     await settings_col.create_index("key", unique=True)
+    # Page-scoped shortener lookups and expiry checks.
+    await db.access_keys.create_index("token", unique=True)
+    await db.access_keys.create_index([("key", 1), ("target", 1), ("expires_at", 1)])
 
 
 def _valid_public_candidate(value: str | None) -> str | None:
