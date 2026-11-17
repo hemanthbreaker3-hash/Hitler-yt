@@ -1973,7 +1973,7 @@ function sendKeyPage(res, target, error = '') {
   const safeTarget = escapeHtml(target);
   const encodedTarget = encodeURIComponent(target);
   const safeError = error ? `<p style="color:#f87171;margin-top:14px">${escapeHtml(error)}</p>` : '';
-  sendHtml(res, 200, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Key Verification · HITLER YT</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090d18;color:#f8fafc;font:15px system-ui;padding:20px}main{width:min(420px,100%);padding:28px;border:1px solid #263449;border-radius:18px;background:#111827}h1{font-size:22px}p{color:#aab7ca;font-size:14px}input,button,a{width:100%;display:block;padding:13px;margin-top:12px;border-radius:10px;font:inherit}input{background:#0b1220;border:1px solid #334155;color:white}button{border:0;background:#38bdf8;color:#06111b;font-weight:800}a{text-align:center;color:#e2e8f0;border:1px solid #334155;text-decoration:none}</style></head><body><main><h1>🔐 Verify access key</h1><p>This title page is protected. Enter a valid key or generate one through the shortener.</p><form method="POST" action="/verify-key"><input type="hidden" name="target" value="${safeTarget}"><input name="key" placeholder="Enter access key" required autocomplete="off"><button>Open title page</button></form><a href="/get-key-start?target=${encodedTarget}">Get access key</a>${safeError}</main></body></html>`);
+  sendHtml(res, 200, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Key Verification · HITLER YT</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090d18;color:#f8fafc;font:15px system-ui;padding:20px}main{width:min(420px,100%);padding:28px;border:1px solid #263449;border-radius:18px;background:#111827}h1{font-size:22px}p{color:#aab7ca;font-size:14px}input,button,a{width:100%;display:block;padding:13px;margin-top:12px;border-radius:10px;font:inherit}input{background:#0b1220;border:1px solid #334155;color:white}button{border:0;background:#38bdf8;color:#06111b;font-weight:800;cursor:pointer}a{text-align:center;color:#e2e8f0;border:1px solid #334155;text-decoration:none}</style></head><body><main><h1>🔐 Verify access key</h1><p>Title pages are protected. One valid key unlocks <b>all pages</b> for the admin-configured time (e.g. 4 hours). Enter a key or get a new one.</p><form method="POST" action="/verify-key"><input type="hidden" name="target" value="${safeTarget}"><input name="key" placeholder="Enter access key" required autocomplete="off"><button type="submit">Open title page</button></form><a href="/get-key-start?target=${encodedTarget}">🔑 Get Key</a>${safeError}</main></body></html>`);
 }
 async function createVercelShortUrl(provider, destination) {
   // The provider URL is the API endpoint (for example, https://shortlinkgenerator.onrender.com/api).
@@ -2146,16 +2146,24 @@ export default async function handler(req, res) {
       const expiry = Math.max(60, Math.min(86400, Number(cfg.expiry_seconds) || 300));
       const origin = `https://${currentHost}`;
       const landing = `${origin}/get-key/${token}`;
-      await db.collection('access_keys').insertOne({ token, key, target, created_at: now, expires_at: now + expiry });
+      // Site-wide key: valid for every /title page until expires_at
+      await db.collection('access_keys').insertOne({
+        token,
+        key,
+        target,
+        scope: 'site',
+        created_at: now,
+        expires_at: now + expiry,
+      });
       try {
+        // Shortlink API: https://shortlinkgenerator.onrender.com/api?api=KEY&url=LANDING&format=json
         const shortUrl = await createVercelShortUrl(provider, landing);
-        // Redirect the user directly to the original generated shortlink
+        // Redirect browser directly to the original generated shortlink
         res.statusCode = 302;
         res.setHeader('Location', shortUrl);
         res.setHeader('Cache-Control', 'no-store');
         res.end();
       } catch (error) {
-        // Keep the key so the admin/user can still use the direct landing page
         const detail = String(error.message || error).slice(0, 200);
         sendHtml(res, 502, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shortener error</title></head><body style="background:#090d18;color:#fff;font:16px system-ui;display:grid;place-items:center;min-height:100vh"><main style="max-width:440px;padding:24px"><h1>Shortener API failed</h1><p>${escapeHtml(detail)}</p><p>You can still open the key page directly:</p><a href="${escapeHtml(landing)}" style="color:#38bdf8">Open key page</a><br><br><a href="${escapeHtml(target)}" style="color:#aab7ca">Back to title</a></main></body></html>`);
       }
@@ -2163,10 +2171,16 @@ export default async function handler(req, res) {
     }
     if (pathname.startsWith('/get-key/') && req.method === 'GET') {
       const token = pathname.slice('/get-key/'.length);
-      const rec = await db.collection('access_keys').findOne({ token, expires_at: { $gt: Math.floor(Date.now()/1000) } });
+      const nowTs = Math.floor(Date.now() / 1000);
+      const rec = await db.collection('access_keys').findOne({ token, expires_at: { $gt: nowTs } });
       if (!rec) { sendHtml(res, 410, '<h1>Key request expired</h1><p>Return to the title page and request a new key.</p>'); return; }
-      const key = escapeHtml(rec.key); const target = escapeHtml(rec.target);
-      sendHtml(res, 200, `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Your access key</title><style>body{background:#090d18;color:white;font:16px system-ui;display:grid;place-items:center;min-height:100vh}main{background:#111827;padding:28px;border-radius:16px;width:min(400px,85vw)}input,button,a{box-sizing:border-box;width:100%;padding:13px;margin-top:12px;border-radius:9px}input{background:#0b1220;color:white;border:1px solid #334155}button{background:#38bdf8;border:0;font-weight:bold}a{display:block;text-align:center;color:white}</style></head><body><main><h2>✅ Your key is ready</h2><p>Copy the key, then continue to your title page.</p><input id="k" readonly value="${key}"><button onclick="navigator.clipboard.writeText(document.getElementById('k').value).then(()=>location.href='/key-copied/${encodeURIComponent(token)}')">Copy key & continue</button><a href="${target}">Return to title page</a></main></body></html>`);
+      const key = escapeHtml(rec.key);
+      const target = escapeHtml(rec.target);
+      const remaining = Math.max(0, rec.expires_at - nowTs);
+      let remainLabel = `${remaining}s`;
+      if (remaining >= 3600) remainLabel = `${Math.floor(remaining / 3600)}h ${Math.floor((remaining % 3600) / 60)}m`;
+      else if (remaining >= 60) remainLabel = `${Math.floor(remaining / 60)} minutes`;
+      sendHtml(res, 200, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Your access key</title><style>body{background:#090d18;color:white;font:16px system-ui;display:grid;place-items:center;min-height:100vh;margin:0;padding:20px}main{background:#111827;padding:28px;border-radius:16px;width:min(400px,90vw);border:1px solid #263449}h2{margin:0 0 8px}p{color:#aab7ca;font-size:14px}input,button,a{box-sizing:border-box;width:100%;padding:13px;margin-top:12px;border-radius:9px;font:inherit}input{background:#0b1220;color:white;border:1px solid #334155;text-align:center;font-weight:700;letter-spacing:.4px}button{background:#38bdf8;border:0;font-weight:800;color:#06111b;cursor:pointer}a{display:block;text-align:center;color:#e2e8f0;text-decoration:none;border:1px solid #334155}.hint{color:#a3e635;font-size:13px;margin-top:14px;text-align:center}</style></head><body><main><h2>✅ Your key is ready</h2><p>This key unlocks <b>all title pages</b> on the site. Copy it, then continue.</p><input id="k" readonly value="${key}"><button id="copyBtn">📋 Copy Key &amp; Continue</button><a href="${target}">Open requested page</a><p class="hint">Valid for ~${remainLabel} · works on every /title page</p></main><script>document.getElementById('copyBtn').addEventListener('click',async()=>{const field=document.getElementById('k');try{await navigator.clipboard.writeText(field.value);location.href='/key-copied/${encodeURIComponent(token)}';}catch(e){field.select();alert('Select and copy the key, then open the page.');}});</script></body></html>`);
       return;
     }
     if (pathname.startsWith('/key-copied/') && req.method === 'GET') {
@@ -2180,20 +2194,25 @@ export default async function handler(req, res) {
       const form = await readFormBody(req); const target = form.get('target') || ''; const key = form.get('key') || '';
       if (!isProtectedTitlePath(target)) { sendJson(res, 400, { error: 'Invalid title target' }); return; }
       const now = Math.floor(Date.now()/1000);
-      const rec = await db.collection('access_keys').findOne({ key, target, expires_at: { $gt: now } });
-      if (!rec) { sendKeyPage(res, target, 'Invalid, expired, or page-specific key.'); return; }
-      res.statusCode = 303; res.setHeader('Set-Cookie', `site_access=${encodeURIComponent(rec.token)}; Max-Age=${Math.max(1,rec.expires_at-now)}; Path=/; HttpOnly; Secure; SameSite=Lax`); res.setHeader('Location', target); res.end(); return;
+      // Site-wide: one valid key unlocks every title page until expiry
+      const rec = await db.collection('access_keys').findOne({ key, expires_at: { $gt: now } });
+      if (!rec) { sendKeyPage(res, target, 'Invalid or expired key. Use Get Key to generate a new one.'); return; }
+      res.statusCode = 303;
+      res.setHeader('Set-Cookie', `site_access=${encodeURIComponent(rec.token)}; Max-Age=${Math.max(1, rec.expires_at - now)}; Path=/; HttpOnly; Secure; SameSite=Lax`);
+      res.setHeader('Location', target);
+      res.end();
+      return;
     }
 
     // Gate only GET/HEAD title routes. Homepage, search, watch, dl, stream and all APIs bypass.
-    // Gate protected title pages on the Vercel website (any host serving this gateway)
-    if (isProtectedTitlePath(pathname) && ['GET','HEAD'].includes(req.method)) {
+    // One valid site_access cookie unlocks ALL /title/* pages for the configured expiry window.
+    if (isProtectedTitlePath(pathname) && ['GET', 'HEAD'].includes(req.method)) {
       const cfg = await db.collection('site_settings').findOne({ _id: 'shortener_config' }) || {};
       if (cfg.enabled) {
         const target = pathname + search;
         const token = parseCookies(req).site_access || '';
-        const now = Math.floor(Date.now()/1000);
-        const authorized = token && await db.collection('access_keys').findOne({ token, target, expires_at: { $gt: now } });
+        const now = Math.floor(Date.now() / 1000);
+        const authorized = token && await db.collection('access_keys').findOne({ token, expires_at: { $gt: now } });
         if (!authorized) { sendKeyPage(res, target); return; }
       }
     }

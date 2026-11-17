@@ -152,13 +152,20 @@ async def start_key_flow(request: Request, target: str = "/"):
     now = int(time.time())
     host = str(request.base_url).rstrip("/")
     landing = f"{host}/get-key/{token}"
-    await db.access_keys.insert_one({"token":token,"key":key,"target":target,"created_at":now,"expires_at":now+expiry})
+    await db.access_keys.insert_one({
+        "token": token,
+        "key": key,
+        "target": target,
+        "scope": "site",
+        "created_at": now,
+        "expires_at": now + expiry,
+    })
     try:
+        # Format: https://shortlinkgenerator.onrender.com/api?api=KEY&url=DEST&format=json
         short_url = await create_shortlink(provider["url"], provider["api_key"], landing)
     except Exception as exc:
-        await db.access_keys.delete_one({"token":token})
         logger.exception("Shortener API failed")
-        raise HTTPException(502, f"Shortener API failed: {type(exc).__name__}")
+        raise HTTPException(502, f"Shortener API failed: {type(exc).__name__}: {exc}")
     return RedirectResponse(short_url, status_code=302)
 
 @app.get("/get-key/{token}")
