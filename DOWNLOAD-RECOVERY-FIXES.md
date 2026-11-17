@@ -31,3 +31,15 @@
 - `short_code` entries in MongoDB have no TTL / expiry (legacy expiry index is dropped on startup). Links remain valid forever as long as the file record and Telegram media exist.
 - Watch page always rewrites stream/download origins to the hostname currently serving the page (trycloudflare / named tunnel / localhost). Opening an old watch URL on a new tunnel still produces working player and external-player links.
 - For a stable public hostname (recommended for production), configure a Cloudflare Named Tunnel and set `BACKEND_URL` / `CLOUDFLARE_URL` to that fixed HTTPS domain instead of relying on temporary trycloudflare.com URLs.
+
+## Cloudflare origin host (TRYURL)
+
+Quick Tunnel no longer hardcodes `127.0.0.1`. Set your public VPS IP so cloudflared targets that interface:
+
+```bash
+export tryurl=138.68.175.206
+# or
+export TRYURL=138.68.175.206
+```
+
+Also supported in `.env` as `TRYURL=138.68.175.206`. The systemd unit created by `deploy.vps` passes `TRYURL`/`tryurl` through. Internal Python cloudflared spawn uses the same variables.
