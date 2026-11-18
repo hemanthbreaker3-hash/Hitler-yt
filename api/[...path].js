@@ -343,12 +343,14 @@ async function getSettingsState(db, req = null) {
     (hostUrl && !isTryCloudflareUrl(hostUrl) ? hostUrl : null) ||
     '';
 
+  const fsUser = String(runtime.filestore_bot_username || '').trim().replace(/^@+/, '');
   return {
     downloads_enabled: runtime.downloads_enabled !== false,
     streaming_enabled: runtime.streaming_enabled !== false,
     built_in_player_enabled: runtime.built_in_player_enabled !== false,
     auto_player_redirect: runtime.auto_player_redirect === true,
     access_mode: runtime.access_mode || 'all',
+    filestore_bot_username: fsUser,
     base_url: cloudflareUrl || validPublicUrl(map.base_url) || vercelUrl || '',
     backend_url: cloudflareUrl || validPublicUrl(map.backend_url) || '',
     cloudflare_url: cloudflareUrl,
@@ -1071,7 +1073,68 @@ function renderSearchHtml({ results, query, typeFilter, yearFilter, genreFilter,
   });
 }
 
-function renderTitleHtml(page, cloudflareUrl) {
+
+function extractShortCodeFromMediaUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const raw = url.trim();
+  if (!raw) return null;
+  let path = raw;
+  try {
+    if (raw.includes('://') || raw.startsWith('/')) {
+      const u = new URL(raw.startsWith('/') ? `https://x.invalid${raw}` : raw);
+      path = u.pathname || raw;
+    }
+  } catch (_) {
+    path = raw;
+  }
+  const re = /(?:^|\/)(?:watch|dl|stream|remux)\/([A-Za-z0-9_-]{3,64})(?:\/|$|\?|#)/i;
+  let m = path.match(re);
+  if (m) return m[1];
+  m = raw.match(re);
+  return m ? m[1] : null;
+}
+
+function filestoreDeepLink(username, shortCode) {
+  const uname = String(username || '').trim().replace(/^@+/, '');
+  const code = String(shortCode || '').trim();
+  return `https://t.me/${uname}?start=file_${code}`;
+}
+
+/**
+ * Mirror Watch/Download groups into Telegram deep-link buttons for existing + new pages.
+ * Only converts buttons whose URLs are this bot's /watch|/dl|/stream|/remux links.
+ */
+function buildTelegramGroupsFromWatch(groups, filestoreUsername) {
+  const uname = String(filestoreUsername || '').trim().replace(/^@+/, '');
+  if (!uname || !Array.isArray(groups) || !groups.length) return [];
+  const out = [];
+  for (const g of groups) {
+    if (!g || typeof g !== 'object') continue;
+    const box = String(g.box || 'watch').trim().toLowerCase();
+    if (box && box !== 'watch' && box !== 'download') continue;
+    const buttonsOut = [];
+    const buttons = Array.isArray(g.buttons) ? g.buttons : [];
+    for (const b of buttons) {
+      if (!b || typeof b !== 'object') continue;
+      const bname = String(b.name || '').trim();
+      const burl = String(b.url || '').trim();
+      if (!bname || !burl) continue;
+      const code = extractShortCodeFromMediaUrl(burl);
+      if (!code) continue;
+      buttonsOut.push({ name: bname, url: filestoreDeepLink(uname, code) });
+    }
+    if (buttonsOut.length) {
+      out.push({
+        box: 'telegram',
+        name: String(g.name || (box === 'download' ? 'Download' : 'Watch')).trim() || 'Telegram',
+        buttons: buttonsOut,
+      });
+    }
+  }
+  return out;
+}
+
+function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
   const headExtra = `<style>
     .detail{display:grid;grid-template-columns:minmax(160px,260px) 1fr;gap:24px;align-items:start}
     .detail img{width:100%;border-radius:12px;border:1px solid #333;box-shadow:0 12px 40px #000a}
@@ -1081,11 +1144,17 @@ function renderTitleHtml(page, cloudflareUrl) {
     .eyebrow{color:var(--yellow);font-weight:700;font-size:12px;letter-spacing:1px;margin-bottom:6px}
     .tools{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
     .tools .btn-yellow{font-size:13px;padding:10px 16px}
-    .link-box{background:linear-gradient(145deg,#111827,#0b1220);border:1px solid #334155;border-radius:14px;padding:16px;margin-top:18px;box-shadow:0 12px 30px #0005}
+    .link-box{background:linear-gradient(145deg,#111827,#0b1220);border:1px solid #334155;border-radius:14px;padding:16px;margin-top:18px;box-shadow:0 12px 30px #0005;transition:border-color .2s,box-shadow .2s}
+    .link-box:hover{border-color:#475569;box-shadow:0 16px 36px #0007}
     .link-box h2{font-size:18px;margin:0 0 12px;display:flex;align-items:center;gap:9px}
-    .link-box.watch h2{color:#60a5fa}.link-box.download h2{color:#34d399}
+    .link-box.watch h2{color:#60a5fa}.link-box.download h2{color:#34d399}.link-box.telegram h2{color:#38bdf8}
+    .link-box.telegram{border-color:#0ea5e933;background:linear-gradient(145deg,#0c1929,#0a1520)}
+    .link-box .box-hint{color:#94a3b8;font-size:12px;margin:-6px 0 12px;line-height:1.4}
     .group-block{background:#0b1728;border:1px solid #263b56;border-radius:10px;padding:12px;margin-top:10px}
-    .group-block h3{font-size:14px;margin:0 0 10px;color:#e5e7eb}
+    .group-block h3{font-size:14px;margin:0 0 10px;color:#e5e7eb;font-weight:600}
+    .tools .btn-yellow{transition:transform .15s,filter .15s}
+    .tools .btn-yellow:hover{transform:translateY(-1px);filter:brightness(1.08)}
+    .tools a[href*="t.me/"]{background:linear-gradient(135deg,#0ea5e9,#2563eb)!important;color:#fff;border:0}
     .groups-pager{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid #263b56}
     .groups-pager .pg-btn{background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:8px;padding:8px 12px;font:600 13px system-ui;cursor:pointer}
     .groups-pager .pg-btn:disabled{opacity:.4;cursor:not-allowed}
@@ -1149,6 +1218,40 @@ function renderTitleHtml(page, cloudflareUrl) {
     })
     .join('');
 
+  // Telegram box for existing + new pages (only when FileStore is configured)
+  const tgGroups = buildTelegramGroupsFromWatch(allGroups, filestoreUsername);
+  let telegramHtml = '';
+  if (tgGroups.length) {
+    const tgContent = tgGroups.map((group, idx) => {
+      const buttons = Array.isArray(group.buttons) ? group.buttons : [];
+      const btnsHtml = buttons.map((btn) =>
+        `<a class="btn-yellow" href="${escapeHtml(btn.url || '#')}" rel="noopener" target="_blank">${escapeHtml(btn.name || 'Link')}</a>`
+      ).join('');
+      return `<div class="group-block" data-group-index="${idx}">
+          <h3>${escapeHtml(group.name || '')}</h3>
+          <div class="tools">${btnsHtml}</div>
+        </div>`;
+    }).join('');
+    const tgPager = tgGroups.length > 5
+      ? `<div class="groups-pager" data-box="telegram" data-total="${tgGroups.length}" data-per-page="5">
+        <button type="button" class="pg-btn pg-prev" aria-label="Previous page">← Prev</button>
+        <span class="pg-info">Page <span class="pg-cur">1</span> / <span class="pg-max">1</span></span>
+        <button type="button" class="pg-btn pg-next" aria-label="Next page">Next →</button>
+        <div class="pg-jump">
+          <label for="pg-jump-telegram">Go to</label>
+          <input id="pg-jump-telegram" class="pg-input" type="number" min="1" inputmode="numeric" placeholder="#">
+          <button type="button" class="pg-go">Go</button>
+        </div>
+      </div>`
+      : '';
+    telegramHtml = `<section class="link-box telegram" aria-label="Telegram links" data-box="telegram">
+        <h2><span aria-hidden="true">✈</span>Get in Telegram</h2>
+        <p class="box-hint">Open in Telegram bot — file is sent in chat (auto-deletes after a few minutes). Same groups as Watch; deep links only for this site's media.</p>
+        <div class="groups-list" data-box="telegram">${tgContent}</div>
+        ${tgPager}
+      </section>`;
+  }
+
   const genresHtml =
     Array.isArray(page.genres) && page.genres.length
       ? `<div class="meta">${page.genres.map((g) => `<span>${escapeHtml(g)}</span>`).join('')}</div>`
@@ -1169,6 +1272,7 @@ function renderTitleHtml(page, cloudflareUrl) {
     ${page.imdb_id ? `<p class="muted" style="margin-top:8px">IMDb: ${escapeHtml(page.imdb_id)}</p>` : ''}
     ${page.tagline ? `<p style="margin-top:8px"><em>${escapeHtml(page.tagline)}</em></p>` : ''}
     ${boxesHtml}
+    ${telegramHtml}
   </div>
 </article>
 <script>
@@ -1252,6 +1356,7 @@ function renderTitleHtml(page, cloudflareUrl) {
   }
   setupBox('watch');
   setupBox('download');
+  setupBox('telegram');
 })();
 </script>`;
 
@@ -2925,7 +3030,9 @@ export default async function handler(req, res) {
         return;
       }
       const page = serializeCatalogDoc(rawPage, cloudflareUrl);
-      sendHtml(res, 200, renderTitleHtml(page, cloudflareUrl));
+      const settingsState = await getSettingsState(db, req);
+      const fsUser = (settingsState.filestore_bot_username || '').trim().replace(/^@+/, '');
+      sendHtml(res, 200, renderTitleHtml(page, cloudflareUrl, fsUser));
       return;
     }
 
