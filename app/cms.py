@@ -105,13 +105,8 @@ async def admin_auth(_: bool = Depends(require_panel_admin)):
     return True
 
 
-def serialize_catalog_doc(
-    doc: dict,
-    cloudflare_base: str | None = None,
-    downloads_enabled: bool = True,
-    filestore_bot_username: str | None = None,
-) -> dict:
-    """Safely serialize a MongoDB catalog_pages document for JSON/templates and rewrite button URLs."""
+def serialize_catalog_doc(doc: dict, cloudflare_base: str | None = None) -> dict:
+    """Safely serialize a MongoDB catalog_pages document for JSON/templates and rewrite all button URLs to Cloudflare."""
     if not isinstance(doc, dict):
         return {}
     out = {}
@@ -124,12 +119,7 @@ def serialize_catalog_doc(
             out[k] = None
         else:
             out[k] = v
-    out['groups'] = rewrite_page_groups_to_cloudflare(
-        out.get('groups', []),
-        cloudflare_base,
-        downloads_enabled=downloads_enabled,
-        filestore_bot_username=filestore_bot_username,
-    )
+    out['groups'] = rewrite_page_groups_to_cloudflare(out.get('groups', []), cloudflare_base)
     return out
 
 
@@ -145,7 +135,7 @@ async def rewrite_all_stored_catalog_buttons(cloudflare_base: str | None) -> int
     cursor = pages.find({'groups.0': {'$exists': True}}, {'_id': 1, 'slug': 1, 'groups': 1})
     async for doc in cursor:
         old_groups = doc.get('groups') or []
-        new_groups = rewrite_page_groups_to_cloudflare(old_groups, cf_base, downloads_enabled=True)
+        new_groups = rewrite_page_groups_to_cloudflare(old_groups, cf_base)
         if new_groups != old_groups:
             await pages.update_one(
                 {'_id': doc['_id']},
@@ -158,9 +148,9 @@ async def rewrite_all_stored_catalog_buttons(cloudflare_base: str | None) -> int
 async def get_settings():
     doc = await site_settings.find_one({'_id': 'runtime'}) or {}
     rows = await settings_col.find(
-        {'key': {'$in': ['base_url', 'backend_url', 'cloudflare_url', 'vercel_url', 'website_urls', 'filestore_bot_username']}},
+        {'key': {'$in': ['base_url', 'backend_url', 'cloudflare_url', 'vercel_url', 'website_urls']}},
         {'key': 1, 'value': 1},
-    ).to_list(15)
+    ).to_list(10)
     urls = {x['key']: x.get('value', '') for x in rows if isinstance(x, dict) and 'key' in x}
     cf_url = await get_active_cloudflare_url() or ''
     web_url = await get_active_website_url() or ''
@@ -168,7 +158,7 @@ async def get_settings():
     if not isinstance(website_urls, list):
         website_urls = [str(website_urls)] if website_urls else []
     website_urls = [u for u in website_urls if not is_trycloudflare_url(str(u))]
-    fs_user = (doc.get('filestore_bot_username') or urls.get('filestore_bot_username') or '').strip().lstrip('@')
+    fs_user = (doc.get('filestore_bot_username') or '').strip().lstrip('@')
     return {
         'downloads_enabled': doc.get('downloads_enabled', True),
         'streaming_enabled': doc.get('streaming_enabled', True),
@@ -176,7 +166,6 @@ async def get_settings():
         'auto_player_redirect': doc.get('auto_player_redirect', False),
         'access_mode': doc.get('access_mode', 'all'),
         'filestore_bot_username': fs_user,
-        'filestore_bot_configured': bool(fs_user or doc.get('filestore_bot_token')),
         'base_url': cf_url or urls.get('base_url') or settings.BASE_URL,
         'backend_url': cf_url or urls.get('backend_url') or (settings.BACKEND_URL or ''),
         'cloudflare_url': cf_url,
@@ -239,13 +228,10 @@ async def catalog(category: str | None = None, q: str | None = None):
             {'genres': {'$regex': safe, '$options': 'i'}},
         ]
     try:
-        s = await get_settings()
-        cf_base = s.get('cloudflare_url') or await get_active_cloudflare_url()
-        dl_on = bool(s.get('downloads_enabled', True))
-        fs_user = s.get('filestore_bot_username') or ''
+        cf_base = await get_active_cloudflare_url()
         rows = await pages.find(query, {'_id': 0}).sort('created_at', -1).to_list(100)
-        items = [serialize_catalog_doc(row, cf_base, downloads_enabled=dl_on, filestore_bot_username=fs_user) for row in rows]
-        return {'items': items, 'cloudflare_url': cf_base or '', 'downloads_enabled': dl_on, 'filestore_bot_username': fs_user}
+        items = [serialize_catalog_doc(row, cf_base) for row in rows]
+        return {'items': items, 'cloudflare_url': cf_base or ''}
     except Exception as exc:
         import logging
         logging.getLogger(__name__).exception('Catalog API query failed')
@@ -254,17 +240,11 @@ async def catalog(category: str | None = None, q: str | None = None):
 
 @router.get('/api/public/title/{slug}')
 async def public_title(slug: str):
-    s = await get_settings()
-    cf_base = s.get('cloudflare_url') or await get_active_cloudflare_url()
+    cf_base = await get_active_cloudflare_url()
     page = await pages.find_one({'slug': slug, 'published': True}, {'_id': 0})
     if not page:
         raise HTTPException(404, 'Title not found')
-    return serialize_catalog_doc(
-        page,
-        cf_base,
-        downloads_enabled=bool(s.get('downloads_enabled', True)),
-        filestore_bot_username=s.get('filestore_bot_username') or '',
-    )
+    return serialize_catalog_doc(page, cf_base)
 
 
 @router.get('/search', response_class=HTMLResponse)
@@ -302,12 +282,9 @@ async def search_page(
             {'genres': {'$regex': safe, '$options': 'i'}},
         ]
 
-    s = await get_settings()
-    cf_base = s.get('cloudflare_url') or await get_active_cloudflare_url()
-    dl_on = bool(s.get('downloads_enabled', True))
-    fs_user = s.get('filestore_bot_username') or ''
+    cf_base = await get_active_cloudflare_url()
     raw_rows = await pages.find(query, {'_id': 0}).sort('created_at', -1).to_list(100)
-    rows = [serialize_catalog_doc(r, cf_base, downloads_enabled=dl_on, filestore_bot_username=fs_user) for r in raw_rows]
+    rows = [serialize_catalog_doc(r, cf_base) for r in raw_rows]
     cats = await categories.find({}, {'_id': 0}).sort('name', 1).to_list(None)
 
     all_genres: set[str] = set()
@@ -338,14 +315,8 @@ async def title_page(request: Request, slug: str):
     raw_page = await pages.find_one({'slug': slug, 'published': True}, {'_id': 0})
     if not raw_page:
         raise HTTPException(404, 'Title not found')
-    s = await get_settings()
-    cf_base = s.get('cloudflare_url') or await get_active_cloudflare_url() or settings.BASE_URL.rstrip('/')
-    page = serialize_catalog_doc(
-        raw_page,
-        cf_base,
-        downloads_enabled=bool(s.get('downloads_enabled', True)),
-        filestore_bot_username=s.get('filestore_bot_username') or '',
-    )
+    cf_base = await get_active_cloudflare_url() or settings.BASE_URL.rstrip('/')
+    page = serialize_catalog_doc(raw_page, cf_base)
     return templates.TemplateResponse(
         request=request,
         name='title.html',
@@ -353,7 +324,6 @@ async def title_page(request: Request, slug: str):
             'request': request,
             'page': page,
             'cloudflare_url': cf_base,
-            'site_settings': s,
         },
     )
 
@@ -377,16 +347,8 @@ async def read_admin_settings(_: bool = Depends(admin_auth)):
 async def update_settings(data: SettingsUpdate, _: bool = Depends(admin_auth)):
     values = data.model_dump(exclude_none=True)
     url_values = {key: values.pop(key) for key in ('base_url', 'backend_url', 'cloudflare_url') if key in values}
-    if 'filestore_bot_username' in values:
-        values['filestore_bot_username'] = str(values['filestore_bot_username'] or '').strip().lstrip('@')
     if values:
         await site_settings.update_one({'_id': 'runtime'}, {'$set': values}, upsert=True)
-        if 'filestore_bot_username' in values:
-            await settings_col.update_one(
-                {'key': 'filestore_bot_username'},
-                {'$set': {'value': values['filestore_bot_username'], 'updated_at': datetime.now(timezone.utc)}},
-                upsert=True,
-            )
 
     now = datetime.now(timezone.utc)
     cf_target: str | None = None
@@ -516,7 +478,7 @@ async def list_pages(q: str | None = None, _: bool = Depends(admin_auth)):
         }
     cf_base = await get_active_cloudflare_url()
     rows = await pages.find(query, {'_id': 0}).sort('created_at', -1).to_list(300)
-    return {'items': [serialize_catalog_doc(r, cf_base, downloads_enabled=True) for r in rows]}
+    return {'items': [serialize_catalog_doc(r, cf_base) for r in rows]}
 
 
 @router.get('/api/admin/pages/{slug}')
@@ -525,7 +487,7 @@ async def get_page(slug: str, _: bool = Depends(admin_auth)):
     if not page:
         raise HTTPException(404, 'Page not found')
     cf_base = await get_active_cloudflare_url()
-    return serialize_catalog_doc(page, cf_base, downloads_enabled=True)
+    return serialize_catalog_doc(page, cf_base)
 
 
 @router.post('/api/admin/pages')
@@ -539,7 +501,7 @@ async def create_page(data: PageInput, _: bool = Depends(admin_auth)):
     cats = await categories.find({'slug': {'$in': data.category_ids}}).to_list(100)
     cf_base = await get_active_cloudflare_url()
     doc = data.model_dump()
-    doc['groups'] = rewrite_page_groups_to_cloudflare(doc.get('groups', []), cf_base, downloads_enabled=True)
+    doc['groups'] = rewrite_page_groups_to_cloudflare(doc.get('groups', []), cf_base)
     doc.update(
         {
             'slug': slug,
@@ -575,7 +537,7 @@ async def edit_page(slug: str, data: PageInput, _: bool = Depends(admin_auth)):
     cats = await categories.find({'slug': {'$in': data.category_ids}}).to_list(100)
     cf_base = await get_active_cloudflare_url()
     doc = data.model_dump()
-    doc['groups'] = rewrite_page_groups_to_cloudflare(doc.get('groups', []), cf_base, downloads_enabled=True)
+    doc['groups'] = rewrite_page_groups_to_cloudflare(doc.get('groups', []), cf_base)
     doc['category_slugs'] = [x['slug'] for x in cats] if cats else [x for x in data.category_ids if x]
     doc['updated_at'] = datetime.now(timezone.utc)
     result = await pages.update_one({'slug': slug}, {'$set': doc})

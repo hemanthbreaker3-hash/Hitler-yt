@@ -37,9 +37,11 @@ import os
 import sys
 from pathlib import Path
 
+# Configure Windows Event Loop Policy for subprocess support
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+# Configure Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Startup logic
     try:
         await mongo_client.admin.command("ping")
         await create_indexes()
@@ -75,6 +78,12 @@ app = FastAPI(title="HITLER Media Link Service", lifespan=lifespan)
 
 @app.middleware("http")
 async def auto_cloudflare_and_vercel_routing_middleware(request: Request, call_next):
+    """
+    1. Automatically detect any incoming *.trycloudflare.com Host header, save it to MongoDB,
+       and replace all catalog button URL domains with that Cloudflare try URL.
+    2. If a user accesses website-only catalog pages (/, /search, /title/*) on a trycloudflare.com
+       hostname and a Vercel website URL is registered, redirect them to the Vercel website.
+    """
     raw_host = (
         request.headers.get("x-forwarded-host")
         or request.headers.get("host")
@@ -100,18 +109,23 @@ async def auto_cloudflare_and_vercel_routing_middleware(request: Request, call_n
     return await call_next(request)
 
 
+# Include Routers
 app.include_router(admin_router)
 app.include_router(cms_router)
 
+# Enable CORS with exposed Range headers for Chrome, 1DM, ADM, IDM, and web players
+# Note: Do NOT enable GZipMiddleware because gzip-compressing binary /dl/ and /stream/ responses
+# breaks Content-Length / 206 Partial Content byte ranges in Chrome and 1DM!
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition", "Content-Type"],
+    expose_headers=["Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition"],
 )
 
+# Mount Static Files & Templates
 APP_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
@@ -121,10 +135,9 @@ templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 async def verify_site_key(request: Request):
     return await verify_key(request)
 
-
 @app.get("/get-key-start")
 async def start_key_flow(request: Request, target: str = "/"):
-    import secrets, time, random
+    import secrets, time
     if not is_protected_title_target(target, request.url.hostname):
         raise HTTPException(400, "Shortener verification is available only for /title/* pages")
     cfg = await shortener_config()
@@ -132,6 +145,7 @@ async def start_key_flow(request: Request, target: str = "/"):
     providers = [x for x in providers if x.get("url") and x.get("api_key")]
     if not cfg.get("enabled") or not providers:
         raise HTTPException(503, "No active shortener configured")
+    import random
     provider = random.choice(providers)
     token, key = secrets.token_urlsafe(24), secrets.token_urlsafe(9)
     expiry = max(1, int(cfg.get("expiry_seconds", 300)))
@@ -147,28 +161,25 @@ async def start_key_flow(request: Request, target: str = "/"):
         "expires_at": now + expiry,
     })
     try:
+        # Format: https://shortlinkgenerator.onrender.com/api?api=KEY&url=DEST&format=json
         short_url = await create_shortlink(provider["url"], provider["api_key"], landing)
     except Exception as exc:
         logger.exception("Shortener API failed")
         raise HTTPException(502, f"Shortener API failed: {type(exc).__name__}: {exc}")
     return RedirectResponse(short_url, status_code=302)
 
-
 @app.get("/get-key/{token}")
 async def show_generated_key(request: Request, token: str):
     return await get_key_page(request, token)
 
-
 @app.get("/key-copied/{token}")
 async def key_copied(token: str):
     import time
-    rec = await db.access_keys.find_one({"token": token, "expires_at": {"$gt": int(time.time())}})
-    if not rec:
-        raise HTTPException(410, "Key expired")
+    rec = await db.access_keys.find_one({"token":token,"expires_at":{"$gt":int(time.time())}})
+    if not rec: raise HTTPException(410, "Key expired")
     response = RedirectResponse(rec["target"], status_code=303)
-    response.set_cookie("site_access", token, max_age=max(1, rec["expires_at"] - int(time.time())), httponly=True, samesite="lax", secure=True)
+    response.set_cookie("site_access", token, max_age=max(1,rec["expires_at"]-int(time.time())), httponly=True, samesite="lax", secure=True)
     return response
-
 
 @app.get("/health")
 @app.get("/api/health")
@@ -181,7 +192,6 @@ async def health():
     sessions = len(session_manager.get_all_clients())
     cf_url = await get_active_cloudflare_url()
     vercel_url = await get_active_vercel_website_url()
-    fs_info = session_manager.get_filestore_info()
     return {
         "status": "ok" if mongo_status == "ok" else "degraded",
         "service": "HITLER",
@@ -190,7 +200,6 @@ async def health():
         "download_ready": mongo_status == "ok" and sessions > 0,
         "cloudflare_url": cf_url or "",
         "vercel_url": vercel_url or "",
-        "filestore_bot": fs_info.get("username") or "",
     }
 
 
@@ -199,12 +208,9 @@ async def index(request: Request):
     initial_items = []
     initial_categories = []
     try:
-        s = await get_settings()
-        cf_base = s.get("cloudflare_url") or await get_active_cloudflare_url()
-        dl_on = bool(s.get("downloads_enabled", True))
-        fs_user = s.get("filestore_bot_username") or ""
+        cf_base = await get_active_cloudflare_url()
         raw_items = await db.catalog_pages.find({"published": True}, {"_id": 0}).sort("created_at", -1).to_list(100)
-        initial_items = [serialize_catalog_doc(r, cf_base, downloads_enabled=dl_on, filestore_bot_username=fs_user) for r in raw_items]
+        initial_items = [serialize_catalog_doc(r, cf_base) for r in raw_items]
         raw_cats = await db.catalog_categories.find({}, {"_id": 0}).sort("name", 1).to_list(None)
         for c in raw_cats:
             c_copy = dict(c)
@@ -225,11 +231,9 @@ async def index(request: Request):
     )
 
 
-async def _render_watch_for_code(request: Request, short_code: str):
-    code = (short_code or "").strip()
-    if not code:
-        raise HTTPException(status_code=404, detail="Link not found")
-    file_data = await files_col.find_one({"short_code": code})
+@app.api_route("/watch/{short_code}", methods=["GET", "HEAD"])
+async def watch_page(request: Request, short_code: str):
+    file_data = await files_col.find_one({"short_code": short_code})
     if not file_data:
         raise HTTPException(status_code=404, detail="Link not found")
 
@@ -247,32 +251,20 @@ async def _render_watch_for_code(request: Request, short_code: str):
     )
 
 
-@app.api_route("/watch", methods=["GET", "HEAD"])
-async def watch_query_page(request: Request, path: str = "", code: str = "", id: str = ""):
-    """Support ddstream-style /watch?path=<short_code> alongside /watch/<short_code>?hash=<hash>."""
-    target_code = (path or code or id or "").strip()
-    return await _render_watch_for_code(request, target_code)
-
-
-@app.api_route("/watch/{short_code}", methods=["GET", "HEAD"])
-async def watch_page(request: Request, short_code: str):
-    return await _render_watch_for_code(request, short_code)
-
-
 @app.api_route("/dl/{short_code}", methods=["GET", "HEAD"])
 @app.api_route("/dl/{short_code}/{extra_name:path}", methods=["GET", "HEAD"])
 @app.api_route("/stream/{short_code}", methods=["GET", "HEAD"])
 @app.api_route("/stream/{short_code}/{extra_name:path}", methods=["GET", "HEAD"])
 async def stream_file(request: Request, short_code: str, extra_name: str = ""):
     """
-    Public download (/dl/) and stream (/stream/) endpoint for Chrome, 1DM, ADM, IDM, Movi-Player, and external players.
-    When downloads are disabled and a FileStore bot is configured, /dl/{short_code} redirects directly to the
-    configured FileStore bot deep link so the user receives the file in Telegram chat.
+    Public download (/dl/) and stream (/stream/) endpoint for any user in Chrome, 1DM, ADM, IDM, or players.
+    Supports both GET and HEAD requests and RFC 7233 Byte Ranges.
     """
     runtime = await get_settings()
     if request.url.path.startswith("/dl/") and runtime.get("downloads_enabled") is False:
         fs = (runtime.get("filestore_bot_username") or "").strip().lstrip("@")
         if fs:
+            from fastapi.responses import RedirectResponse
             return RedirectResponse(
                 url=f"https://t.me/{fs}?start=file_{short_code}",
                 status_code=302,
@@ -285,6 +277,8 @@ async def stream_file(request: Request, short_code: str, extra_name: str = ""):
     if not file_data:
         raise HTTPException(status_code=404, detail="File not found")
 
+    # Download managers issue many parallel byte-range requests for one file. Count only
+    # the initial full GET, not every Range/HEAD request, to avoid a MongoDB write per chunk.
     if request.method.upper() == "GET" and not request.headers.get("range"):
         try:
             await files_col.update_one({"short_code": short_code}, {"$inc": {"access_count": 1}})
@@ -324,8 +318,8 @@ async def get_tracks(short_code: str):
     if not file_data:
         raise HTTPException(status_code=404, detail="File not found")
 
-    cached = file_data.get("tracks_info")
-    if cached and not cached.get("error") and cached.get("probe_version", 0) >= 3:
+    cached = file_data.get('tracks_info')
+    if cached and not cached.get('error'):
         return JSONResponse(cached)
 
     client = session_manager.bot_client or session_manager.get_client()
@@ -339,9 +333,7 @@ async def get_tracks(short_code: str):
         if isinstance(msg, list):
             msg = msg[0] if msg else None
         if not msg and file_data.get("chat_id") != chat_id:
-            chat_id = file_data.get("chat_id")
-            msg_id = file_data.get("message_id")
-            msg = await client.get_messages(chat_id, msg_id)
+            msg = await client.get_messages(file_data["chat_id"], file_data["message_id"])
             if isinstance(msg, list):
                 msg = msg[0] if msg else None
         if not msg:
@@ -352,21 +344,15 @@ async def get_tracks(short_code: str):
                 "video_tracks": [],
                 "audio_tracks": [],
                 "subtitle_tracks": [],
-                "has_multiple_audio": False,
+                "has_multiple_audio": False
             })
 
-        tracks_info = await probe_tracks(
-            client,
-            msg,
-            int(file_data.get("file_size") or 0),
-            chat_id=chat_id,
-            message_id=msg_id,
-        )
+        tracks_info = await probe_tracks(client, msg, file_data['file_size'])
 
-        if not tracks_info.get("error"):
+        if not tracks_info.get('error'):
             await files_col.update_one(
                 {"short_code": short_code},
-                {"$set": {"tracks_info": tracks_info}},
+                {"$set": {"tracks_info": tracks_info}}
             )
 
         return JSONResponse(tracks_info)
@@ -374,13 +360,13 @@ async def get_tracks(short_code: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Track probing error: %s: %s", type(e).__name__, e)
+        logger.error(f"Track probing error: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail="Failed to probe tracks")
 
 
 @app.api_route("/remux/{short_code}", methods=["GET", "HEAD"])
-async def remux_file(request: Request, short_code: str, audio: int = 0, aac: int = 1, start: float = 0.0):
-    """Browser-friendly fragmented MP4 with selectable multi-audio track and optional start timestamp."""
+async def remux_file(request: Request, short_code: str, audio: int = 0, aac: int = 1):
+    """Browser-friendly fragmented MP4; AAC by default for universal audio."""
     if (await get_settings()).get("streaming_enabled") is False:
         raise HTTPException(status_code=403, detail="Streaming is currently disabled")
     file_data = await files_col.find_one({"short_code": short_code})
@@ -401,7 +387,6 @@ async def remux_file(request: Request, short_code: str, audio: int = 0, aac: int
             filename=file_data.get("filename") or "media.mp4",
             audio_track=audio,
             force_aac=bool(aac),
-            start_seconds=max(0.0, float(start or 0.0)),
             file_id=file_data.get("file_id"),
             storage_chat_id=file_data.get("storage_chat_id"),
             storage_message_id=file_data.get("storage_message_id"),
@@ -416,7 +401,7 @@ async def remux_file(request: Request, short_code: str, audio: int = 0, aac: int
 
 @app.api_route("/_tgstream/{chat_id}/{message_id}", methods=["GET", "HEAD"])
 async def internal_tg_stream(request: Request, chat_id: int, message_id: int):
-    """Local-only style stream of a Telegram message media for mediainfo/ffprobe/ffmpeg (Range supported)."""
+    """Local-only style stream of a Telegram message media for mediainfo/ffmpeg (Range supported)."""
     clients = session_manager.get_all_clients()
     if not clients and session_manager.bot_client is None:
         raise HTTPException(status_code=503, detail="No Telegram sessions")
@@ -463,5 +448,6 @@ async def internal_tg_stream(request: Request, chat_id: int, message_id: int):
 
 
 if __name__ == "__main__":
+    import os
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=False, loop="asyncio")

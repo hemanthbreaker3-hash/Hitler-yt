@@ -200,56 +200,10 @@ function isVercelUrl(value) {
   }
 }
 
-const TELEGRAM_HOSTS = new Set(['t.me', 'www.t.me', 'telegram.me', 'www.telegram.me', 'telegram.dog', 'www.telegram.dog']);
-
-function extractShortCodeFromUrl(rawUrl) {
-  const target = String(rawUrl || '').trim();
-  if (!target) return { kind: null, code: null };
-  try {
-    const parsed = new URL(target.startsWith('/') ? `https://placeholder.local${target}` : target);
-    const host = (parsed.hostname || '').toLowerCase().replace(/\.$/, '');
-    if (TELEGRAM_HOSTS.has(host)) {
-      const startParam = (parsed.searchParams.get('start') || '').trim();
-      if (startParam) {
-        const clean = startParam.replace(/^(file_|dl_|watch_|get_)/i, '').trim();
-        if (/^[A-Za-z0-9_-]{4,64}$/.test(clean)) return { kind: 'tg_filestore', code: clean };
-      }
-      return { kind: 'telegram', code: null };
-    }
-    const m = parsed.pathname.match(/^\/(dl|watch|stream|remux)\/([A-Za-z0-9_-]{4,64})/);
-    if (m) return { kind: m[1].toLowerCase(), code: m[2] };
-    if (parsed.pathname.replace(/\/+$/, '') === '/watch') {
-      const p = (parsed.searchParams.get('path') || parsed.searchParams.get('code') || parsed.searchParams.get('id') || '').trim();
-      if (/^[A-Za-z0-9_-]{4,64}$/.test(p)) return { kind: 'watch', code: p };
-    }
-  } catch {}
-  return { kind: null, code: null };
-}
-
-function rewriteMediaOrButtonUrl(targetUrl, cloudflareBase, forceReplaceDomain = true, opts = {}) {
+function rewriteMediaOrButtonUrl(targetUrl, cloudflareBase, forceReplaceDomain = true) {
   const target = String(targetUrl || '').trim();
-  if (!target) return target;
-  const downloadsEnabled = opts.downloadsEnabled !== false;
-  const fsUser = String(opts.filestoreBotUsername || '').trim().replace(/^@+/, '');
-  const box = opts.box || 'watch';
-
-  const { kind, code } = extractShortCodeFromUrl(target);
-  if (!downloadsEnabled && fsUser && code) {
-    if (kind === 'dl' || kind === 'tg_filestore' || (box === 'download' && (kind === 'watch' || kind === 'stream'))) {
-      return `https://t.me/${fsUser}?start=file_${code}`;
-    }
-  }
-
   const cfValid = validPublicUrl(cloudflareBase);
-  if (downloadsEnabled && kind === 'tg_filestore' && code && cfValid) {
-    return `${cfValid}/dl/${code}`;
-  }
-  if (kind === 'tg_filestore' || kind === 'telegram') {
-    if (kind === 'tg_filestore' && fsUser && code) return `https://t.me/${fsUser}?start=file_${code}`;
-    return target;
-  }
-
-  if (!cfValid) return target;
+  if (!target || !cfValid) return target;
 
   if (target.startsWith('/')) {
     return cfValid + target;
@@ -258,10 +212,9 @@ function rewriteMediaOrButtonUrl(targetUrl, cloudflareBase, forceReplaceDomain =
   try {
     const parsed = new URL(target);
     if (!['http:', 'https:'].includes(parsed.protocol)) return target;
-    const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
-    if (TELEGRAM_HOSTS.has(host)) return target;
     const cf = new URL(cfValid);
-    const isMediaPath = /^\/(dl|stream|watch|remux)(\/|$)/.test(parsed.pathname);
+    const host = parsed.hostname.toLowerCase();
+    const isMediaPath = /^\/(dl|stream|watch|remux)\//.test(parsed.pathname);
     if (forceReplaceDomain || isMediaPath || host.endsWith('.trycloudflare.com') || host.endsWith('.vercel.app')) {
       parsed.protocol = cf.protocol;
       parsed.host = cf.host;
@@ -271,7 +224,7 @@ function rewriteMediaOrButtonUrl(targetUrl, cloudflareBase, forceReplaceDomain =
   return target;
 }
 
-function normalizeAndRewritePageGroups(groups, cloudflareBase, opts = {}) {
+function normalizeAndRewritePageGroups(groups, cloudflareBase) {
   if (!Array.isArray(groups)) return [];
   let watchIdx = 0;
   let dlIdx = 0;
@@ -294,7 +247,7 @@ function normalizeAndRewritePageGroups(groups, cloudflareBase, opts = {}) {
       if (bUrl) {
         buttons.push({
           name: bName,
-          url: rewriteMediaOrButtonUrl(bUrl, cloudflareBase, true, { ...opts, box }),
+          url: rewriteMediaOrButtonUrl(bUrl, cloudflareBase, true),
         });
       }
     }
@@ -303,7 +256,7 @@ function normalizeAndRewritePageGroups(groups, cloudflareBase, opts = {}) {
   return out;
 }
 
-function serializeCatalogDoc(doc, cloudflareBase, opts = {}) {
+function serializeCatalogDoc(doc, cloudflareBase) {
   if (!doc || typeof doc !== 'object') return {};
   const copy = {};
   for (const [k, v] of Object.entries(doc)) {
@@ -312,7 +265,7 @@ function serializeCatalogDoc(doc, cloudflareBase, opts = {}) {
     else if (typeof v === 'number' && !Number.isFinite(v)) copy[k] = null;
     else copy[k] = v;
   }
-  copy.groups = normalizeAndRewritePageGroups(copy.groups || [], cloudflareBase, opts);
+  copy.groups = normalizeAndRewritePageGroups(copy.groups || [], cloudflareBase);
   return copy;
 }
 
@@ -345,7 +298,7 @@ async function getSettingsState(db, req = null) {
   const rows = await db
     .collection('settings')
     .find(
-      { key: { $in: ['base_url', 'backend_url', 'cloudflare_url', 'vercel_url', 'website_urls', 'tmdb_api_key', 'admin_panel_token', 'panel_username', 'panel_password_salt', 'panel_password_hash', 'filestore_bot_username'] } },
+      { key: { $in: ['base_url', 'backend_url', 'cloudflare_url', 'vercel_url', 'website_urls', 'tmdb_api_key', 'admin_panel_token', 'panel_username', 'panel_password_salt', 'panel_password_hash'] } },
       { projection: { key: 1, value: 1 } },
     )
     .toArray()
@@ -390,15 +343,12 @@ async function getSettingsState(db, req = null) {
     (hostUrl && !isTryCloudflareUrl(hostUrl) ? hostUrl : null) ||
     '';
 
-  const fsUser = String(runtime.filestore_bot_username || map.filestore_bot_username || '').trim().replace(/^@+/, '');
   return {
     downloads_enabled: runtime.downloads_enabled !== false,
     streaming_enabled: runtime.streaming_enabled !== false,
     built_in_player_enabled: runtime.built_in_player_enabled !== false,
     auto_player_redirect: runtime.auto_player_redirect === true,
     access_mode: runtime.access_mode || 'all',
-    filestore_bot_username: fsUser,
-    filestore_bot_configured: Boolean(fsUser || runtime.filestore_bot_token),
     base_url: cloudflareUrl || validPublicUrl(map.base_url) || vercelUrl || '',
     backend_url: cloudflareUrl || validPublicUrl(map.backend_url) || '',
     cloudflare_url: cloudflareUrl,
@@ -1167,7 +1117,7 @@ function renderTitleHtml(page, cloudflareUrl) {
             const btnsHtml = buttons
               .map(
                 (btn) =>
-                  `<a class="btn-yellow cf-media-btn" data-box="${boxKey}" href="${escapeHtml(btn.url || '#')}" data-raw-url="${escapeHtml(btn.url || '#')}" rel="noopener" target="_blank">${escapeHtml(btn.name || 'Link')}</a>`,
+                  `<a class="btn-yellow cf-media-btn" href="${escapeHtml(btn.url || '#')}" data-raw-url="${escapeHtml(btn.url || '#')}" rel="noopener" target="_blank">${escapeHtml(btn.name || 'Link')}</a>`,
               )
               .join('');
             return `<div class="group-block" data-group-index="${idx}">
@@ -1224,44 +1174,9 @@ function renderTitleHtml(page, cloudflareUrl) {
 <script>
 (async () => {
   let cfBase = ${safeJsonForScript(cloudflareUrl || '')};
-  function extractShortCode(rawHref) {
-    try {
-      const u = new URL(rawHref, window.location.origin);
-      const host = (u.hostname || '').toLowerCase();
-      if (host === 't.me' || host === 'telegram.me' || host === 'telegram.dog') {
-        const st = (u.searchParams.get('start') || '').trim();
-        if (st.toLowerCase().startsWith('file_')) return st.slice(5);
-        return st || null;
-      }
-      const m = u.pathname.match(/^\/(dl|watch|stream|remux)\/([A-Za-z0-9_-]{4,64})/);
-      if (m) return m[2];
-      if (u.pathname.replace(/\/+$/, '') === '/watch') {
-        return u.searchParams.get('path') || u.searchParams.get('code') || null;
-      }
-    } catch (_) {}
-    return null;
-  }
-  function rewriteButtonHref(rawHref, baseOrigin, boxKey, dlOn, fsBot) {
-    if (!rawHref) return rawHref;
-    const cleanFs = String(fsBot || '').trim().replace(/^@+/, '');
-    const code = extractShortCode(rawHref);
-    const isDlLink = /\/dl\/([A-Za-z0-9_-]{4,64})/.test(rawHref) || boxKey === 'download';
-    if (!dlOn && cleanFs && code && isDlLink) {
-      return 'https://t.me/' + cleanFs + '?start=file_' + code;
-    }
-    try {
-      const parsed = new URL(rawHref, window.location.origin);
-      const h = (parsed.hostname || '').toLowerCase();
-      if (h === 't.me' || h === 'telegram.me' || h === 'telegram.dog') {
-        if (dlOn && code && baseOrigin) {
-          const cleanBase = String(baseOrigin).trim().replace(/\/+$/, '');
-          return cleanBase + '/dl/' + code;
-        }
-        return rawHref;
-      }
-    } catch (_) {}
-    if (!baseOrigin) return rawHref;
-    const cleanBase = String(baseOrigin).trim().replace(/\/+$/, '');
+  function rewriteToCloudflare(rawHref, baseOrigin) {
+    if (!rawHref || !baseOrigin) return rawHref;
+    const cleanBase = String(baseOrigin).trim().replace(/\\/+$/, '');
     if (!cleanBase.startsWith('http://') && !cleanBase.startsWith('https://')) return rawHref;
     if (rawHref.startsWith('/')) return cleanBase + rawHref;
     try {
@@ -1275,21 +1190,21 @@ function renderTitleHtml(page, cloudflareUrl) {
     } catch (_) {}
     return rawHref;
   }
-  function applyCloudflareButtons(baseOrigin, dlOn = true, fsBot = '') {
+  function applyCloudflareButtons(baseOrigin) {
+    if (!baseOrigin) return;
     document.querySelectorAll('a.cf-media-btn').forEach(a => {
       const raw = a.getAttribute('data-raw-url') || a.getAttribute('href') || '';
-      const boxKey = a.getAttribute('data-box') || 'watch';
-      const updated = rewriteButtonHref(raw, baseOrigin, boxKey, dlOn, fsBot);
+      const updated = rewriteToCloudflare(raw, baseOrigin);
       if (updated) a.setAttribute('href', updated);
     });
   }
-  if (cfBase) applyCloudflareButtons(cfBase, true, '');
+  if (cfBase) applyCloudflareButtons(cfBase);
   try {
     const r = await fetch('/api/site-settings', { cache: 'no-store' });
     if (r.ok) {
       const s = await r.json();
       const latestCf = s.cloudflare_url || s.backend_url || cfBase;
-      applyCloudflareButtons(latestCf, s.downloads_enabled !== false, s.filestore_bot_username || '');
+      if (latestCf) applyCloudflareButtons(latestCf);
     }
   } catch (_) {}
 })();
@@ -1399,8 +1314,6 @@ function renderPanelHtml(settings) {
       <option value="admins" ${settings.access_mode === 'admins' ? 'selected' : ''}>Admins only</option>
       <option value="owners" ${settings.access_mode === 'owners' ? 'selected' : ''}>Owners only</option>
     </select>
-    <label class="field-label">FileStore Bot Username (used when Downloads are disabled; set token via /filestore)</label>
-    <input id="filestore-bot" type="text" value="${escapeHtml(settings.filestore_bot_username || '')}" placeholder="@YourFileStoreBot (or use /filestore TOKEN in bot)" onchange="saveSettings()">
     <p id="save-status" class="muted">Changes save automatically.</p>
   </section>
 
@@ -1552,11 +1465,7 @@ async function saveUrls() {
 }
 
 async function saveSettings() {
-  const fsEl = document.getElementById('filestore-bot');
-  const data = {
-    access_mode: document.getElementById('access_mode').value,
-    filestore_bot_username: fsEl ? fsEl.value.trim().replace(/^@+/, '') : undefined,
-  };
+  const data = { access_mode: document.getElementById('access_mode').value };
   document.querySelectorAll('[data-key]').forEach(x => (data[x.dataset.key] = x.checked));
   try {
     await api('/api/admin/settings', { method: 'PUT', body: JSON.stringify(data) });
@@ -2030,28 +1939,18 @@ loadUrls();
 function renderWatchHtml(file, settings, streamBaseUrl) {
   const cfOrigin = validPublicUrl(streamBaseUrl) || settings.cloudflare_url || settings.backend_url || settings.base_url || '';
   const sizeMb = file.file_size ? (Number(file.file_size) / (1024 * 1024)).toFixed(2) : '0.00';
-  const fsUser = String(settings.filestore_bot_username || '').trim().replace(/^@+/, '');
-  const dlOn = settings.downloads_enabled !== false;
-  const dlHref = dlOn
-    ? (cfOrigin ? `${cfOrigin}/dl/${encodeURIComponent(file.short_code)}` : `/dl/${encodeURIComponent(file.short_code)}`)
-    : (fsUser ? `https://t.me/${encodeURIComponent(fsUser)}?start=file_${encodeURIComponent(file.short_code)}` : '');
+  const dlHref = cfOrigin ? `${cfOrigin}/dl/${encodeURIComponent(file.short_code)}` : `/dl/${encodeURIComponent(file.short_code)}`;
 
   const headExtra = `<style>
     ${!settings.built_in_player_enabled ? '.player-shell,.card.info{display:none!important}' : ''}
     ${!settings.streaming_enabled ? '.player-shell{display:none!important}' : ''}
     .player-shell{position:relative;border-radius:20px;padding:2px;overflow:hidden;background:#0a0a14;box-shadow:0 8px 40px rgba(0,0,0,.55),0 0 28px rgba(59,130,246,.18)}
     .player-box{background:#000;border-radius:18px;overflow:hidden;position:relative;z-index:1}
-    .player-wrapper{width:100%;aspect-ratio:16/9;position:relative;background:#000;contain:paint}
-    .player-wrapper video,.player-wrapper movi-player{width:100%;height:100%;background:#000;object-fit:contain;display:block}
-    movi-player{--movi-primary:#3b82f6;--movi-primary-light:#60a5fa;--movi-accent:#22d3ee;--movi-brand-fill:linear-gradient(135deg,#3b82f6,#22d3ee)}
+    video{display:block;width:100%;max-height:72vh;background:#000;aspect-ratio:16/9}
     .info{padding:18px 16px}
     .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;color:var(--muted);font-size:13px}
     .meta span{background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);padding:3px 10px;border-radius:20px;font-size:12px}
-    .engine-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding:10px 12px;border-radius:12px;background:rgba(15,23,42,.65);border:1px solid rgba(59,130,246,.22)}
-    .engine-pill{border:1px solid #2a3655;background:#0d1528;color:#cbd5e1;padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;cursor:pointer}
-    .engine-pill.active{background:linear-gradient(135deg,#2563eb,#0891b2);border-color:#60a5fa;color:#fff}
-    .select{background:linear-gradient(180deg,#12122a,#0c0c1c);color:#fff;border:1px solid #2a2a3a;border-radius:11px;padding:10px 14px;min-width:200px}
-    .tools{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px;align-items:center}
+    .tools{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
     .player-panel{display:none}.player-panel.active{display:block}
     .player-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px}
     .pbtn{min-height:46px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,#14142c,#0e0e20);color:#fff;display:flex;align-items:center;justify-content:center;text-align:center;padding:10px;cursor:pointer;font-size:13px}
@@ -2059,36 +1958,17 @@ function renderWatchHtml(file, settings, streamBaseUrl) {
     .filename{font-weight:700;word-break:break-word;font-size:16px}
     .side .card{padding:16px}
     @media(min-width:900px){.watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}.side{align-self:start;position:sticky;top:72px}}
-  </style>
-  <script src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js" async></script>
-  <script type="module" src="https://moviplayer.com/dist/element.js" async></script>`;
-
-  const dlBtnsHtml = dlOn
-    ? `<a class="btn accent" id="direct-dl-btn" href="${escapeHtml(dlHref)}" download>⬇ Download (Chrome)</a><a class="btn" id="idm-dl-btn" href="#">⚡ 1DM Download</a>`
-    : (fsUser ? `<a class="btn accent" id="direct-dl-btn" href="${escapeHtml(dlHref)}" target="_blank" rel="noopener">📥 Get File in Bot</a>` : '');
+  </style>`;
 
   const content = `
 <div class="watch-grid">
   <section>
     <div class="player-shell">
       <div class="player-box">
-        <div class="player-wrapper">
-          <movi-player id="moviPlayer"
-            playsinline controls preload="auto"
-            resume resumekey="${escapeHtml(file.short_code)}"
-            title="${escapeHtml(file.filename || 'Media')}" showtitle
-            engine="wasm shaka hlsjs dashjs native"
-            fallback="native" sw="auto"
-            buffersize="256" probesize="2mb" probeduration="5000"
-            fastseek doubletap="true" thumb
-            stablevolume hdr ambientmode subtitlepicker
-            subtitleedge="outline" nolinkwarning smoothwarning
-            persist="volume speed audiolang subtitlelang stablevolume ambient hdr aspect cropbars"
-            persistkey="hitler-yt"
-            theme="dark" themecolor="#3b82f6 #22d3ee"
-            crossorigin="anonymous"></movi-player>
-          <video id="nativePlayer" data-movi-ignore controls playsinline preload="auto" crossorigin="anonymous" style="display:none"></video>
-        </div>
+        <video id="player" controls playsinline preload="auto" crossorigin="anonymous">
+          <source id="video-source" src="" type="video/mp4">
+          Your browser cannot play this media.
+        </video>
       </div>
     </div>
     <div class="card info" style="margin-top:12px">
@@ -2096,19 +1976,10 @@ function renderWatchHtml(file, settings, streamBaseUrl) {
       <div class="meta">
         <span>${escapeHtml(sizeMb)} MB</span>
         <span>${escapeHtml(file.access_count || 0)} views</span>
-        <span id="active-engine-badge">⚡ Movi-Player (WASM Multi-Audio)</span>
-      </div>
-      <div class="engine-bar">
-        <button type="button" class="engine-pill active" id="pill-wasm" onclick="selectMode('wasm')">⚡ Movi-Player (Multi-Audio &amp; Subs)</button>
-        <button type="button" class="engine-pill" id="pill-remux" onclick="selectMode('remux')">🔊 Server Remux (AAC Multi-Audio)</button>
-      </div>
-      <div class="tools" id="track-box">
-        <label for="audio-select" style="font-size:13px;font-weight:700;color:#93c5fd">🔊 Audio Track:</label>
-        <select id="audio-select" class="select"><option value="0">Track 1 (Default Audio)</option></select>
       </div>
       <div class="tools">
-        ${dlBtnsHtml}
-        <button class="btn" type="button" onclick="copyDownload()">${!dlOn && fsUser ? 'Copy Bot File Link' : 'Copy Download Link'}</button>
+        ${settings.downloads_enabled ? `<a class="btn accent" id="direct-dl-btn" href="${escapeHtml(dlHref)}" download>⬇ Download (Chrome)</a><a class="btn" id="idm-dl-btn" href="#">⚡ 1DM Download</a>` : ''}
+        <button class="btn" type="button" onclick="copyDownload()">Copy Download Link</button>
         <button class="btn" type="button" onclick="copyStream()">Copy Stream URL</button>
       </div>
       <div id="copy-status" class="copy-ok"></div>
@@ -2126,62 +1997,14 @@ function renderWatchHtml(file, settings, streamBaseUrl) {
 const SHORT_CODE = ${safeJsonForScript(file.short_code)};
 const STREAM_ORIGIN = (${safeJsonForScript(cfOrigin)} || window.location.origin).replace(/\\/+$/, '');
 const STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
-const REMUX_URL = STREAM_ORIGIN + '/remux/' + SHORT_CODE;
-const TRACKS_URL = STREAM_ORIGIN + '/api/tracks/' + SHORT_CODE;
-const DOWNLOADS_ENABLED = ${safeJsonForScript(dlOn)};
-const FILESTORE_BOT = ${safeJsonForScript(fsUser)};
-const DL_URL = DOWNLOADS_ENABLED ? (STREAM_ORIGIN + '/dl/' + SHORT_CODE) : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (STREAM_ORIGIN + '/dl/' + SHORT_CODE));
+const DL_URL = STREAM_ORIGIN + '/dl/' + SHORT_CODE;
 const PLAYER_MIME = ${safeJsonForScript(file.mime_type || 'video/mp4')};
 const INTENT_MIME = (!PLAYER_MIME || PLAYER_MIME === 'application/octet-stream') ? 'video/*' : PLAYER_MIME;
-const moviPlayer = document.getElementById('moviPlayer');
-const nativePlayer = document.getElementById('nativePlayer');
-if (moviPlayer) {
-  moviPlayer.setAttribute('src', STREAM_URL);
-  moviPlayer.src = STREAM_URL;
+const player = document.getElementById('player');
+if (player) {
+  player.src = STREAM_URL;
+  player.load();
 }
-function selectMode(m) {
-  document.getElementById('pill-wasm')?.classList.toggle('active', m === 'wasm');
-  document.getElementById('pill-remux')?.classList.toggle('active', m === 'remux');
-  if (m === 'remux') {
-    const idx = Number(document.getElementById('audio-select')?.value || 0);
-    try { moviPlayer.pause(); } catch (_) {}
-    moviPlayer.style.display = 'none';
-    nativePlayer.style.display = 'block';
-    nativePlayer.src = REMUX_URL + '?audio=' + idx + '&aac=1';
-    nativePlayer.play().catch(() => {});
-  } else {
-    try { nativePlayer.pause(); } catch (_) {}
-    nativePlayer.style.display = 'none';
-    moviPlayer.style.display = 'block';
-    moviPlayer.src = STREAM_URL;
-  }
-}
-(async function loadTracks() {
-  try {
-    const r = await fetch(TRACKS_URL);
-    if (!r.ok) return;
-    const d = await r.json();
-    const tracks = d.audio_tracks || [];
-    if (!tracks.length) return;
-    const sel = document.getElementById('audio-select');
-    if (!sel) return;
-    sel.innerHTML = '';
-    tracks.forEach((t, idx) => {
-      const o = document.createElement('option');
-      o.value = String(t.audio_index ?? idx);
-      o.textContent = t.label || ('Track ' + (idx + 1));
-      sel.appendChild(o);
-    });
-    sel.onchange = () => {
-      const idx = Number(sel.value);
-      if (moviPlayer && moviPlayer.style.display !== 'none' && moviPlayer.player && typeof moviPlayer.player.selectAudioTrack === 'function') {
-        moviPlayer.player.selectAudioTrack(idx);
-      } else {
-        selectMode('remux');
-      }
-    };
-  } catch (_) {}
-})();
 function idmIntent(url) {
   const u = new URL(url);
   const scheme = u.protocol.replace(':','');
@@ -2208,11 +2031,9 @@ function addPlayer(gridId, label, href) {
   if (!href.startsWith('intent:')) { a.target = '_blank'; a.rel = 'noopener'; }
   document.getElementById(gridId)?.appendChild(a);
 }
-if (DOWNLOADS_ENABLED) addPlayer('mobile-grid', '1DM Download', idmIntent(DL_URL));
-[['HV Stream', null],['PLAYit', 'com.playit.videoplayer'],['VLC', 'org.videolan.vlc'],['MX Player', 'com.mxtech.videoplayer.ad'],['Just Player', 'com.brouken.player']].forEach(([n, p]) => {
-  addPlayer('mobile-grid', n, n === 'HV Stream' ? hvStreamIntent(STREAM_URL) : androidIntent(STREAM_URL, p, INTENT_MIME));
+[['1DM Download', 'idm'],['HV Stream', null],['PLAYit', 'com.playit.videoplayer'],['VLC', 'org.videolan.vlc'],['MX Player', 'com.mxtech.videoplayer.ad'],['Just Player', 'com.brouken.player']].forEach(([n, p]) => {
+  addPlayer('mobile-grid', n, p === 'idm' ? idmIntent(DL_URL) : (n === 'HV Stream' ? hvStreamIntent(STREAM_URL) : androidIntent(STREAM_URL, p, INTENT_MIME)));
 });
-addPlayer('mobile-grid', (!DOWNLOADS_ENABLED && FILESTORE_BOT) ? '📥 Get File in Bot' : 'Direct Download', DL_URL);
 async function copyStream() {
   try {
     await navigator.clipboard.writeText(STREAM_URL);
@@ -2224,7 +2045,7 @@ async function copyStream() {
 async function copyDownload() {
   try {
     await navigator.clipboard.writeText(DL_URL);
-    document.getElementById('copy-status').textContent = 'Link copied.';
+    document.getElementById('copy-status').textContent = 'Download link copied (paste in Chrome or 1DM).';
   } catch (e) {
     window.prompt('Copy download URL:', DL_URL);
   }
@@ -2237,6 +2058,7 @@ async function copyDownload() {
     content,
   });
 }
+
 
 const SHORTENER_HOST = 'hitler-yt.vercel.app';
 function requestHost(req) {
@@ -2706,7 +2528,7 @@ export default async function handler(req, res) {
         .sort({ created_at: -1 })
         .limit(100)
         .toArray();
-      const items = rawItems.map((item) => serializeCatalogDoc(item, cloudflareUrl, { downloadsEnabled: state.downloads_enabled, filestoreBotUsername: state.filestore_bot_username }));
+      const items = rawItems.map((item) => serializeCatalogDoc(item, cloudflareUrl));
       sendJson(res, 200, { items, cloudflare_url: cloudflareUrl });
       return;
     }
@@ -2743,7 +2565,7 @@ export default async function handler(req, res) {
       }
       const page = await db.collection('catalog_pages').findOne({ slug, published: true }, { projection: { _id: 0 } });
       if (!page) sendJson(res, 404, { error: 'Title not found' });
-      else sendJson(res, 200, serializeCatalogDoc(page, cloudflareUrl, { downloadsEnabled: state.downloads_enabled, filestoreBotUsername: state.filestore_bot_username }));
+      else sendJson(res, 200, serializeCatalogDoc(page, cloudflareUrl));
       return;
     }
 
@@ -2767,15 +2589,6 @@ export default async function handler(req, res) {
         }
         if (['all', 'admins', 'owners'].includes(body.access_mode)) {
           runtimeUpdates.access_mode = body.access_mode;
-        }
-        if (typeof body.filestore_bot_username === 'string') {
-          const cleanFs = body.filestore_bot_username.trim().replace(/^@+/, '');
-          runtimeUpdates.filestore_bot_username = cleanFs;
-          await db.collection('settings').updateOne(
-            { key: 'filestore_bot_username' },
-            { $set: { value: cleanFs, updated_at: new Date() } },
-            { upsert: true },
-          );
         }
         if (Object.keys(runtimeUpdates).length) {
           await db.collection('site_settings').updateOne({ _id: 'runtime' }, { $set: runtimeUpdates }, { upsert: true });
@@ -2990,7 +2803,7 @@ export default async function handler(req, res) {
         db.collection('catalog_pages').find({ published: true }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(100).toArray(),
         db.collection('catalog_categories').find({}, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
       ]);
-      const initialItems = rawItems.map((item) => serializeCatalogDoc(item, cloudflareUrl, { downloadsEnabled: state.downloads_enabled, filestoreBotUsername: state.filestore_bot_username }));
+      const initialItems = rawItems.map((item) => serializeCatalogDoc(item, cloudflareUrl));
       const initialCategories = rawCats.length
         ? rawCats.map((c) => ({ name: c.name, slug: c.slug }))
         : [
@@ -3039,7 +2852,7 @@ export default async function handler(req, res) {
         res,
         200,
         renderSearchHtml({
-          results: rawRows.map((r) => serializeCatalogDoc(r, cloudflareUrl, { downloadsEnabled: state.downloads_enabled, filestoreBotUsername: state.filestore_bot_username })),
+          results: rawRows.map((r) => serializeCatalogDoc(r, cloudflareUrl)),
           query: q,
           typeFilter,
           yearFilter,
@@ -3111,7 +2924,7 @@ export default async function handler(req, res) {
         );
         return;
       }
-      const page = serializeCatalogDoc(rawPage, cloudflareUrl, { downloadsEnabled: state.downloads_enabled, filestoreBotUsername: state.filestore_bot_username });
+      const page = serializeCatalogDoc(rawPage, cloudflareUrl);
       sendHtml(res, 200, renderTitleHtml(page, cloudflareUrl));
       return;
     }
@@ -3126,15 +2939,6 @@ export default async function handler(req, res) {
     }
 
     const requestPath = pathname + search;
-    if (pathname.startsWith('/dl/')) {
-      const dlShortCode = decodeURIComponent(pathname.slice('/dl/'.length).split('/')[0] || '');
-      if (state.downloads_enabled === false && state.filestore_bot_username && dlShortCode) {
-        res.writeHead(302, { Location: `https://t.me/${state.filestore_bot_username}?start=file_${dlShortCode}` });
-        res.end();
-        return;
-      }
-    }
-
     if (
       pathname.startsWith('/stream/') ||
       pathname.startsWith('/dl/') ||
@@ -3153,16 +2957,14 @@ export default async function handler(req, res) {
       return;
     }
 
-    if ((req.method === 'GET' || req.method === 'HEAD') && (pathname.startsWith('/watch/') || pathname === '/watch')) {
-      const shortCode = pathname === '/watch'
-        ? (searchParams.get('path') || searchParams.get('code') || searchParams.get('id') || '').trim()
-        : decodeURIComponent(pathname.slice('/watch/'.length));
+    if ((req.method === 'GET' || req.method === 'HEAD') && pathname.startsWith('/watch/')) {
+      const shortCode = decodeURIComponent(pathname.slice('/watch/'.length));
       if (cloudflareUrl && !isVercelUrl(cloudflareUrl)) {
         res.writeHead(307, { Location: `${cloudflareUrl}${requestPath}` });
         res.end();
         return;
       }
-      const fileData = shortCode ? await db.collection('files').findOne({ short_code: shortCode }) : null;
+      const fileData = await db.collection('files').findOne({ short_code: shortCode });
       if (!fileData) {
         sendJson(res, 404, { detail: 'Link not found' });
         return;
