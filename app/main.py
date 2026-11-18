@@ -238,6 +238,47 @@ async def watch_page(request: Request, short_code: str):
         raise HTTPException(status_code=404, detail="Link not found")
 
     cf_base = (await get_active_cloudflare_url()) or settings.BASE_URL.rstrip("/")
+    player_settings = await get_settings()
+    # If this file was attached to a catalog title, reuse that title's download
+    # groups. The Telegram box mirrors those labels but routes every button to
+    # this file's FileStore deep link.
+    catalog_slug = (
+        file_data.get("catalog_slug") or file_data.get("page_slug")
+        or file_data.get("title_slug") or file_data.get("catalog_page_slug")
+    )
+    catalog_page = None
+    if catalog_slug:
+        try:
+            catalog_page = await db.catalog_pages.find_one(
+                {"slug": str(catalog_slug)}, {"_id": 0, "groups": 1}
+            )
+        except Exception:
+            logger.exception("Could not load catalog button groups for watch page")
+    source_groups = (
+        (catalog_page or {}).get("groups")
+        or file_data.get("groups")
+        or file_data.get("download_groups")
+        or []
+    )
+    download_groups = [
+        dict(group) for group in source_groups
+        if isinstance(group, dict) and (group.get("box") or "download") == "download"
+    ]
+    fs_username = (player_settings.get("filestore_bot_username") or "").strip().lstrip("@")
+    telegram_url = f"https://t.me/{fs_username}?start=file_{short_code}" if fs_username else ""
+    telegram_groups = []
+    if fs_username and player_settings.get("downloads_enabled") is False:
+        for group in download_groups:
+            buttons = group.get("buttons") if isinstance(group.get("buttons"), list) else []
+            telegram_groups.append({
+                "name": group.get("name") or "Telegram File",
+                "buttons": [
+                    {"name": button.get("name") or "Get File", "url": telegram_url}
+                    for button in buttons if isinstance(button, dict)
+                ] or [{"name": "Get File", "url": telegram_url}],
+            })
+        if not telegram_groups:
+            telegram_groups = [{"name": "Telegram File", "buttons": [{"name": "Get File in Bot", "url": telegram_url}]}]
     return templates.TemplateResponse(
         request=request,
         name="watch.html",
@@ -246,7 +287,10 @@ async def watch_page(request: Request, short_code: str):
             "file": file_data,
             "base_url": cf_base,
             "stream_base_url": cf_base,
-            "player_settings": await get_settings(),
+            "player_settings": player_settings,
+            "download_groups": download_groups,
+            "telegram_groups": telegram_groups,
+            "telegram_file_url": telegram_url,
         },
     )
 
