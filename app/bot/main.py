@@ -39,7 +39,7 @@ from app.utils.helpers import (
     extract_short_code_from_media_url,
     filestore_deep_link,
 )
-from app.utils.fsub import is_user_fsubbed, get_fsub_invite_buttons
+from app.utils.fsub import is_user_fsubbed, get_fsub_invite_buttons, fsub_restriction_text
 from app.utils.rate_limit import check_rate_limit
 from app.utils.media_tools import (
     cleanup_dir,
@@ -317,9 +317,9 @@ async def start_filestore_client(token: str, username: str | None = None) -> dic
             return
         if not await is_user_fsubbed(c, uid):
             invite_rows = await get_fsub_invite_buttons(c, uid)
+            body = await fsub_restriction_text(c, uid)
             await message.reply(
-                "🔒 **Access Restricted**\n\n"
-                "> Join the required channel/group below, then open the download link again.",
+                body + "\n\n> Then open the download link again.",
                 reply_markup=_kb(invite_rows) if invite_rows else None,
             )
             return
@@ -830,9 +830,9 @@ def register_handlers(bot):
                 if file_data:
                     if not await is_user_fsubbed(client, user_id):
                         invite_rows = await get_fsub_invite_buttons(client, user_id)
+                        body = await fsub_restriction_text(client, user_id)
                         return await message.reply(
-                            "🔒 **Access Restricted**\n\n"
-                            "> Join the required channel/group below, then open the download link again.",
+                            body + "\n\n> Then open the download link again.",
                             reply_markup=_kb(invite_rows) if invite_rows else None,
                         )
                     try:
@@ -853,9 +853,9 @@ def register_handlers(bot):
 
         if not await is_user_fsubbed(client, user_id):
             invite_rows = await get_fsub_invite_buttons(client, user_id)
+            body = await fsub_restriction_text(client, user_id)
             return await message.reply(
-                "🔒 **Access Restricted**\n\n"
-                "> Join the required channel/group below, then send /start again.",
+                body + "\n\n> Then send /start again.",
                 reply_markup=_kb(invite_rows) if invite_rows else None,
             )
 
@@ -1086,10 +1086,11 @@ def register_handlers(bot):
             )
 
         if not await is_user_fsubbed(client, user.id):
+            invite_rows = await get_fsub_invite_buttons(client, user.id)
+            body = await fsub_restriction_text(client, user.id)
             return await message.reply(
-                "🔒 **Access Restricted**\n\n"
-                "> Join our official updates channel, then upload your file again.",
-                reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
+                body + "\n\n> Then upload your file again.",
+                reply_markup=_kb(invite_rows) if invite_rows else None,
             )
 
         detecting_msg = await message.reply("⚡ **Analyzing media & preparing instant links...**")
@@ -1377,9 +1378,11 @@ def register_handlers(bot):
         if not _is_admin_user(user.id) and not await check_rate_limit(user.id):
             return await message.reply("⏳ Please wait a few seconds before requesting another link.")
         if not _is_admin_user(user.id) and not await is_user_fsubbed(client, user.id):
+            invite_rows = await get_fsub_invite_buttons(client, user.id)
+            body = await fsub_restriction_text(client, user.id)
             return await message.reply(
-                "🔒 **Access Restricted**\n\nJoin the updates channel first.",
-                reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
+                body,
+                reply_markup=_kb(invite_rows) if invite_rows else None,
             )
         runtime_cfg = await db.site_settings.find_one({"_id": "runtime"}) or {}
         downloads_enabled = runtime_cfg.get("downloads_enabled", True)
@@ -1513,7 +1516,7 @@ def register_handlers(bot):
         if not user or user.is_bot:
             return
         if not await is_user_fsubbed(client, user.id):
-            return await callback.answer("🔒 Please join the update channel first!", show_alert=True)
+            return await callback.answer("🔒 Join the required channel(s) first, then try again.", show_alert=True)
 
         short_code = callback.data.split("_", 1)[1]
         file_data = await files_col.find_one({"short_code": short_code})
@@ -1745,7 +1748,49 @@ def register_handlers(bot):
                 pass
         return await message.reply(reply + "\n\nOpen `/panel` and sign in with your configured credentials.")
 
-    @bot.on_message(filters.command(["categories", "edit", "panel", "manage"]))
+    
+    @bot.on_message(filters.command("panel") & filters.private)
+    async def panel_command_handler(client, message: Message):
+        """Website control panel + quick FileStore panel link (admins)."""
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        await refresh_runtime_admin_cache()
+        if not _is_admin_user(user.id):
+            return await message.reply("🚫 Admins only.")
+        try:
+            web_base = (await get_active_website_url()) or settings.BASE_URL
+            base = str(web_base or "").rstrip("/") or "https://example.com"
+        except Exception:
+            base = str(getattr(settings, "BASE_URL", "") or "").rstrip("/") or "https://example.com"
+        current_cf = (await get_active_cloudflare_url()) or "Auto-detecting..."
+        try:
+            vercel_doc = await settings_col.find_one({"key": "vercel_url"}) or {}
+            vercel_url = vercel_doc.get("value") or "Detected on first Vercel visit"
+        except Exception:
+            vercel_url = "—"
+        runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+        fs_user = (runtime.get("filestore_bot_username") or "").strip().lstrip("@") or "*(not set)*"
+        await message.reply(
+            "🔐 **HITLER YT · Control Panel**\n\n"
+            f"> ☁️ Cloudflare media URL: `{current_cf}`\n"
+            f"> ▲ Vercel website: `{vercel_url}`\n"
+            f"> 📦 FileStore bot: `@{fs_user}`\n"
+            f"> 🤖 Clients: `{len(session_manager.get_all_clients())}`\n\n"
+            "**Commands**\n"
+            "• `/fspanel` — FileStore admins, FSub channels, auto-delete\n"
+            "• `/filestore @Bot` — set FileStore bot\n"
+            "• `/addbots` — helper bot tokens\n"
+            "• `/username` / `/password` — panel login\n\n"
+            "Open the website dashboard for pages, groups, and buttons.",
+            reply_markup=_kb([
+                [InlineKeyboardButton("🛠️ Open Website Panel", url=f"{base}/panel")],
+                [InlineKeyboardButton("📦 FileStore /fspanel", callback_data="fsp:open")],
+            ]),
+        )
+
+
+    @bot.on_message(filters.command(["categories", "edit", "manage"]))
     async def cms_admin_commands(client, message: Message):
         user = message.from_user
         if not user or not _is_admin_user(user.id):
@@ -2109,6 +2154,49 @@ def register_handlers(bot):
         ])
         return text, kb
 
+
+    @bot.on_callback_query(filters.regex(r"^fsub:check$"))
+    async def fsub_try_again_callback(client, callback: CallbackQuery):
+        """Try Again after joining force-sub channels."""
+        user = callback.from_user
+        if not user or user.is_bot:
+            return
+        ok = await is_user_fsubbed(client, user.id)
+        if ok:
+            try:
+                await callback.answer("✅ Verified! You can use the bot now.", show_alert=True)
+            except Exception:
+                pass
+            try:
+                await callback.message.edit_text(
+                    "✅ **Access granted**\n\n"
+                    "> You joined all required channels.\n"
+                    "> Send /start or open your download link again."
+                )
+            except Exception:
+                await callback.message.reply(
+                    "✅ **Access granted**\n\n"
+                    "> You joined all required channels.\n"
+                    "> Send /start or open your download link again."
+                )
+            return
+        invite_rows = await get_fsub_invite_buttons(client, user.id)
+        body = await fsub_restriction_text(client, user.id)
+        try:
+            await callback.answer("Still missing a channel — join all, then Try Again.", show_alert=True)
+        except Exception:
+            pass
+        try:
+            await callback.message.edit_text(
+                body,
+                reply_markup=_kb(invite_rows) if invite_rows else None,
+            )
+        except Exception:
+            await callback.message.reply(
+                body,
+                reply_markup=_kb(invite_rows) if invite_rows else None,
+            )
+
     @bot.on_message(filters.command("fspanel") & filters.private)
     async def fspanel_handler(client, message: Message):
         """FileStore management panel: admins, fsub, auto-delete (admin only)."""
@@ -2130,13 +2218,16 @@ def register_handlers(bot):
         if not _is_admin_user(user.id):
             return await callback.answer("Admins only", show_alert=True)
         data = (callback.data or "").split(":", 1)[-1]
-        if data == "refresh":
+        if data in ("refresh", "open"):
             text, kb = await _fspanel_home_text()
             try:
-                await callback.message.edit_text(text, reply_markup=kb)
+                if data == "open":
+                    await callback.message.reply(text, reply_markup=kb)
+                else:
+                    await callback.message.edit_text(text, reply_markup=kb)
             except Exception:
                 await callback.message.reply(text, reply_markup=kb)
-            return await callback.answer("Refreshed")
+            return await callback.answer("FileStore panel" if data == "open" else "Refreshed")
         prompts = {
             "addadmin": ("Send the **user ID** to add as admin (numbers only).", "addadmin"),
             "deladmin": ("Send the **user ID** to remove from admins.", "deladmin"),
@@ -2951,9 +3042,11 @@ def register_handlers(bot):
         if not _is_admin_user(user.id) and not await is_access_allowed(user.id):
             return await message.reply("🔒 This bot is restricted by the administrator.")
         if not await is_user_fsubbed(client, user.id):
+            invite_rows = await get_fsub_invite_buttons(client, user.id)
+            body = await fsub_restriction_text(client, user.id)
             return await message.reply(
-                "🔒 **Access Restricted**\n\n> Join the updates channel first.",
-                reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
+                body,
+                reply_markup=_kb(invite_rows) if invite_rows else None,
             )
         target = message.reply_to_message
         if not target or not _is_media_message(target):
@@ -2990,9 +3083,11 @@ def register_handlers(bot):
         if not _is_admin_user(user.id) and not await is_access_allowed(user.id):
             return await message.reply("🔒 This bot is restricted by the administrator.")
         if not await is_user_fsubbed(client, user.id):
+            invite_rows = await get_fsub_invite_buttons(client, user.id)
+            body = await fsub_restriction_text(client, user.id)
             return await message.reply(
-                "🔒 **Access Restricted**\n\n> Join the updates channel first.",
-                reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
+                body,
+                reply_markup=_kb(invite_rows) if invite_rows else None,
             )
         target = message.reply_to_message
         if not target or not _is_media_message(target):
@@ -3135,9 +3230,11 @@ def register_handlers(bot):
         if not _is_admin_user(user.id) and not await is_access_allowed(user.id):
             return await message.reply("🔒 This bot is restricted by the administrator.")
         if not await is_user_fsubbed(client, user.id):
+            invite_rows = await get_fsub_invite_buttons(client, user.id)
+            body = await fsub_restriction_text(client, user.id)
             return await message.reply(
-                "🔒 **Access Restricted**\n\n> Join the updates channel first.",
-                reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
+                body,
+                reply_markup=_kb(invite_rows) if invite_rows else None,
             )
         target = message.reply_to_message
         args = (message.text or "").split(maxsplit=1)
