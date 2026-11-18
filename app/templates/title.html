@@ -12,7 +12,7 @@
   .tools .btn-yellow{font-size:13px;padding:10px 16px}
   .link-box{background:linear-gradient(145deg,#111827,#0b1220);border:1px solid #334155;border-radius:14px;padding:16px;margin-top:18px;box-shadow:0 12px 30px #0005}
   .link-box h2{font-size:18px;margin:0 0 12px;display:flex;align-items:center;gap:9px}
-  .link-box.watch h2{color:#60a5fa}.link-box.download h2{color:#34d399}
+  .link-box.watch h2{color:#60a5fa}.link-box.download h2{color:#34d399}.link-box.telegram h2{color:#38bdf8}
   .group-block{background:#0b1728;border:1px solid #263b56;border-radius:10px;padding:12px;margin-top:10px}
   .group-block h3{font-size:14px;margin:0 0 10px;color:#e5e7eb}
   .tools{display:flex;flex-wrap:wrap;gap:8px}
@@ -78,6 +78,37 @@
       {% endif %}
     </section>
     {% endfor %}
+    {# Telegram box: mirrors Watch groups with FileStore deep links (only for generated /watch/ URLs) #}
+    {% set tg_groups = telegram_groups if telegram_groups is defined else [] %}
+    {% if tg_groups and tg_groups|length > 0 %}
+    <section class="link-box telegram" aria-label="Telegram links" data-box="telegram">
+      <h2><span aria-hidden="true">✈</span>Telegram</h2>
+      <div class="groups-list" data-box="telegram">
+      {% for group in tg_groups %}
+      <div class="group-block" data-group-index="{{ loop.index0 }}">
+        <h3>{{ group.name }}</h3>
+        <div class="tools">
+          {% for button in group.buttons or [] %}
+          <a class="btn-yellow" href="{{ button.url }}" rel="noopener" target="_blank">{{ button.name }}</a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+      </div>
+      {% if tg_groups|length > 5 %}
+      <div class="groups-pager" data-box="telegram" data-total="{{ tg_groups|length }}" data-per-page="5" hidden>
+        <button type="button" class="pg-btn pg-prev" aria-label="Previous page">← Prev</button>
+        <span class="pg-info">Page <span class="pg-cur">1</span> / <span class="pg-max">1</span></span>
+        <button type="button" class="pg-btn pg-next" aria-label="Next page">Next →</button>
+        <div class="pg-jump">
+          <label for="pg-jump-telegram">Go to</label>
+          <input id="pg-jump-telegram" class="pg-input" type="number" min="1" inputmode="numeric" placeholder="#">
+          <button type="button" class="pg-go">Go</button>
+        </div>
+      </div>
+      {% endif %}
+    </section>
+    {% endif %}
   </div>
 </article>
 <script>

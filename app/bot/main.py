@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import html
 import logging
@@ -10,8 +11,9 @@ import secrets
 import re
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
-from wzgram import filters
+from wzgram import Client, filters
 from wzgram.enums import ParseMode
 from wzgram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery, BotCommand
 
@@ -65,6 +67,274 @@ _awaiting_link_admins: set[int] = set()
 _awaiting_addgroups: dict[int, dict] = {}
 # /save restore: set of admin user_ids waiting for a backup ZIP
 _awaiting_restore: set[int] = set()
+
+# FileStore secondary bot (when admin sets a different bot token via /filestore)
+_filestore_client: Optional[Client] = None
+_filestore_client_token: Optional[str] = None
+_FILESTORE_AUTO_DELETE_SECONDS = 5 * 60  # 5 minutes
+
+# Match generated watch/dl/stream URLs from this service
+_WATCH_URL_CODE_RE = re.compile(
+    r"(?:^|/)(?:watch|dl|stream|remux)/([A-Za-z0-9_-]{4,32})(?:/|$|\?|#)",
+    re.I,
+)
+
+
+def extract_short_code_from_media_url(url: str | None) -> str | None:
+    """Return short_code if URL is a generated watch/dl/stream link from this bot; else None."""
+    if not url or not isinstance(url, str):
+        return None
+    raw = url.strip()
+    if not raw:
+        return None
+    try:
+        path = urlparse(raw).path or raw
+    except Exception:
+        path = raw
+    m = _WATCH_URL_CODE_RE.search(path)
+    if m:
+        return m.group(1)
+    m2 = re.search(r"^/(?:watch|dl|stream|remux)/([A-Za-z0-9_-]{4,32})(?:/|$)", path, re.I)
+    return m2.group(1) if m2 else None
+
+
+def filestore_deep_link(username: str, short_code: str) -> str:
+    uname = (username or "").strip().lstrip("@")
+    code = (short_code or "").strip()
+    return f"https://t.me/{uname}?start=file_{code}"
+
+
+async def _auto_delete_messages(client, chat_id: int, message_ids: list[int], delay: int = _FILESTORE_AUTO_DELETE_SECONDS):
+    """Delete messages after delay (default 5 minutes)."""
+    try:
+        await asyncio.sleep(delay)
+        for mid in message_ids:
+            if mid is None:
+                continue
+            try:
+                await client.delete_messages(chat_id, mid)
+            except Exception:
+                pass
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.debug("auto-delete failed: %s", e)
+
+
+async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to_message: Message | None = None) -> bool:
+    """
+    Copy the stored Telegram file to the user, attach Watch + Download buttons,
+    and schedule auto-delete after 5 minutes.
+    """
+    chat_id = file_data.get("chat_id") or file_data.get("storage_chat_id")
+    message_id = file_data.get("message_id") or file_data.get("storage_message_id")
+    short_code = file_data.get("short_code") or ""
+    fname = file_data.get("filename") or "file"
+
+    if chat_id is None or message_id is None:
+        return False
+
+    try:
+        copied = await client.copy_message(
+            chat_id=user_id,
+            from_chat_id=chat_id,
+            message_id=message_id,
+        )
+    except Exception as e:
+        logger.exception("FileStore copy_message failed for short_code=%s: %s", short_code, e)
+        raise
+
+    button_rows = []
+    try:
+        base = await get_active_cloudflare_url()
+        if not base:
+            try:
+                base = normalize_public_base_url(settings.BASE_URL)
+            except Exception:
+                base = (settings.BASE_URL or "").rstrip("/")
+        runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+        downloads_enabled = runtime.get("downloads_enabled", True)
+        streaming_enabled = runtime.get("streaming_enabled", True)
+        fs_username = (runtime.get("filestore_bot_username") or "").strip().lstrip("@")
+
+        if streaming_enabled and base and short_code:
+            watch_url = f"{base.rstrip('/')}/watch/{short_code}"
+            button_rows.append(InlineKeyboardButton("🍿 Watch Online", url=watch_url))
+        if base and short_code:
+            if downloads_enabled:
+                dl_url = f"{base.rstrip('/')}/dl/{short_code}"
+                button_rows.append(InlineKeyboardButton("⚡ Direct Download", url=dl_url))
+            elif fs_username:
+                dl_url = filestore_deep_link(fs_username, short_code)
+                button_rows.append(InlineKeyboardButton("📥 Get File in Bot", url=dl_url))
+    except Exception as e:
+        logger.debug("Could not build filestore buttons: %s", e)
+
+    if settings.UPDATE_CHANNEL_URL:
+        button_rows.append(InlineKeyboardButton("📢 Updates Channel", url=settings.UPDATE_CHANNEL_URL))
+
+    kb = _kb([button_rows]) if button_rows else None
+    info_msg = await client.send_message(
+        user_id,
+        f"✅ **File delivered**\n\n📂 `{html.escape(str(fname))}`\n\n"
+        f"⏱ This message will auto-delete in **5 minutes**.\n"
+        f"Save the file above before it disappears.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+        reply_to_message_id=getattr(copied, "id", None) if copied else None,
+    )
+
+    ids_to_delete = []
+    if copied is not None and getattr(copied, "id", None):
+        ids_to_delete.append(copied.id)
+    if info_msg is not None and getattr(info_msg, "id", None):
+        ids_to_delete.append(info_msg.id)
+    if ids_to_delete:
+        asyncio.create_task(_auto_delete_messages(client, user_id, ids_to_delete, _FILESTORE_AUTO_DELETE_SECONDS))
+    return True
+
+
+async def stop_filestore_client():
+    """Stop the secondary FileStore bot client if running."""
+    global _filestore_client, _filestore_client_token
+    client = _filestore_client
+    _filestore_client = None
+    _filestore_client_token = None
+    if client is None:
+        return
+    try:
+        if getattr(client, "is_connected", False):
+            await client.stop()
+    except Exception as e:
+        logger.warning("Error stopping filestore client: %s", e)
+
+
+async def start_filestore_client(token: str, username: str | None = None) -> dict:
+    """
+    Start a dedicated FileStore bot client with the given token so deep-link
+    /start file_<code> is handled even when the FileStore bot is not the primary bot.
+    If the token is the same as the primary bot, do nothing (primary already handles it).
+    """
+    global _filestore_client, _filestore_client_token
+    clean = (token or "").strip()
+    if not clean or ":" not in clean:
+        raise ValueError("Invalid bot token")
+
+    if clean == (settings.BOT_TOKEN or "").strip():
+        await stop_filestore_client()
+        return {"same_as_primary": True, "username": username or ""}
+
+    if _filestore_client is not None and _filestore_client_token == clean:
+        me = None
+        try:
+            me = await _filestore_client.get_me()
+        except Exception:
+            pass
+        return {
+            "same_as_primary": False,
+            "username": getattr(me, "username", None) or username or "",
+            "already_running": True,
+        }
+
+    await stop_filestore_client()
+
+    client = Client(
+        name=f"hitler_filestore_{clean.split(':', 1)[0]}",
+        api_id=settings.API_ID,
+        api_hash=settings.API_HASH,
+        bot_token=clean,
+        in_memory=True,
+        workers=16,
+        max_concurrent_transmissions=16,
+    )
+
+    @client.on_message(filters.command("start") & filters.private)
+    async def filestore_start_handler(c, message: Message):
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        uid = user.id
+        payload = ""
+        try:
+            parts = (message.text or "").split(maxsplit=1)
+            if len(parts) > 1:
+                payload = parts[1].strip()
+        except Exception:
+            payload = ""
+        if not payload:
+            await message.reply(
+                "📦 **FileStore Bot**\n\n"
+                "Open a file deep-link from the website to receive the file here."
+            )
+            return
+        code = payload
+        if code.lower().startswith("file_"):
+            code = code[5:]
+        code = code.strip()
+        if not code:
+            return
+        file_data = await files_col.find_one({"short_code": code})
+        if not file_data:
+            await message.reply("❌ File not found or link expired.")
+            return
+        if not await is_user_fsubbed(c, uid):
+            await message.reply(
+                "🔒 **Access Restricted**\n\n"
+                "> Join our official updates channel, then open the download link again.",
+                reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
+            )
+            return
+        try:
+            await deliver_filestore_file(c, uid, file_data, message)
+        except Exception as e:
+            logger.exception("FileStore secondary delivery failed: %s", e)
+            await message.reply("❌ Could not deliver this file right now. Please try again later.")
+
+    await client.start()
+    try:
+        me = await client.get_me()
+        resolved_username = getattr(me, "username", None) or username or ""
+    except Exception as e:
+        try:
+            await client.stop()
+        except Exception:
+            pass
+        raise RuntimeError(f"FileStore bot getMe failed: {e}") from e
+
+    _filestore_client = client
+    _filestore_client_token = clean
+    logger.info("FileStore secondary bot started as @%s", resolved_username)
+    return {"same_as_primary": False, "username": resolved_username, "already_running": False}
+
+
+async def resolve_bot_username_from_token(token: str) -> str:
+    """Temporarily start a client to resolve public username from a bot token."""
+    clean = (token or "").strip()
+    if clean == (settings.BOT_TOKEN or "").strip():
+        try:
+            me = await session_manager.bot_client.get_me()
+            return (getattr(me, "username", None) or "").strip()
+        except Exception:
+            return ""
+
+    client = Client(
+        name=f"hitler_fs_resolve_{clean.split(':', 1)[0]}",
+        api_id=settings.API_ID,
+        api_hash=settings.API_HASH,
+        bot_token=clean,
+        in_memory=True,
+        workers=4,
+        no_updates=True,
+    )
+    await client.start()
+    try:
+        me = await client.get_me()
+        return (getattr(me, "username", None) or "").strip()
+    finally:
+        try:
+            await client.stop()
+        except Exception:
+            pass
 
 
 def get_ist_greeting():
@@ -449,8 +719,8 @@ def register_handlers(bot):
                     logger.error("Error sending new user log: %s", e)
 
         # ── FileStore deep-link: /start <short_code> or /start file_<short_code> ──
-        # When downloads are disabled, users are sent here via t.me/Bot?start=CODE
-        # and must receive the file directly in chat.
+        # Users open t.me/Bot?start=file_CODE and receive the file + Watch/Download buttons.
+        # Messages auto-delete after 5 minutes.
         payload = ""
         try:
             parts = (message.text or "").split(maxsplit=1)
@@ -473,21 +743,12 @@ def register_handlers(bot):
                             reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
                         )
                     try:
-                        chat_id = file_data.get("chat_id")
-                        message_id = file_data.get("message_id")
-                        if chat_id is not None and message_id is not None:
-                            await client.copy_message(
-                                chat_id=user_id,
-                                from_chat_id=chat_id,
-                                message_id=message_id,
-                            )
-                            fname = file_data.get("filename") or "file"
-                            await message.reply(
-                                f"✅ **File delivered**\n\n📂 `{html.escape(str(fname))}`\n\n"
-                                "You can save it from the message above.",
-                                parse_mode=ParseMode.HTML,
-                            )
+                        ok = await deliver_filestore_file(client, user_id, file_data, message)
+                        if ok:
                             return
+                        return await message.reply(
+                            "❌ Could not deliver this file right now. Please try again later."
+                        )
                     except Exception as e:
                         logger.exception("FileStore delivery failed for short_code=%s: %s", code, e)
                         return await message.reply(
@@ -1592,13 +1853,14 @@ def register_handlers(bot):
 
     @bot.on_message(filters.command("filestore") & filters.private)
     async def filestore_handler(client, message: Message):
-        """Configure FileStore bot for deep-link downloads when site downloads are disabled.
+        """Configure FileStore bot for deep-link file delivery.
 
         Usage:
-          /filestore                  → show current setting
-          /filestore @BotUsername     → set the bot that receives deep links
-          /filestore BotUsername      → same (without @)
-          /filestore off              → clear / disable
+          /filestore                        → show current setting
+          /filestore @BotUsername           → set by username
+          /filestore BotUsername            → same (without @)
+          /filestore <bot_token>            → set by token, resolve username, start that bot
+          /filestore off                    → clear / disable
         """
         user = message.from_user
         if not user or user.is_bot:
@@ -1612,58 +1874,89 @@ def register_handlers(bot):
         args = (message.text or "").split(maxsplit=1)
         runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
         current = (runtime.get("filestore_bot_username") or "").strip().lstrip("@")
+        has_token = bool((runtime.get("filestore_bot_token") or "").strip())
 
         if len(args) < 2:
             status = f"@{current}" if current else "*(not set)*"
+            token_note = " · token stored & bot started" if has_token else ""
             return await message.reply(
                 "📦 **FileStore Bot**\n\n"
-                f"> Current: `{status}`\n\n"
-                "When **downloads are disabled** on the website, every generated "
-                "Download link becomes a Telegram deep link:\n"
+                f"> Current: `{status}`{token_note}\n\n"
+                "Deep links look like:\n"
                 f"`https://t.me/{current or 'YourBot'}?start=file_<code>`\n\n"
-                "The user opens that link, starts the bot, and receives the file "
-                "directly in chat.\n\n"
+                "When a user opens that link, the FileStore bot sends the file in chat "
+                "with **Watch** + **Download** buttons, then **auto-deletes after 5 minutes**.\n\n"
+                "On title pages that have a **Watch** box, a matching **Telegram** box is "
+                "generated automatically — same group/button names, but URLs become deep links "
+                "(only for buttons whose URLs are this bot’s `/watch/` links).\n\n"
                 "**Commands**\n"
-                "• `/filestore @YourBotUsername` — set the bot\n"
-                "• `/filestore off` — clear setting\n\n"
-                "Tip: you can point this at the *same* bot (this one). "
-                "Deep links with `/start file_<short_code>` are handled automatically."
+                "• `/filestore @YourBotUsername` — set by username\n"
+                "• `/filestore <bot_token>` — set by token, resolve username, **start** that bot\n"
+                "• `/filestore off` — clear setting and stop secondary bot\n\n"
+                "Tip: you can use the *same* bot (this one). Deep links with "
+                "`/start file_<short_code>` are handled automatically."
             )
 
         value = args[1].strip()
         if value.lower() in ("off", "none", "disable", "clear", "0"):
+            await stop_filestore_client()
             await db.site_settings.update_one(
                 {"_id": "runtime"},
                 {"$unset": {"filestore_bot_username": "", "filestore_bot_token": ""},
                  "$set": {"updated_at": datetime.datetime.utcnow()}},
                 upsert=True,
             )
-            return await message.reply("✅ FileStore cleared. Download deep-links are disabled.")
+            return await message.reply("✅ FileStore cleared. Deep-links disabled; secondary bot stopped.")
 
-        # Accept @username, username, or a bot token (token is stored only for reference;
-        # deep links always use the public username).
         username = value
         token = None
-        if ":" in value and value.split(":", 1)[0].isdigit():
-            # Looks like a bot token — try to resolve username via getMe if possible
-            token = value
+        started_note = ""
+
+        # Bot token form: 123456:ABC...
+        if ":" in value and value.split(":", 1)[0].isdigit() and re.fullmatch(
+            r"\d{6,16}:[A-Za-z0-9_-]{30,60}", value.strip()
+        ):
+            token = value.strip()
+            status_msg = await message.reply("⏳ Resolving bot token and starting FileStore bot…")
             try:
-                me = await client.get_me()
-                # If the provided token matches this bot, use our username
-                username = me.username or current or ""
-            except Exception:
-                username = current or ""
-            if not username:
-                return await message.reply(
-                    "❌ Could not resolve a public username from that token.\n"
-                    "Please set the **username** instead:\n"
-                    "`/filestore @YourBotUsername`"
+                resolved = await resolve_bot_username_from_token(token)
+                if not resolved:
+                    # Fall back: if token is primary bot, use primary username
+                    if token == (settings.BOT_TOKEN or "").strip():
+                        me = await client.get_me()
+                        resolved = (getattr(me, "username", None) or current or "").strip()
+                if not resolved:
+                    return await status_msg.edit_text(
+                        "❌ Could not resolve a public username from that token.\n"
+                        "Make sure the bot has a @username set in @BotFather.\n"
+                        "Or use: `/filestore @YourBotUsername`"
+                    )
+                username = resolved
+                start_info = await start_filestore_client(token, username=username)
+                if start_info.get("same_as_primary"):
+                    started_note = "\n> Using **this bot** (primary) for deep-link delivery."
+                elif start_info.get("already_running"):
+                    started_note = f"\n> Secondary FileStore bot **@{(start_info.get('username') or username)}** already running."
+                else:
+                    started_note = f"\n> Secondary FileStore bot **@{username}** started and listening for deep links."
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.exception("FileStore token setup failed: %s", e)
+                return await status_msg.edit_text(
+                    f"❌ Failed to start FileStore bot from token:\n`{html.escape(str(e))}`"
                 )
+        else:
+            username = username.lstrip("@").strip()
+
         username = username.lstrip("@").strip()
         if not username or not re.match(r"^[A-Za-z0-9_]{5,32}$", username):
             return await message.reply(
                 "❌ Invalid bot username.\n"
-                "Use: `/filestore @YourBotUsername`"
+                "Use: `/filestore @YourBotUsername`\n"
+                "Or: `/filestore <bot_token>`"
             )
 
         update = {
@@ -1679,11 +1972,12 @@ def register_handlers(bot):
         )
         await message.reply(
             "✅ **FileStore saved**\n\n"
-            f"> Bot: `@{username}`\n\n"
-            "When downloads are **disabled** in the panel, all new Download buttons "
-            "and generated download links will use:\n"
+            f"> Bot: `@{username}`{started_note}\n\n"
+            "Deep links:\n"
             f"`https://t.me/{username}?start=file_<short_code>`\n\n"
-            "Users who click it will start that bot and receive the file in chat."
+            "• Title pages with a **Watch** box get a matching **Telegram** box "
+            "(same group/button names; only buttons whose URLs are this bot’s `/watch/` links).\n"
+            "• Delivered files include **Watch** + **Download** buttons and **auto-delete in 5 minutes**."
         )
 
     @bot.on_message(filters.command("stats"))

@@ -60,13 +60,28 @@ async def lifespan(app: FastAPI):
         session_manager.prepare_bot()
         register_handlers(session_manager.bot_client)
         await session_manager.start()
-        from app.bot.main import setup_bot_commands
+        from app.bot.main import setup_bot_commands, start_filestore_client, stop_filestore_client
         await setup_bot_commands(session_manager.bot_client)
+        # Restore FileStore secondary bot if a token was previously saved
+        try:
+            runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+            fs_token = (runtime.get("filestore_bot_token") or "").strip()
+            fs_user = (runtime.get("filestore_bot_username") or "").strip().lstrip("@")
+            if fs_token:
+                info = await start_filestore_client(fs_token, username=fs_user or None)
+                logger.info("FileStore restore: %s", info)
+        except Exception as e:
+            logger.warning("Could not restore FileStore secondary bot: %s", e)
         if getattr(settings, "BASE_URL", None):
             os.environ["BASE_URL"] = str(settings.BASE_URL).rstrip("/")
         logger.info("HITLER service started (wzgram)")
         yield
     finally:
+        try:
+            from app.bot.main import stop_filestore_client
+            await stop_filestore_client()
+        except Exception:
+            pass
         await stop_cloudflare_auto_tunnel()
         await session_manager.stop()
         mongo_client.close()

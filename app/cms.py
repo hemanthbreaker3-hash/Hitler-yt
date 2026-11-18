@@ -310,6 +310,53 @@ async def search_page(
     )
 
 
+def build_telegram_groups_from_watch(groups: list | None, filestore_username: str | None) -> list[dict]:
+    """
+    Mirror Watch-box groups into a Telegram box.
+    Same group names and button names; button URLs become FileStore deep links
+    ONLY when the original URL is a generated /watch/ (or /dl|/stream|/remux) link
+    from this service. External URLs are skipped.
+    """
+    if not filestore_username or not groups:
+        return []
+    uname = str(filestore_username).strip().lstrip('@')
+    if not uname:
+        return []
+    from app.bot.main import extract_short_code_from_media_url, filestore_deep_link
+
+    out = []
+    for g in groups:
+        if not isinstance(g, dict):
+            continue
+        box = str(g.get('box') or 'watch').strip().lower()
+        # Only mirror watch (and legacy missing-box) groups
+        if box not in ('watch', ''):
+            continue
+        buttons_out = []
+        for b in (g.get('buttons') or []):
+            if not isinstance(b, dict):
+                continue
+            bname = str(b.get('name') or '').strip()
+            burl = str(b.get('url') or '').strip()
+            if not bname or not burl:
+                continue
+            code = extract_short_code_from_media_url(burl)
+            if not code:
+                # Not a generated watch/dl URL from this bot — do not convert
+                continue
+            buttons_out.append({
+                'name': bname,
+                'url': filestore_deep_link(uname, code),
+            })
+        if buttons_out:
+            out.append({
+                'box': 'telegram',
+                'name': str(g.get('name') or 'Telegram').strip() or 'Telegram',
+                'buttons': buttons_out,
+            })
+    return out
+
+
 @router.get('/title/{slug}', response_class=HTMLResponse)
 async def title_page(request: Request, slug: str):
     raw_page = await pages.find_one({'slug': slug, 'published': True}, {'_id': 0})
@@ -317,6 +364,9 @@ async def title_page(request: Request, slug: str):
         raise HTTPException(404, 'Title not found')
     cf_base = await get_active_cloudflare_url() or settings.BASE_URL.rstrip('/')
     page = serialize_catalog_doc(raw_page, cf_base)
+    settings_doc = await get_settings()
+    fs_user = (settings_doc.get('filestore_bot_username') or '').strip().lstrip('@')
+    telegram_groups = build_telegram_groups_from_watch(page.get('groups') or [], fs_user) if fs_user else []
     return templates.TemplateResponse(
         request=request,
         name='title.html',
@@ -324,6 +374,8 @@ async def title_page(request: Request, slug: str):
             'request': request,
             'page': page,
             'cloudflare_url': cf_base,
+            'filestore_bot_username': fs_user,
+            'telegram_groups': telegram_groups,
         },
     )
 
