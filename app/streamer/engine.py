@@ -1,9 +1,10 @@
 """
-High-speed Telegram media streaming & downloading for Chrome, 1DM, ADM, IDM, and external video players.
+High-speed Telegram media streaming & downloading for Chrome, 1DM, ADM, IDM, Movi-Player (WASM/WebCodecs), and external video players.
 Supports:
   - GET and HEAD requests + RFC 7233 Byte Ranges (206 Partial Content)
-  - Multi-bot sliding-window parallel 1 MiB chunk prefetching (boosts single-connection Chrome downloads AND multi-connection 1DM downloads using all /addbots helper bots!)
+  - Multi-bot sliding-window parallel 1 MiB chunk prefetching (boosts single-connection Chrome/MoviPlayer downloads AND multi-connection 1DM downloads using all /addbots helper bots!)
   - Direct file_id streaming fallback when source messages are in private bot chats
+  - On-the-fly multi-audio FFmpeg fragmented MP4 remuxing with instant timestamp seeking
 """
 from __future__ import annotations
 
@@ -15,6 +16,8 @@ from urllib.parse import quote
 from fastapi import HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from wzgram import Client
+
+from app.utils.media_tools import local_tg_stream_url
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +58,7 @@ async def _release_client(client: Client) -> None:
 
 
 def parse_range_header(request: Request, file_size: int) -> tuple[int, int, bool]:
-    """Parse HTTP Range header for Chrome, 1DM, ADM, IDM, and video players."""
+    """Parse HTTP Range header for Chrome, 1DM, ADM, IDM, Movi-Player, and external video players."""
     header = (request.headers.get("range") or request.headers.get("Range") or "").strip()
     if not header:
         return 0, max(file_size - 1, 0), False
@@ -135,7 +138,6 @@ async def _resolve_message(client: Client, chat_id: int | None, message_id: int 
         return None
 
 
-
 def _ordered_candidate_clients(
     clients: list[Client],
     bot_client: Client | None,
@@ -147,10 +149,8 @@ def _ordered_candidate_clients(
         live.append(bot_client)
 
     if chat_id and chat_id > 0 and not storage_chat_id and bot_client is not None:
-        # A private chat with this bot is best served by its own bot session/file_id.
         return [bot_client] + [c for c in live if c is not bot_client]
     if chat_id and chat_id < 0:
-        # Public groups/channels are normally accessible through an authorized user session.
         users = [c for c in live if not getattr(c, "bot_token", None)]
         bots = [c for c in live if getattr(c, "bot_token", None)]
         return users + bots
@@ -170,7 +170,6 @@ async def _acquire_media_target(
     if not candidates:
         raise HTTPException(status_code=503, detail="No connected Telegram sessions available")
 
-    # A file_id produced by this bot can be used directly for media in its private chat.
     if file_id and chat_id and chat_id > 0 and not storage_chat_id and bot_client is not None:
         if getattr(bot_client, "is_connected", False):
             async with _work_lock:
@@ -183,8 +182,6 @@ async def _acquire_media_target(
     async with _resolved_media_lock:
         key_lock = _resolution_locks.setdefault(cache_key, asyncio.Lock())
 
-    # Single-flight resolution: simultaneous Range requests from browsers/download managers
-    # share one Telegram get_messages call instead of hammering Telegram in parallel.
     async with key_lock:
         now = asyncio.get_running_loop().time()
         async with _resolved_media_lock:
@@ -287,19 +284,6 @@ async def _stream_file_chunks(
     raise HTTPException(status_code=502, detail="Telegram stream failed after retries")
 
 
-async def _fetch_single_tg_chunk(client: Client, media_target, chunk_index: int) -> bytes:
-    """Fetch a single 1 MiB Telegram chunk at `chunk_index` using `client`."""
-    await _acquire_client([client])
-    try:
-        parts = []
-        async for chunk in client.stream_media(media_target, offset=chunk_index, limit=1):
-            if chunk:
-                parts.append(bytes(chunk))
-        return b"".join(parts)
-    finally:
-        await _release_client(client)
-
-
 async def _download_byte_range(client: Client, media_target, start: int, end: int):
     """Yield an exact byte range and resume Telegram reads after transient interruptions."""
     if end < start:
@@ -361,10 +345,6 @@ async def _discover_multi_bot_targets(
     storage_chat_id: int | None,
     storage_message_id: int | None,
 ) -> list[tuple[Client, object]]:
-    """
-    Find all connected helper bots / sessions that can access the channel message so we can
-    stripe 1 MiB chunks across all of them in parallel for maximum download speed.
-    """
     pairs: list[tuple[Client, object]] = [(primary_client, primary_target)]
     target_chat = storage_chat_id or (chat_id if (chat_id and chat_id < 0) else None)
     target_msg = storage_message_id if storage_chat_id else (message_id if target_chat else None)
@@ -405,14 +385,6 @@ async def media_streamer(
     storage_chat_id: int | None = None,
     storage_message_id: int | None = None,
 ):
-    """
-    Stream bytes [start, end] with immediate first-byte response from primary client.
-    When multiple helper bots/sessions are available, subsequent 1 MiB stripes are
-    load-balanced across them (round-robin) for higher single-connection throughput
-    (Chrome) while multi-connection download managers already benefit from per-Range
-    client selection. Auto-resume on transient Telegram errors is preserved.
-    Inspired by FileToLink multi-client load balancing for speed + low latency.
-    """
     total = end - start + 1
     pairs: list[tuple[Client, object]] = [(primary_client, primary_target)]
     discover_task = None
@@ -437,10 +409,8 @@ async def media_streamer(
         while current <= end:
             stripe_end = min(current + TG_CHUNK - 1, end)
 
-            # Opportunistically adopt discovered multi-bot targets (non-blocking after first stripe)
             if discover_task is not None:
                 if stripe_idx == 0:
-                    # First stripe always from primary for minimal TTFB; give discover a tiny head-start
                     try:
                         await asyncio.wait_for(asyncio.shield(discover_task), timeout=0.05)
                     except (asyncio.TimeoutError, Exception):
@@ -456,7 +426,6 @@ async def media_streamer(
 
             pair = pairs[stripe_idx % len(pairs)]
             client, target = pair
-            # Primary already acquired by caller; acquire extras so work_loads stays accurate
             if client is not primary_client and client not in extra_acquired:
                 async with _work_lock:
                     _work_loads[_cid(client)] = _work_loads.get(_cid(client), 0) + 1
@@ -539,17 +508,16 @@ async def get_streaming_response(
     content_type = (mime_type or "application/octet-stream").strip()
     if is_download and not content_type:
         content_type = "application/octet-stream"
-    # Prefer a concrete video type for external players (VLC/MX/Kodi/etc.) when unknown
     if is_stream and (not content_type or content_type == "application/octet-stream"):
-        content_type = "video/mp4"
+        if safe_name.lower().endswith(".mkv"):
+            content_type = "video/x-matroska"
+        elif safe_name.lower().endswith(".webm"):
+            content_type = "video/webm"
+        else:
+            content_type = "video/mp4"
 
     content_length = end - start + 1
-    # Streams: no-store so proxies/players do not cache partial ranges incorrectly.
-    # Full downloads may be briefly cached.
-    if is_download and not partial:
-        cache_control = "public, max-age=3600, no-transform"
-    else:
-        cache_control = "no-store, no-transform, must-revalidate"
+    cache_control = "no-store, no-transform, must-revalidate"
 
     headers = {
         "Content-Type": content_type,
@@ -560,21 +528,21 @@ async def get_streaming_response(
         "Accept-Ranges": "bytes",
         "Content-Encoding": "identity",
         "Cache-Control": cache_control,
+        "Vary": "Range, Origin",
         "Connection": "keep-alive",
         "Keep-Alive": "timeout=120, max=1000",
         "X-Content-Type-Options": "nosniff",
         "X-Accel-Buffering": "no",
         "X-Download-Options": "noopen",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Timing-Allow-Origin": "*",
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-        "Access-Control-Allow-Headers": "Range, Content-Type, Accept, Origin",
+        "Access-Control-Allow-Headers": "Range, Content-Type, Accept, Origin, Authorization",
         "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, Content-Disposition, Content-Type",
     }
     if partial:
         headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
-    elif file_size > 0:
-        # Advertise full size on 200 so external players can compute duration/seek early
-        headers["Content-Range"] = f"bytes 0-{file_size - 1}/{file_size}"
 
     status_code = 206 if partial else 200
 
@@ -600,13 +568,23 @@ async def get_streaming_response(
     )
 
 
-def _build_ffmpeg_cmd(audio_track: int, force_aac: bool = True) -> list[str]:
+def _build_ffmpeg_cmd(
+    audio_track: int,
+    force_aac: bool = True,
+    input_source: str = "pipe:0",
+    start_seconds: float = 0.0,
+) -> list[str]:
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-fflags", "+genpts+discardcorrupt", "-threads", "0",
-        "-i", "pipe:0",
+    ]
+    if start_seconds and start_seconds > 0.5:
+        cmd += ["-ss", f"{start_seconds:.2f}"]
+    cmd += [
+        "-i", input_source,
         "-map", "0:v:0?", "-map", f"0:a:{audio_track}?",
         "-c:v", "copy",
+        "-max_muxing_queue_size", "4096",
     ]
     if force_aac:
         cmd += ["-c:a", "aac", "-b:a", "192k", "-ac", "2", "-ar", "48000", "-profile:a", "aac_low"]
@@ -623,6 +601,7 @@ async def remux_streamer(
     file_size: int,
     audio_track: int = 0,
     force_aac: bool = True,
+    start_seconds: float = 0.0,
     file_id: str | None = None,
     storage_chat_id: int | None = None,
     storage_message_id: int | None = None,
@@ -630,6 +609,38 @@ async def remux_streamer(
 ):
     if audio_track < 0 or audio_track > 32:
         raise HTTPException(status_code=400, detail="Invalid audio track")
+
+    eff_chat = storage_chat_id or chat_id
+    eff_msg = storage_message_id or message_id
+
+    # If we have a valid chat/message pair and start_seconds > 0, use local HTTP Range URL so FFmpeg seeks immediately
+    use_http_input = bool(eff_chat and eff_msg and start_seconds > 0.5)
+    if use_http_input:
+        local_url = local_tg_stream_url(int(eff_chat), int(eff_msg))
+        cmd = _build_ffmpeg_cmd(audio_track, force_aac=force_aac, input_source=local_url, start_seconds=start_seconds)
+        logger.info("Starting seekable HTTP remux ffmpeg (track=%s, start=%.1fs)", audio_track, start_seconds)
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            while True:
+                chunk = await process.stdout.read(512 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            try:
+                await process.wait()
+            except Exception:
+                pass
+        return
 
     client, media_target = await _acquire_media_target(
         clients=clients,
@@ -641,8 +652,8 @@ async def remux_streamer(
         bot_client=bot_client,
     )
 
-    cmd = _build_ffmpeg_cmd(audio_track, force_aac=force_aac)
-    logger.info("Starting remux ffmpeg: %s", " ".join(cmd))
+    cmd = _build_ffmpeg_cmd(audio_track, force_aac=force_aac, input_source="pipe:0", start_seconds=start_seconds)
+    logger.info("Starting pipe remux ffmpeg: %s", " ".join(cmd))
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -710,6 +721,7 @@ async def get_remux_response(
     filename: str,
     audio_track: int = 0,
     force_aac: bool = True,
+    start_seconds: float = 0.0,
     file_id: str | None = None,
     storage_chat_id: int | None = None,
     storage_message_id: int | None = None,
@@ -725,6 +737,7 @@ async def get_remux_response(
             file_size=file_size,
             audio_track=audio_track,
             force_aac=force_aac,
+            start_seconds=start_seconds,
             file_id=file_id,
             storage_chat_id=storage_chat_id,
             storage_message_id=storage_message_id,
@@ -737,7 +750,8 @@ async def get_remux_response(
             "Cache-Control": "no-store, no-transform",
             "Accept-Ranges": "none",
             "X-Accel-Buffering": "no",
-        "X-Download-Options": "noopen",
+            "X-Download-Options": "noopen",
+            "Cross-Origin-Resource-Policy": "cross-origin",
             "Access-Control-Allow-Origin": "*",
         },
     )

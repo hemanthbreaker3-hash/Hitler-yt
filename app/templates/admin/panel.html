@@ -45,6 +45,8 @@
       <option value="admins" {% if settings.access_mode=='admins' %}selected{% endif %}>Admins only</option>
       <option value="owners" {% if settings.access_mode=='owners' %}selected{% endif %}>Owners only</option>
     </select>
+    <label class="field-label">FileStore Bot Username (used when Downloads are disabled; set token via /filestore)</label>
+    <input id="filestore-bot" type="text" value="{{ settings.filestore_bot_username or '' }}" placeholder="@YourFileStoreBot (or use /filestore TOKEN in bot)" onchange="saveSettings()">
     <p id="save-status" class="muted">Changes save automatically.</p>
   </section>
 
@@ -198,7 +200,11 @@ async function saveUrls() {
 }
 
 async function saveSettings() {
-  const data = { access_mode: document.getElementById('access_mode').value };
+  const fsEl = document.getElementById('filestore-bot');
+  const data = {
+    access_mode: document.getElementById('access_mode').value,
+    filestore_bot_username: fsEl ? fsEl.value.trim().replace(/^@+/, '') : undefined,
+  };
   document.querySelectorAll('[data-key]').forEach(x => (data[x.dataset.key] = x.checked));
   try {
     await api('/api/admin/settings', { method: 'PUT', body: JSON.stringify(data) });

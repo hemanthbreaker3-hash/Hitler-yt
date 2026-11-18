@@ -56,7 +56,7 @@
         <h3>{{ group.name }}</h3>
         <div class="tools">
           {% for button in group.buttons or [] %}
-          <a class="btn-yellow cf-media-btn" href="{{ button.url }}" data-raw-url="{{ button.url }}" rel="noopener" target="_blank">{{ button.name }}</a>
+          <a class="btn-yellow cf-media-btn" data-box="{{ box_key }}" href="{{ button.url }}" data-raw-url="{{ button.url }}" rel="noopener" target="_blank">{{ button.name }}</a>
           {% endfor %}
         </div>
       </div>
@@ -83,8 +83,50 @@
 <script>
 (async () => {
   let cfBase = {{ (cloudflare_url if cloudflare_url is defined else '')|tojson }};
-  function rewriteToCloudflare(rawHref, baseOrigin) {
-    if (!rawHref || !baseOrigin) return rawHref;
+  let downloadsEnabled = {{ (site_settings.downloads_enabled if site_settings is defined else True)|tojson }};
+  let filestoreBot = {{ (site_settings.filestore_bot_username if site_settings is defined else '')|tojson }};
+
+  function extractShortCode(rawHref) {
+    try {
+      const u = new URL(rawHref, window.location.origin);
+      const host = (u.hostname || '').toLowerCase();
+      if (host === 't.me' || host === 'telegram.me' || host === 'telegram.dog') {
+        const st = (u.searchParams.get('start') || '').trim();
+        if (st.toLowerCase().startsWith('file_')) return st.slice(5);
+        return st || null;
+      }
+      const m = u.pathname.match(/^\/(dl|watch|stream|remux)\/([A-Za-z0-9_-]{4,64})/);
+      if (m) return m[2];
+      if (u.pathname.replace(/\/+$/, '') === '/watch') {
+        return u.searchParams.get('path') || u.searchParams.get('code') || null;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function rewriteButtonHref(rawHref, baseOrigin, boxKey, dlOn, fsBot) {
+    if (!rawHref) return rawHref;
+    const cleanFs = String(fsBot || '').trim().replace(/^@+/, '');
+    const code = extractShortCode(rawHref);
+    const isDlLink = /\/dl\/([A-Za-z0-9_-]{4,64})/.test(rawHref) || boxKey === 'download';
+
+    if (!dlOn && cleanFs && code && isDlLink) {
+      return 'https://t.me/' + cleanFs + '?start=file_' + code;
+    }
+
+    try {
+      const parsed = new URL(rawHref, window.location.origin);
+      const h = (parsed.hostname || '').toLowerCase();
+      if (h === 't.me' || h === 'telegram.me' || h === 'telegram.dog') {
+        if (dlOn && code && baseOrigin) {
+          const cleanBase = String(baseOrigin).trim().replace(/\/+$/, '');
+          return cleanBase + '/dl/' + code;
+        }
+        return rawHref;
+      }
+    } catch (_) {}
+
+    if (!baseOrigin) return rawHref;
     const cleanBase = String(baseOrigin).trim().replace(/\/+$/, '');
     if (!cleanBase.startsWith('http://') && !cleanBase.startsWith('https://')) return rawHref;
     if (rawHref.startsWith('/')) return cleanBase + rawHref;
@@ -99,77 +141,27 @@
     } catch (_) {}
     return rawHref;
   }
-  function applyCloudflareButtons(baseOrigin) {
-    if (!baseOrigin) return;
+
+  function applyCloudflareAndFilestoreButtons(baseOrigin, dlOn, fsBot) {
     document.querySelectorAll('a.cf-media-btn').forEach(a => {
       const raw = a.getAttribute('data-raw-url') || a.getAttribute('href') || '';
-      const updated = rewriteToCloudflare(raw, baseOrigin);
+      const boxKey = a.getAttribute('data-box') || 'watch';
+      const updated = rewriteButtonHref(raw, baseOrigin, boxKey, dlOn, fsBot);
       if (updated) a.setAttribute('href', updated);
     });
   }
-  if (cfBase) applyCloudflareButtons(cfBase);
+
+  applyCloudflareAndFilestoreButtons(cfBase, downloadsEnabled, filestoreBot);
   try {
     const r = await fetch('/api/site-settings', { cache: 'no-store' });
     if (r.ok) {
       const s = await r.json();
       const latestCf = s.cloudflare_url || s.backend_url || cfBase;
-      if (latestCf) applyCloudflareButtons(latestCf);
+      const dlOn = s.downloads_enabled !== false;
+      const fsBot = s.filestore_bot_username || filestoreBot || '';
+      applyCloudflareAndFilestoreButtons(latestCf, dlOn, fsBot);
     }
   } catch (_) {}
 })();
 </script>
 {% endblock %}
-
-<script>
-(function () {
-  const PER = 5;
-  function setupBox(boxKey) {
-    const list = document.querySelector('.groups-list[data-box="' + boxKey + '"]');
-    const pager = document.querySelector('.groups-pager[data-box="' + boxKey + '"]');
-    if (!list) return;
-    const blocks = Array.from(list.querySelectorAll('.group-block'));
-    if (blocks.length <= PER) return;
-    if (pager) pager.hidden = false;
-    let page = 1;
-    const max = Math.max(1, Math.ceil(blocks.length / PER));
-    const curEl = pager && pager.querySelector('.pg-cur');
-    const maxEl = pager && pager.querySelector('.pg-max');
-    const prevBtn = pager && pager.querySelector('.pg-prev');
-    const nextBtn = pager && pager.querySelector('.pg-next');
-    const input = pager && pager.querySelector('.pg-input');
-    const goBtn = pager && pager.querySelector('.pg-go');
-    if (maxEl) maxEl.textContent = String(max);
-    if (input) { input.max = String(max); input.min = '1'; }
-
-    function render() {
-      page = Math.min(Math.max(1, page), max);
-      const start = (page - 1) * PER;
-      const end = start + PER;
-      blocks.forEach((el, i) => { el.style.display = (i >= start && i < end) ? '' : 'none'; });
-      if (curEl) curEl.textContent = String(page);
-      if (prevBtn) prevBtn.disabled = page <= 1;
-      if (nextBtn) nextBtn.disabled = page >= max;
-      if (input) input.value = '';
-    }
-    function goTo(n) {
-      const num = parseInt(n, 10);
-      if (!Number.isFinite(num) || num < 1) return;
-      page = num;
-      render();
-    }
-    if (prevBtn) prevBtn.addEventListener('click', () => { page -= 1; render(); });
-    if (nextBtn) nextBtn.addEventListener('click', () => { page += 1; render(); });
-    if (goBtn && input) {
-      goBtn.addEventListener('click', () => goTo(input.value));
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); goTo(input.value); }
-      });
-      input.addEventListener('change', () => goTo(input.value));
-    }
-    render();
-  }
-  setupBox('watch');
-  setupBox('download');
-})();
-</script>
-
