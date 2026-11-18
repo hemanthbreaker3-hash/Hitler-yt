@@ -161,26 +161,131 @@ async def _auto_delete_messages(client, chat_id: int, message_ids: list[int], de
 
 async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to_message: Message | None = None) -> bool:
     """
-    Copy the stored Telegram file to the user, attach Watch + Download buttons,
-    and schedule auto-delete after 5 minutes.
+    Deliver the stored Telegram file to the user with Watch/Download buttons.
+    Tries multiple sources in order:
+      1) storage_chat_id / storage_message_id (log/storage channel — preferred)
+      2) chat_id / message_id (original upload message)
+      3) settings.CHANNEL_ID + storage_message_id
+      4) re-send by file_id (document/video/audio/photo)
+    Then schedules auto-delete when configured.
     """
-    chat_id = file_data.get("chat_id") or file_data.get("storage_chat_id")
-    message_id = file_data.get("message_id") or file_data.get("storage_message_id")
     short_code = file_data.get("short_code") or ""
     fname = file_data.get("filename") or "file"
+    file_id = (file_data.get("file_id") or "").strip()
+    mime = (file_data.get("mime_type") or "").lower()
 
-    if chat_id is None or message_id is None:
-        return False
+    storage_chat = file_data.get("storage_chat_id")
+    storage_msg = file_data.get("storage_message_id")
+    orig_chat = file_data.get("chat_id")
+    orig_msg = file_data.get("message_id")
 
-    try:
-        copied = await client.copy_message(
-            chat_id=user_id,
-            from_chat_id=chat_id,
-            message_id=message_id,
+    # Build candidate (from_chat_id, message_id) pairs — storage first
+    candidates: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+
+    def _add(cid, mid):
+        if cid is None or mid is None:
+            return
+        try:
+            pair = (int(cid), int(mid))
+        except (TypeError, ValueError):
+            return
+        if pair not in seen:
+            seen.add(pair)
+            candidates.append(pair)
+
+    _add(storage_chat, storage_msg)
+    _add(orig_chat, orig_msg)
+    if settings.CHANNEL_ID and storage_msg is not None:
+        _add(settings.CHANNEL_ID, storage_msg)
+    if settings.CHANNEL_ID and orig_msg is not None:
+        _add(settings.CHANNEL_ID, orig_msg)
+
+    copied = None
+    last_err: Exception | None = None
+
+    for from_chat, mid in candidates:
+        try:
+            copied = await client.copy_message(
+                chat_id=user_id,
+                from_chat_id=from_chat,
+                message_id=mid,
+            )
+            if copied is not None:
+                logger.info(
+                    "FileStore delivered short_code=%s via copy from %s/%s",
+                    short_code, from_chat, mid,
+                )
+                break
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                "FileStore copy failed short_code=%s from %s/%s: %s",
+                short_code, from_chat, mid, e,
+            )
+            # Try forward as alternate
+            try:
+                if hasattr(client, "forward_messages"):
+                    copied = await client.forward_messages(
+                        chat_id=user_id,
+                        from_chat_id=from_chat,
+                        message_ids=mid,
+                    )
+                    # forward may return list
+                    if isinstance(copied, list):
+                        copied = copied[0] if copied else None
+                    if copied is not None:
+                        logger.info(
+                            "FileStore delivered short_code=%s via forward from %s/%s",
+                            short_code, from_chat, mid,
+                        )
+                        break
+            except Exception as e2:
+                last_err = e2
+                logger.warning(
+                    "FileStore forward failed short_code=%s from %s/%s: %s",
+                    short_code, from_chat, mid, e2,
+                )
+
+    # Last resort: send by file_id (works when this bot owns the file_id)
+    if copied is None and file_id:
+        try:
+            send_kwargs = {"chat_id": user_id, "caption": f"📂 {fname}"}
+            if mime.startswith("video/") or "video" in mime:
+                copied = await client.send_video(video=file_id, **send_kwargs)
+            elif mime.startswith("audio/") or "audio" in mime:
+                copied = await client.send_audio(audio=file_id, **send_kwargs)
+            elif mime.startswith("image/") or "photo" in mime:
+                try:
+                    copied = await client.send_photo(photo=file_id, **send_kwargs)
+                except Exception:
+                    copied = await client.send_document(document=file_id, **send_kwargs)
+            else:
+                copied = await client.send_document(document=file_id, **send_kwargs)
+            if copied is not None:
+                logger.info("FileStore delivered short_code=%s via file_id", short_code)
+        except Exception as e:
+            last_err = e
+            logger.warning("FileStore send by file_id failed short_code=%s: %s", short_code, e)
+            # one more try as document
+            try:
+                copied = await client.send_document(
+                    chat_id=user_id,
+                    document=file_id,
+                    caption=f"📂 {fname}",
+                )
+            except Exception as e3:
+                last_err = e3
+                logger.warning("FileStore document fallback failed: %s", e3)
+
+    if copied is None:
+        logger.error(
+            "FileStore delivery exhausted for short_code=%s candidates=%s last_err=%s",
+            short_code, candidates, last_err,
         )
-    except Exception as e:
-        logger.exception("FileStore copy_message failed for short_code=%s: %s", short_code, e)
-        raise
+        raise RuntimeError(
+            last_err or "No accessible storage for this file (set CHANNEL_ID and keep the storage message)."
+        )
 
     button_rows = []
     try:
@@ -212,11 +317,19 @@ async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to
         button_rows.append(InlineKeyboardButton("📢 Updates Channel", url=settings.UPDATE_CHANNEL_URL))
 
     kb = _kb([button_rows]) if button_rows else None
+    delay_sec = await get_filestore_auto_delete_seconds()
+    if delay_sec and delay_sec > 0:
+        if delay_sec % 60 == 0:
+            del_txt = f"{delay_sec // 60} minute(s)"
+        else:
+            del_txt = f"{delay_sec} second(s)"
+        auto_line = f"⏱ This message will auto-delete in **{del_txt}**.\nSave the file above before it disappears."
+    else:
+        auto_line = "Save the file from the message above."
+
     info_msg = await client.send_message(
         user_id,
-        f"✅ **File delivered**\n\n📂 `{html.escape(str(fname))}`\n\n"
-        f"⏱ This message will auto-delete in **5 minutes**.\n"
-        f"Save the file above before it disappears.",
+        f"✅ **File delivered**\n\n📂 `{html.escape(str(fname))}`\n\n{auto_line}",
         parse_mode=ParseMode.HTML,
         reply_markup=kb,
         reply_to_message_id=getattr(copied, "id", None) if copied else None,
@@ -227,9 +340,10 @@ async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to
         ids_to_delete.append(copied.id)
     if info_msg is not None and getattr(info_msg, "id", None):
         ids_to_delete.append(info_msg.id)
-    if ids_to_delete:
-        asyncio.create_task(_auto_delete_messages(client, user_id, ids_to_delete, _FILESTORE_AUTO_DELETE_SECONDS))
+    if ids_to_delete and delay_sec and delay_sec > 0:
+        asyncio.create_task(_auto_delete_messages(client, user_id, ids_to_delete, delay_sec))
     return True
+
 
 
 async def stop_filestore_client():
@@ -327,7 +441,7 @@ async def start_filestore_client(token: str, username: str | None = None) -> dic
             await deliver_filestore_file(c, uid, file_data, message)
         except Exception as e:
             logger.exception("FileStore secondary delivery failed: %s", e)
-            await message.reply("❌ Could not deliver this file right now. Please try again later.")
+            await message.reply("❌ **Could not deliver this file**\n\n> Possible causes:\n> • Storage channel message missing (set `CHANNEL_ID`, re-upload file)\n> • Bot is not admin in the storage channel\n> • File was deleted from Telegram\n\n> Re-upload the file to the bot, then open the new deep link.")
 
     await client.start()
     try:
@@ -840,12 +954,12 @@ def register_handlers(bot):
                         if ok:
                             return
                         return await message.reply(
-                            "❌ Could not deliver this file right now. Please try again later."
+                            "❌ **Could not deliver this file**\n\n> Possible causes:\n> • Storage channel message missing (set `CHANNEL_ID`, re-upload file)\n> • Bot is not admin in the storage channel\n> • File was deleted from Telegram\n\n> Re-upload the file to the bot, then open the new deep link."
                         )
                     except Exception as e:
                         logger.exception("FileStore delivery failed for short_code=%s: %s", code, e)
                         return await message.reply(
-                            "❌ Could not deliver this file right now. Please try again later."
+                            "❌ **Could not deliver this file**\n\n> Possible causes:\n> • Storage channel message missing (set `CHANNEL_ID`, re-upload file)\n> • Bot is not admin in the storage channel\n> • File was deleted from Telegram\n\n> Re-upload the file to the bot, then open the new deep link."
                         )
                 else:
                     # Unknown code — fall through to normal greeting (avoid leaking existence)

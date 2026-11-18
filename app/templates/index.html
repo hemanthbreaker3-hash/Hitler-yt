@@ -1,45 +1,80 @@
 {% extends "base.html" %}
 {% block title %}HITLER YT · Movies & Series{% endblock %}
+{% block nav_home %}active{% endblock %}
 {% block content %}
+<div class="page-hero">
+  <div>
+    <h1>Discover media</h1>
+    <p>Browse the catalog, open a title, then stream or get files in Telegram.</p>
+  </div>
+</div>
 
-<!-- Trending / Top row (horizontal) -->
-<div id="trending-row" class="trending-row" style="display:none"></div>
-
-<!-- Search bar -->
-<form class="search-bar" action="/search" method="get">
-  <i class="fa-solid fa-magnifying-glass" style="color:#6b7280;font-size:14px"></i>
-  <input name="q" value="{{ request.query_params.get('q','') if request and request.query_params is defined else '' }}" placeholder="Search movies & series..." autocomplete="off">
+<form class="search-bar" action="/search" method="get" role="search">
+  <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+  <input name="q" placeholder="Search movies, series, or keywords…" autocomplete="off" maxlength="100" aria-label="Search catalog">
   <button type="submit">Search</button>
 </form>
 
-<!-- Category chips -->
+<div id="trending-row" class="trending-row" style="display:none" aria-label="Trending"></div>
+
 <div class="section-head" id="catalog">
-  <h2>Latest Releases</h2>
+  <h2>Catalog</h2>
   <span class="chip" id="result-count">Loading…</span>
 </div>
 <div class="cat-nav" id="category-nav"></div>
-
-<!-- Poster grid -->
 <div class="poster-grid" id="catalog-grid">
-  <p class="muted" style="grid-column:1/-1;padding:40px 0;text-align:center">Loading titles…</p>
+  <p class="muted" style="grid-column:1/-1;padding:48px 0;text-align:center">Loading titles…</p>
 </div>
 
 <script>
-window.__INITIAL_CATALOG__ = {{ (initial_items if initial_items is defined else [])|tojson }};
-window.__INITIAL_CATEGORIES__ = {{ (initial_categories if initial_categories is defined else [])|tojson }};
 (async () => {
-  const q = new URLSearchParams(location.search).get('q') || '';
-  let category = new URLSearchParams(location.search).get('category') || '';
-
+  const grid = document.getElementById('catalog-grid');
   const nav = document.getElementById('category-nav');
-  const makeChip = (label, slug) => {
+  const countEl = document.getElementById('result-count');
+  const trend = document.getElementById('trending-row');
+  const params = new URLSearchParams(location.search);
+  let category = params.get('category') || '';
+  let q = params.get('q') || '';
+
+  function posterUrl(p) {
+    if (!p) return '/static/images/poster.jpg';
+    if (String(p).startsWith('http')) return p;
+    return 'https://image.tmdb.org/t/p/w500' + p;
+  }
+
+  function card(p) {
+    const a = document.createElement('a');
+    a.className = 'poster-card';
+    a.href = '/title/' + encodeURIComponent(p.slug);
+    const img = document.createElement('img');
+    img.src = posterUrl(p.poster_path);
+    img.alt = (p.title || 'Poster') + ' poster';
+    img.loading = 'lazy';
+    const info = document.createElement('div');
+    info.className = 'info';
+    const t = document.createElement('div');
+    t.className = 'title';
+    const year = (p.release_date || '').slice(0, 4);
+    t.textContent = (p.title || 'Untitled') + (year ? ' (' + year + ')' : '');
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = [p.media_type || '', p.rating != null ? '★ ' + p.rating : ''].filter(Boolean).join(' · ');
+    info.appendChild(t);
+    info.appendChild(m);
+    a.appendChild(img);
+    a.appendChild(info);
+    return a;
+  }
+
+  function chip(label, value, active) {
     const b = document.createElement('button');
-    b.className = 'chip' + (category === slug ? ' active' : '');
+    b.type = 'button';
+    b.className = 'chip' + (active ? ' active' : '');
     b.textContent = label;
     b.onclick = () => {
-      category = slug;
+      category = value;
       const url = new URL(location.href);
-      if (slug) url.searchParams.set('category', slug); else url.searchParams.delete('category');
+      if (category) url.searchParams.set('category', category); else url.searchParams.delete('category');
       if (q) url.searchParams.set('q', q); else url.searchParams.delete('q');
       history.replaceState(null, '', url);
       load();
@@ -47,163 +82,61 @@ window.__INITIAL_CATEGORIES__ = {{ (initial_categories if initial_categories is 
       b.classList.add('active');
     };
     return b;
-  };
-
-  function renderCategories(catList) {
-    nav.innerHTML = '';
-    nav.append(makeChip('All', ''));
-    const seen = new Set();
-    for (const c of (catList || [])) {
-      if (!c || !c.slug || seen.has(c.slug)) continue;
-      seen.add(c.slug);
-      nav.append(makeChip(c.name || c.slug, c.slug));
-    }
-  }
-
-  if (Array.isArray(window.__INITIAL_CATEGORIES__) && window.__INITIAL_CATEGORIES__.length) {
-    renderCategories(window.__INITIAL_CATEGORIES__);
-  } else {
-    renderCategories([{ name: 'Movies', slug: 'movies' }, { name: 'Web Series', slug: 'web-series' }]);
-  }
-
-  // Paint server-provided catalog immediately; do not block first render on category/API requests.
-  if (Array.isArray(window.__INITIAL_CATALOG__) && window.__INITIAL_CATALOG__.length) {
-    renderItems(filterInitialItems());
-  }
-
-  try {
-    const catRes = await fetch('/api/categories', {
-      cache: 'default',
-      signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(4000) : undefined
-    });
-    if (catRes.ok) {
-      const cats = await catRes.json();
-      if (Array.isArray(cats.items) && cats.items.length) {
-        renderCategories(cats.items);
-      }
-    }
-  } catch (e) {}
-
-  function qualityLine(p) {
-    const type = (p.media_type || 'movie').toLowerCase();
-    const parts = [];
-    parts.push('WEB-DL');
-    parts.push('[Hindi]');
-    parts.push('1080p 720p & 480p');
-    parts.push('[x264/HEVC]');
-    if (type === 'tv' || type === 'series') parts.push('| [Series]');
-    else parts.push('| Full Movie');
-    if (p.overview && p.overview.length > 10) {
-      const short = p.overview.replace(/\s+/g, ' ').trim().slice(0, 60);
-      if (short.length > 15) return short + (p.overview.length > 60 ? '…' : '');
-    }
-    return parts.join(' ');
-  }
-
-  function renderItems(items) {
-    const el = document.getElementById('catalog-grid');
-    const countEl = document.getElementById('result-count');
-    el.innerHTML = '';
-    const list = Array.isArray(items) ? items : [];
-    countEl.textContent = list.length ? list.length + ' titles' : '0 titles';
-
-    const trend = document.getElementById('trending-row');
-    if (!list.length) {
-      trend.style.display = 'none';
-      el.innerHTML = '<p class="muted" style="grid-column:1/-1;padding:40px 0;text-align:center">No titles found. Publish movies or series via /search in the Telegram bot or /panel.</p>';
-      return;
-    }
-
-    if (!q && list.length) {
-      trend.style.display = 'flex';
-      trend.innerHTML = '';
-      list.slice(0, 10).forEach(p => {
-        const a = document.createElement('a');
-        a.className = 'trending-item';
-        a.href = '/title/' + encodeURIComponent(p.slug);
-        const img = document.createElement('img');
-        img.loading = 'lazy';
-        img.src = p.poster_path?.startsWith('http') ? p.poster_path : (p.poster_path ? 'https://image.tmdb.org/t/p/w300' + p.poster_path : '/static/images/poster.jpg');
-        img.alt = p.title || 'Poster';
-        a.append(img);
-        trend.append(a);
-      });
-    } else {
-      trend.style.display = 'none';
-    }
-
-    for (const p of list) {
-      const a = document.createElement('a');
-      a.className = 'poster-card';
-      a.href = '/title/' + encodeURIComponent(p.slug);
-      const img = document.createElement('img');
-      img.loading = 'lazy';
-      img.src = p.poster_path?.startsWith('http') ? p.poster_path : (p.poster_path ? 'https://image.tmdb.org/t/p/w500' + p.poster_path : '/static/images/poster.jpg');
-      img.alt = p.title || 'Poster';
-      const info = document.createElement('div');
-      info.className = 'info';
-      const t = document.createElement('div');
-      t.className = 'title';
-      t.textContent = (p.title || 'Untitled') + (p.release_date ? ' (' + (p.release_date.slice(0, 4) || '') + ')' : '');
-      const m = document.createElement('div');
-      m.className = 'meta';
-      m.textContent = qualityLine(p);
-      info.append(t, m);
-      a.append(img, info);
-      el.append(a);
-    }
-  }
-
-  function filterInitialItems() {
-    let list = Array.isArray(window.__INITIAL_CATALOG__) ? window.__INITIAL_CATALOG__ : [];
-    if (category) {
-      list = list.filter(item => Array.isArray(item.category_slugs) && item.category_slugs.includes(category));
-    }
-    if (q) {
-      const needle = q.toLowerCase();
-      list = list.filter(item =>
-        String(item.title || '').toLowerCase().includes(needle) ||
-        String(item.overview || '').toLowerCase().includes(needle)
-      );
-    }
-    return list;
   }
 
   async function load() {
     try {
-      const params = new URLSearchParams();
-      if (q) params.set('q', q);
-      if (category) params.set('category', category);
-      const qs = params.toString();
-      const r = await fetch('/api/catalog' + (qs ? '?' + qs : ''), { cache: 'default', signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(9000) : undefined });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        if (Array.isArray(window.__INITIAL_CATALOG__)) {
-          renderItems(filterInitialItems());
-          return;
-        }
-        throw new Error(d.message || d.detail || ('Catalog API returned HTTP ' + r.status));
-      }
-      if (Array.isArray(d.items)) {
-        if (!q && !category) window.__INITIAL_CATALOG__ = d.items;
-        renderItems(d.items);
-      } else {
-        renderItems(filterInitialItems());
-      }
-    } catch (e) {
-      if (Array.isArray(window.__INITIAL_CATALOG__) && window.__INITIAL_CATALOG__.length) {
-        renderItems(filterInitialItems());
+      const qs = new URLSearchParams();
+      if (category) qs.set('category', category);
+      if (q) qs.set('q', q);
+      const r = await fetch('/api/public/catalog?' + qs.toString(), { cache: 'no-store' });
+      if (!r.ok) throw new Error('Catalog API returned HTTP ' + r.status);
+      const data = await r.json();
+      const list = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
+      const cats = Array.isArray(data.categories) ? data.categories : [];
+
+      countEl.textContent = list.length ? list.length + ' titles' : '0 titles';
+      nav.innerHTML = '';
+      nav.appendChild(chip('All', '', !category));
+      cats.forEach(c => nav.appendChild(chip(c.name || c.slug, c.slug, category === c.slug)));
+
+      grid.innerHTML = '';
+      if (!list.length) {
+        trend.style.display = 'none';
+        grid.innerHTML = '<p class="muted" style="grid-column:1/-1;padding:48px 0;text-align:center">No titles found. Publish movies or series from the bot or the panel.</p>';
         return;
       }
-      const message = (e && e.message) ? e.message : 'Catalog request failed';
-      const grid = document.getElementById('catalog-grid');
-      const safeMessage = String(message).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
-      grid.innerHTML = '<div style="grid-column:1/-1;padding:38px 16px;text-align:center;background:#141414;border:1px solid #333;border-radius:14px"><strong style="display:block;font-size:17px;color:#fff;margin-bottom:8px">Catalog temporarily unavailable</strong><p class="muted" style="margin-bottom:14px">' + safeMessage + '</p><button class="btn-yellow" type="button" id="catalog-retry">Try again</button></div>';
-      document.getElementById('catalog-retry')?.addEventListener('click', load);
-      document.getElementById('result-count').textContent = 'Unavailable';
+      list.forEach(p => grid.appendChild(card(p)));
+
+      const top = list.slice(0, 12);
+      if (top.length) {
+        trend.style.display = 'flex';
+        trend.innerHTML = '';
+        top.forEach(p => {
+          const a = document.createElement('a');
+          a.className = 'trending-item';
+          a.href = '/title/' + encodeURIComponent(p.slug);
+          a.title = p.title || '';
+          const img = document.createElement('img');
+          img.src = posterUrl(p.poster_path);
+          img.alt = p.title || 'Poster';
+          img.loading = 'lazy';
+          a.appendChild(img);
+          trend.appendChild(a);
+        });
+      } else {
+        trend.style.display = 'none';
+      }
+    } catch (err) {
+      const safeMessage = String(err && err.message ? err.message : err).replace(/[<>&]/g, '');
+      grid.innerHTML = '<div style="grid-column:1/-1;padding:40px 16px;text-align:center;background:var(--bg-card);border:1px solid var(--line);border-radius:var(--radius)"><strong style="display:block;font-size:17px;margin-bottom:8px">Catalog temporarily unavailable</strong><p class="muted" style="margin-bottom:14px">' + safeMessage + '</p><button class="btn btn-yellow" type="button" id="catalog-retry">Try again</button></div>';
+      const btn = document.getElementById('catalog-retry');
+      if (btn) btn.onclick = load;
+      countEl.textContent = 'Error';
     }
   }
-  await load();
+
+  load();
 })();
 </script>
 {% endblock %}
