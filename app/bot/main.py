@@ -36,8 +36,10 @@ from app.utils.helpers import (
     format_bytes,
     is_trycloudflare_url,
     normalize_public_base_url,
+    extract_short_code_from_media_url,
+    filestore_deep_link,
 )
-from app.utils.fsub import is_user_fsubbed
+from app.utils.fsub import is_user_fsubbed, get_fsub_invite_buttons
 from app.utils.rate_limit import check_rate_limit
 from app.utils.media_tools import (
     cleanup_dir,
@@ -68,46 +70,82 @@ _awaiting_addgroups: dict[int, dict] = {}
 # /save restore: set of admin user_ids waiting for a backup ZIP
 _awaiting_restore: set[int] = set()
 
+# /fspanel await states: user_id -> action
+_awaiting_fspanel: dict[int, str] = {}
+
 # FileStore secondary bot (when admin sets a different bot token via /filestore)
 _filestore_client: Optional[Client] = None
 _filestore_client_token: Optional[str] = None
-_FILESTORE_AUTO_DELETE_SECONDS = 5 * 60  # 5 minutes
-
-# Match generated watch/dl/stream URLs from this service
-_WATCH_URL_CODE_RE = re.compile(
-    r"(?:^|/)(?:watch|dl|stream|remux)/([A-Za-z0-9_-]{4,32})(?:/|$|\?|#)",
-    re.I,
-)
+_DEFAULT_FILESTORE_AUTO_DELETE_SECONDS = 5 * 60  # 5 minutes default
 
 
-def extract_short_code_from_media_url(url: str | None) -> str | None:
-    """Return short_code if URL is a generated watch/dl/stream link from this bot; else None."""
-    if not url or not isinstance(url, str):
-        return None
-    raw = url.strip()
-    if not raw:
-        return None
+async def get_runtime_admins() -> list[int]:
+    """Owner + env admins + runtime admins from MongoDB."""
+    ids = {int(settings.OWNER_ID)}
+    for a in settings.admin_list:
+        try:
+            ids.add(int(a))
+        except Exception:
+            pass
     try:
-        path = urlparse(raw).path or raw
+        runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+        for a in runtime.get("runtime_admins") or []:
+            try:
+                ids.add(int(a))
+            except Exception:
+                pass
     except Exception:
-        path = raw
-    m = _WATCH_URL_CODE_RE.search(path)
-    if m:
-        return m.group(1)
-    m2 = re.search(r"^/(?:watch|dl|stream|remux)/([A-Za-z0-9_-]{4,32})(?:/|$)", path, re.I)
-    return m2.group(1) if m2 else None
+        pass
+    return sorted(ids)
 
 
-def filestore_deep_link(username: str, short_code: str) -> str:
-    uname = (username or "").strip().lstrip("@")
-    code = (short_code or "").strip()
-    return f"https://t.me/{uname}?start=file_{code}"
-
-
-async def _auto_delete_messages(client, chat_id: int, message_ids: list[int], delay: int = _FILESTORE_AUTO_DELETE_SECONDS):
-    """Delete messages after delay (default 5 minutes)."""
+async def get_filestore_auto_delete_seconds() -> int:
+    """Seconds before FileStore-delivered messages are deleted (0 = disabled)."""
     try:
-        await asyncio.sleep(delay)
+        runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+        val = runtime.get("filestore_auto_delete_seconds")
+        if val is None:
+            return _DEFAULT_FILESTORE_AUTO_DELETE_SECONDS
+        return max(0, int(val))
+    except Exception:
+        return _DEFAULT_FILESTORE_AUTO_DELETE_SECONDS
+
+
+async def get_runtime_fsub_ids() -> list[int]:
+    """Env force-sub channels + runtime fsub list from MongoDB."""
+    ids: list[int] = []
+    seen = set()
+    for cid in settings.fsub_list:
+        try:
+            i = int(cid)
+            if i not in seen:
+                ids.append(i)
+                seen.add(i)
+        except Exception:
+            pass
+    try:
+        runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+        for cid in runtime.get("runtime_fsub") or []:
+            try:
+                i = int(cid)
+                if i not in seen:
+                    ids.append(i)
+                    seen.add(i)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return ids
+
+
+async def _auto_delete_messages(client, chat_id: int, message_ids: list[int], delay: int | None = None):
+    """Delete messages after delay (runtime FileStore setting, default 5 minutes)."""
+    if delay is None:
+        delay = await get_filestore_auto_delete_seconds()
+    if not delay or delay <= 0:
+        return
+    try:
+        await asyncio.sleep(int(delay))
         for mid in message_ids:
             if mid is None:
                 continue
@@ -278,10 +316,11 @@ async def start_filestore_client(token: str, username: str | None = None) -> dic
             await message.reply("❌ File not found or link expired.")
             return
         if not await is_user_fsubbed(c, uid):
+            invite_rows = await get_fsub_invite_buttons(c, uid)
             await message.reply(
                 "🔒 **Access Restricted**\n\n"
-                "> Join our official updates channel, then open the download link again.",
-                reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
+                "> Join the required channel/group below, then open the download link again.",
+                reply_markup=_kb(invite_rows) if invite_rows else None,
             )
             return
         try:
@@ -300,6 +339,43 @@ async def start_filestore_client(token: str, username: str | None = None) -> dic
         except Exception:
             pass
         raise RuntimeError(f"FileStore bot getMe failed: {e}") from e
+
+    # Minimal admin commands on secondary FileStore bot
+    try:
+        await client.set_bot_commands([
+            BotCommand("start", "Get file from deep link"),
+            BotCommand("fspanel", "Manage admins, fsub, auto-delete"),
+        ])
+    except Exception as e:
+        logger.debug("Could not set FileStore bot commands: %s", e)
+
+    # Register /fspanel on secondary client (reuse same logic via message routing is hard;
+    # re-bind a compact panel handler here)
+    @client.on_message(filters.command("fspanel") & filters.private)
+    async def secondary_fspanel(c, message: Message):
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        await refresh_runtime_admin_cache()
+        if not _is_admin_user(user.id):
+            return await message.reply("🚫 Admins only.")
+        runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+        admins = await get_runtime_admins()
+        fsubs = await get_runtime_fsub_ids()
+        adel = await get_filestore_auto_delete_seconds()
+        fs_user = (runtime.get("filestore_bot_username") or resolved_username or "").strip().lstrip("@")
+        adel_txt = "off" if adel <= 0 else (f"{adel // 60} min" if adel % 60 == 0 else f"{adel} sec")
+        await message.reply(
+            "🛠 **FileStore Panel**\n\n"
+            f"> Bot: `@{fs_user}`\n"
+            f"> Auto-delete: `{adel_txt}`\n"
+            f"> Admins: {', '.join('`'+str(a)+'`' for a in admins)}\n"
+            f"> FSub IDs: {', '.join('`'+str(x)+'`' for x in fsubs) or '*(none)*'}\n\n"
+            "Use the primary bot `/fspanel` with buttons to add/remove admins, FSub channels, and auto-delete time.\n"
+            "Or send commands here:\n"
+            "• `/fspanel` — show status\n"
+            "Manage changes are stored in the shared database."
+        )
 
     _filestore_client = client
     _filestore_client_token = clean
@@ -352,8 +428,23 @@ def _kb(rows):
     return InlineKeyboardMarkup(rows)
 
 
+# Cached runtime admin IDs (refreshed from Mongo on panel changes / startup)
+_runtime_admin_cache: set[int] = set()
+
+
 def _is_admin_user(user_id: int) -> bool:
-    return user_id == settings.OWNER_ID or user_id in settings.admin_list
+    if user_id == settings.OWNER_ID or user_id in settings.admin_list:
+        return True
+    return int(user_id) in _runtime_admin_cache
+
+
+async def refresh_runtime_admin_cache() -> None:
+    global _runtime_admin_cache
+    try:
+        ids = await get_runtime_admins()
+        _runtime_admin_cache = set(int(x) for x in ids)
+    except Exception:
+        pass
 
 
 def extract_filename_from_caption(caption: str | None, fallback: str) -> str:
@@ -519,6 +610,7 @@ async def setup_bot_commands(bot):
             BotCommand("backendurl", "Set backend / Cloudflare URL (admin)"),
             BotCommand("baseurl", "Set primary / Cloudflare URL (admin)"),
             BotCommand("filestore", "Set FileStore bot for deep-link downloads (admin)"),
+            BotCommand("fspanel", "FileStore panel: admins, fsub, auto-delete (admin)"),
             BotCommand("categories", "Manage categories (admin)"),
             BotCommand("edit", "Open page editor (admin)"),
             BotCommand("search", "Search catalog (admin)"),
@@ -737,10 +829,11 @@ def register_handlers(bot):
                 file_data = await files_col.find_one({"short_code": code})
                 if file_data:
                     if not await is_user_fsubbed(client, user_id):
+                        invite_rows = await get_fsub_invite_buttons(client, user_id)
                         return await message.reply(
                             "🔒 **Access Restricted**\n\n"
-                            "> Join our official updates channel, then open the download link again.",
-                            reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
+                            "> Join the required channel/group below, then open the download link again.",
+                            reply_markup=_kb(invite_rows) if invite_rows else None,
                         )
                     try:
                         ok = await deliver_filestore_file(client, user_id, file_data, message)
@@ -759,10 +852,11 @@ def register_handlers(bot):
                     pass
 
         if not await is_user_fsubbed(client, user_id):
+            invite_rows = await get_fsub_invite_buttons(client, user_id)
             return await message.reply(
                 "🔒 **Access Restricted**\n\n"
-                "> Join our official updates channel, then send /start again.",
-                reply_markup=_kb([[InlineKeyboardButton("📢 Join Updates Channel", url=settings.UPDATE_CHANNEL_URL)]]),
+                "> Join the required channel/group below, then send /start again.",
+                reply_markup=_kb(invite_rows) if invite_rows else None,
             )
 
         first_name = user.first_name or "User"
@@ -1980,6 +2074,234 @@ def register_handlers(bot):
             "• Delivered files include **Watch** + **Download** buttons and **auto-delete in 5 minutes**."
         )
 
+
+    async def _fspanel_home_text() -> tuple[str, InlineKeyboardMarkup]:
+        runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+        admins = await get_runtime_admins()
+        fsubs = await get_runtime_fsub_ids()
+        adel = await get_filestore_auto_delete_seconds()
+        fs_user = (runtime.get("filestore_bot_username") or "").strip().lstrip("@") or "*(not set)*"
+        if adel <= 0:
+            adel_txt = "off"
+        elif adel % 60 == 0:
+            adel_txt = f"{adel // 60} min"
+        else:
+            adel_txt = f"{adel} sec"
+        admin_lines = ", ".join(f"`{a}`" for a in admins) or "*(none)*"
+        fsub_lines = ", ".join(f"`{c}`" for c in fsubs) or "*(none)*"
+        text = (
+            "🛠 **FileStore Panel** (admins only)\n\n"
+            f"> 📦 FileStore bot: `@{fs_user}`\n"
+            f"> ⏱ Auto-delete: `{adel_txt}`\n"
+            f"> 👑 Admins: {admin_lines}\n"
+            f"> 📢 FSub channels/groups: {fsub_lines}\n\n"
+            "Use the buttons below to manage settings."
+        )
+        kb = _kb([
+            [InlineKeyboardButton("➕ Add Admin", callback_data="fsp:addadmin"),
+             InlineKeyboardButton("➖ Remove Admin", callback_data="fsp:deladmin")],
+            [InlineKeyboardButton("🔄 Replace Admins", callback_data="fsp:setadmins")],
+            [InlineKeyboardButton("➕ Add FSub", callback_data="fsp:addfsub"),
+             InlineKeyboardButton("➖ Remove FSub", callback_data="fsp:delfsub")],
+            [InlineKeyboardButton("🔄 Replace FSub list", callback_data="fsp:setfsub")],
+            [InlineKeyboardButton("⏱ Auto-delete time", callback_data="fsp:autodel")],
+            [InlineKeyboardButton("🔄 Refresh", callback_data="fsp:refresh")],
+        ])
+        return text, kb
+
+    @bot.on_message(filters.command("fspanel") & filters.private)
+    async def fspanel_handler(client, message: Message):
+        """FileStore management panel: admins, fsub, auto-delete (admin only)."""
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        await refresh_runtime_admin_cache()
+        if not _is_admin_user(user.id):
+            return await message.reply("🚫 Admins only.")
+        text, kb = await _fspanel_home_text()
+        await message.reply(text, reply_markup=kb)
+
+    @bot.on_callback_query(filters.regex(r"^fsp:"))
+    async def fspanel_callback(client, callback: CallbackQuery):
+        user = callback.from_user
+        if not user:
+            return
+        await refresh_runtime_admin_cache()
+        if not _is_admin_user(user.id):
+            return await callback.answer("Admins only", show_alert=True)
+        data = (callback.data or "").split(":", 1)[-1]
+        if data == "refresh":
+            text, kb = await _fspanel_home_text()
+            try:
+                await callback.message.edit_text(text, reply_markup=kb)
+            except Exception:
+                await callback.message.reply(text, reply_markup=kb)
+            return await callback.answer("Refreshed")
+        prompts = {
+            "addadmin": ("Send the **user ID** to add as admin (numbers only).", "addadmin"),
+            "deladmin": ("Send the **user ID** to remove from admins.", "deladmin"),
+            "setadmins": ("Send admin user IDs separated by comma or space (replaces runtime list).\nOwner is always kept.", "setadmins"),
+            "addfsub": ("Send the **channel/group ID** to add for force-subscribe\n(e.g. `-1001234567890`). Bot must be admin there.", "addfsub"),
+            "delfsub": ("Send the **channel/group ID** to remove from FSub.", "delfsub"),
+            "setfsub": ("Send channel/group IDs separated by comma or space (replaces runtime FSub list).", "setfsub"),
+            "autodel": ("Send auto-delete time for FileStore deliveries:\n`5m` · `10m` · `1h` · `300` (seconds) · `off`", "autodel"),
+        }
+        if data not in prompts:
+            return await callback.answer("Unknown action", show_alert=True)
+        prompt, state = prompts[data]
+        _awaiting_fspanel[user.id] = state
+        await callback.answer()
+        await callback.message.reply(f"✏️ {prompt}\n\nSend /cancel to abort.")
+
+    @bot.on_message(filters.private & filters.text & ~filters.command(["start", "cancel", "fspanel", "panel", "filestore"]))
+    async def fspanel_text_input(client, message: Message):
+        user = message.from_user
+        if not user or user.id not in _awaiting_fspanel:
+            return
+        if not _is_admin_user(user.id):
+            _awaiting_fspanel.pop(user.id, None)
+            return
+        state = _awaiting_fspanel.pop(user.id, None)
+        raw = (message.text or "").strip()
+        if not raw or raw.lower() in ("/cancel", "cancel"):
+            return await message.reply("Cancelled.")
+
+        runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+        now = datetime.datetime.utcnow()
+
+        def parse_ids(s: str) -> list[int]:
+            out = []
+            for part in re.split(r"[\s,;]+", s.strip()):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    out.append(int(part))
+                except ValueError:
+                    continue
+            return out
+
+        if state == "addadmin":
+            ids = parse_ids(raw)
+            if not ids:
+                return await message.reply("❌ Send a valid numeric user ID.")
+            cur = list(runtime.get("runtime_admins") or [])
+            for i in ids:
+                if i not in cur:
+                    cur.append(i)
+            await db.site_settings.update_one(
+                {"_id": "runtime"},
+                {"$set": {"runtime_admins": cur, "updated_at": now}},
+                upsert=True,
+            )
+            await refresh_runtime_admin_cache()
+            return await message.reply(f"✅ Added admin(s): {', '.join(str(i) for i in ids)}")
+
+        if state == "deladmin":
+            ids = set(parse_ids(raw))
+            if not ids:
+                return await message.reply("❌ Send a valid numeric user ID.")
+            if settings.OWNER_ID in ids:
+                return await message.reply("❌ Cannot remove the owner.")
+            cur = [i for i in (runtime.get("runtime_admins") or []) if int(i) not in ids]
+            await db.site_settings.update_one(
+                {"_id": "runtime"},
+                {"$set": {"runtime_admins": cur, "updated_at": now}},
+                upsert=True,
+            )
+            await refresh_runtime_admin_cache()
+            return await message.reply(f"✅ Removed admin(s): {', '.join(str(i) for i in ids)}")
+
+        if state == "setadmins":
+            ids = parse_ids(raw)
+            # keep owner always
+            cleaned = []
+            seen = set()
+            for i in ids:
+                if i == settings.OWNER_ID:
+                    continue
+                if i not in seen:
+                    cleaned.append(i)
+                    seen.add(i)
+            await db.site_settings.update_one(
+                {"_id": "runtime"},
+                {"$set": {"runtime_admins": cleaned, "updated_at": now}},
+                upsert=True,
+            )
+            await refresh_runtime_admin_cache()
+            return await message.reply(f"✅ Runtime admins replaced ({len(cleaned)} + owner).")
+
+        if state == "addfsub":
+            ids = parse_ids(raw)
+            if not ids:
+                return await message.reply("❌ Send a valid channel/group ID (e.g. `-1001234567890`).")
+            cur = list(runtime.get("runtime_fsub") or [])
+            for i in ids:
+                if i not in cur:
+                    cur.append(i)
+            await db.site_settings.update_one(
+                {"_id": "runtime"},
+                {"$set": {"runtime_fsub": cur, "updated_at": now}},
+                upsert=True,
+            )
+            return await message.reply(
+                f"✅ FSub added: {', '.join(str(i) for i in ids)}\n"
+                "Make sure the bot is **admin** in those chats and can invite users."
+            )
+
+        if state == "delfsub":
+            ids = set(parse_ids(raw))
+            if not ids:
+                return await message.reply("❌ Send a valid channel/group ID.")
+            cur = [i for i in (runtime.get("runtime_fsub") or []) if int(i) not in ids]
+            await db.site_settings.update_one(
+                {"_id": "runtime"},
+                {"$set": {"runtime_fsub": cur, "updated_at": now}},
+                upsert=True,
+            )
+            return await message.reply(f"✅ FSub removed: {', '.join(str(i) for i in ids)}")
+
+        if state == "setfsub":
+            ids = parse_ids(raw)
+            cleaned = []
+            seen = set()
+            for i in ids:
+                if i not in seen:
+                    cleaned.append(i)
+                    seen.add(i)
+            await db.site_settings.update_one(
+                {"_id": "runtime"},
+                {"$set": {"runtime_fsub": cleaned, "updated_at": now}},
+                upsert=True,
+            )
+            return await message.reply(f"✅ FSub list replaced ({len(cleaned)} chats).")
+
+        if state == "autodel":
+            v = raw.lower().strip()
+            if v in ("off", "0", "disable", "none"):
+                seconds = 0
+            else:
+                m = re.match(r"^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)?$", v)
+                if not m:
+                    return await message.reply("❌ Invalid time. Examples: `5m`, `10m`, `1h`, `300`, `off`")
+                num = int(m.group(1))
+                unit = (m.group(2) or "s").lower()
+                if unit.startswith("h"):
+                    seconds = num * 3600
+                elif unit.startswith("m"):
+                    seconds = num * 60
+                else:
+                    seconds = num
+            await db.site_settings.update_one(
+                {"_id": "runtime"},
+                {"$set": {"filestore_auto_delete_seconds": seconds, "updated_at": now}},
+                upsert=True,
+            )
+            if seconds <= 0:
+                return await message.reply("✅ FileStore auto-delete **disabled**.")
+            return await message.reply(f"✅ FileStore auto-delete set to **{seconds} seconds**.")
+
+    
     @bot.on_message(filters.command("stats"))
     async def stats_handler(client, message: Message):
         user = message.from_user

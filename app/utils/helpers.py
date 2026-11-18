@@ -1,5 +1,6 @@
 import ipaddress
 import random
+import re
 import string
 from urllib.parse import urlparse, urlunparse
 
@@ -7,6 +8,45 @@ from urllib.parse import urlparse, urlunparse
 def generate_short_code(length: int = 8):
     characters = string.ascii_letters + string.digits
     return ''.join(random.choices(characters, k=length))
+
+
+# Match generated watch/dl/stream/remux URLs from this service (short codes 3–64 chars)
+_WATCH_URL_CODE_RE = re.compile(
+    r"(?:^|/)(?:watch|dl|stream|remux)/([A-Za-z0-9_-]{3,64})(?:/|$|\?|#)",
+    re.I,
+)
+
+
+def extract_short_code_from_media_url(url: str | None) -> str | None:
+    """Return short_code if URL is a generated watch/dl/stream/remux link from this bot; else None."""
+    if not url or not isinstance(url, str):
+        return None
+    raw = url.strip()
+    if not raw:
+        return None
+    try:
+        parsed = urlparse(raw if "://" in raw or raw.startswith("/") else f"https://x{raw}")
+        path = parsed.path or ""
+    except Exception:
+        path = raw
+    if not path and raw:
+        path = raw
+    m = _WATCH_URL_CODE_RE.search(path)
+    if m:
+        return m.group(1)
+    # Full URL without relying on path parse (e.g. unusual hosts)
+    m2 = _WATCH_URL_CODE_RE.search(raw)
+    if m2:
+        return m2.group(1)
+    # Relative path
+    m3 = re.search(r"^/(?:watch|dl|stream|remux)/([A-Za-z0-9_-]{3,64})(?:/|$|\?|#)", path or raw, re.I)
+    return m3.group(1) if m3 else None
+
+
+def filestore_deep_link(username: str, short_code: str) -> str:
+    uname = (username or "").strip().lstrip("@")
+    code = (short_code or "").strip()
+    return f"https://t.me/{uname}?start=file_{code}"
 
 
 def format_bytes(size: int):

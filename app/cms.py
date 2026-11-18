@@ -322,15 +322,16 @@ def build_telegram_groups_from_watch(groups: list | None, filestore_username: st
     uname = str(filestore_username).strip().lstrip('@')
     if not uname:
         return []
-    from app.bot.main import extract_short_code_from_media_url, filestore_deep_link
+    from app.utils.helpers import extract_short_code_from_media_url, filestore_deep_link
 
     out = []
     for g in groups:
         if not isinstance(g, dict):
             continue
         box = str(g.get('box') or 'watch').strip().lower()
-        # Only mirror watch (and legacy missing-box) groups
-        if box not in ('watch', ''):
+        # Mirror watch groups (and legacy missing-box). Download box buttons that
+        # point at this bot's /watch|/dl links are also eligible.
+        if box not in ('watch', 'download', ''):
             continue
         buttons_out = []
         for b in (g.get('buttons') or []):
@@ -349,9 +350,12 @@ def build_telegram_groups_from_watch(groups: list | None, filestore_username: st
                 'url': filestore_deep_link(uname, code),
             })
         if buttons_out:
+            gname = str(g.get('name') or '').strip()
+            if not gname:
+                gname = 'Watch' if box in ('watch', '') else 'Download'
             out.append({
                 'box': 'telegram',
-                'name': str(g.get('name') or 'Telegram').strip() or 'Telegram',
+                'name': gname,
                 'buttons': buttons_out,
             })
     return out

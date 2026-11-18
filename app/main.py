@@ -60,8 +60,12 @@ async def lifespan(app: FastAPI):
         session_manager.prepare_bot()
         register_handlers(session_manager.bot_client)
         await session_manager.start()
-        from app.bot.main import setup_bot_commands, start_filestore_client, stop_filestore_client
+        from app.bot.main import setup_bot_commands, start_filestore_client, stop_filestore_client, refresh_runtime_admin_cache
         await setup_bot_commands(session_manager.bot_client)
+        try:
+            await refresh_runtime_admin_cache()
+        except Exception as e:
+            logger.warning("Admin cache refresh failed: %s", e)
         # Restore FileStore secondary bot if a token was previously saved
         try:
             runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
