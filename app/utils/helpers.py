@@ -49,6 +49,29 @@ def filestore_deep_link(username: str, short_code: str) -> str:
     return f"https://t.me/{uname}?start=file_{code}"
 
 
+def extract_watch_short_code(url: str | None) -> str | None:
+    """Return short_code only for /watch/<code> URLs (not dl/stream/remux)."""
+    if not url or not isinstance(url, str):
+        return None
+    raw = url.strip()
+    if not raw:
+        return None
+    try:
+        parsed = urlparse(raw if "://" in raw or raw.startswith("/") else f"https://x{raw}")
+        path = parsed.path or ""
+    except Exception:
+        path = raw
+    if not path and raw:
+        path = raw
+    m = re.search(r"(?:^|/)watch/([A-Za-z0-9_-]{3,64})(?:/|$|\?|#)", path, re.I)
+    if m:
+        return m.group(1)
+    m2 = re.search(r"(?:^|/)watch/([A-Za-z0-9_-]{3,64})(?:/|$|\?|#)", raw, re.I)
+    return m2.group(1) if m2 else None
+
+
+
+
 def format_bytes(size: int):
     if not size or size <= 0:
         return "0 B"

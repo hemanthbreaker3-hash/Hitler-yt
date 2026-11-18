@@ -312,28 +312,28 @@ async def search_page(
 
 def build_telegram_groups_from_watch(groups: list | None, filestore_username: str | None) -> list[dict]:
     """
-    Mirror Watch-box groups into a Telegram box.
-    Same group names and button names; button URLs become FileStore deep links
-    ONLY when the original URL is a generated /watch/ (or /dl|/stream|/remux) link
-    from this service. External URLs are skipped.
+    Mirror Watch-box groups into one Telegram box.
+    Only /watch/<code> button URLs become FileStore deep links.
+    Dedupes by short_code so the same media is not listed twice.
     """
     if not filestore_username or not groups:
         return []
     uname = str(filestore_username).strip().lstrip('@')
     if not uname:
         return []
-    from app.utils.helpers import extract_short_code_from_media_url, filestore_deep_link
+    from app.utils.helpers import extract_watch_short_code, filestore_deep_link
 
     out = []
+    seen_codes_global: set[str] = set()
     for g in groups:
         if not isinstance(g, dict):
             continue
         box = str(g.get('box') or 'watch').strip().lower()
-        # Mirror watch groups (and legacy missing-box). Download box buttons that
-        # point at this bot's /watch|/dl links are also eligible.
-        if box not in ('watch', 'download', ''):
+        # Watch box only (legacy missing box counts as watch)
+        if box not in ('watch', ''):
             continue
         buttons_out = []
+        seen_in_group: set[str] = set()
         for b in (g.get('buttons') or []):
             if not isinstance(b, dict):
                 continue
@@ -341,18 +341,19 @@ def build_telegram_groups_from_watch(groups: list | None, filestore_username: st
             burl = str(b.get('url') or '').strip()
             if not bname or not burl:
                 continue
-            code = extract_short_code_from_media_url(burl)
+            code = extract_watch_short_code(burl)
             if not code:
-                # Not a generated watch/dl URL from this bot — do not convert
                 continue
+            if code in seen_in_group or code in seen_codes_global:
+                continue
+            seen_in_group.add(code)
+            seen_codes_global.add(code)
             buttons_out.append({
                 'name': bname,
                 'url': filestore_deep_link(uname, code),
             })
         if buttons_out:
-            gname = str(g.get('name') or '').strip()
-            if not gname:
-                gname = 'Watch' if box in ('watch', '') else 'Download'
+            gname = str(g.get('name') or '').strip() or 'Watch'
             out.append({
                 'box': 'telegram',
                 'name': gname,

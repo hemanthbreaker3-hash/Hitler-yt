@@ -1074,7 +1074,7 @@ function renderSearchHtml({ results, query, typeFilter, yearFilter, genreFilter,
 }
 
 
-function extractShortCodeFromMediaUrl(url) {
+function extractWatchShortCode(url) {
   if (!url || typeof url !== 'string') return null;
   const raw = url.trim();
   if (!raw) return null;
@@ -1087,7 +1087,7 @@ function extractShortCodeFromMediaUrl(url) {
   } catch (_) {
     path = raw;
   }
-  const re = /(?:^|\/)(?:watch|dl|stream|remux)\/([A-Za-z0-9_-]{3,64})(?:\/|$|\?|#)/i;
+  const re = /(?:^|\/)watch\/([A-Za-z0-9_-]{3,64})(?:\/|$|\?|#)/i;
   let m = path.match(re);
   if (m) return m[1];
   m = raw.match(re);
@@ -1101,32 +1101,37 @@ function filestoreDeepLink(username, shortCode) {
 }
 
 /**
- * Mirror Watch/Download groups into Telegram deep-link buttons for existing + new pages.
- * Only converts buttons whose URLs are this bot's /watch|/dl|/stream|/remux links.
+ * Mirror Watch-box groups only. Button URLs must be /watch/<code>.
+ * Dedupes by short_code to avoid duplicate Telegram buttons/groups.
  */
 function buildTelegramGroupsFromWatch(groups, filestoreUsername) {
   const uname = String(filestoreUsername || '').trim().replace(/^@+/, '');
   if (!uname || !Array.isArray(groups) || !groups.length) return [];
   const out = [];
+  const seenGlobal = new Set();
   for (const g of groups) {
     if (!g || typeof g !== 'object') continue;
     const box = String(g.box || 'watch').trim().toLowerCase();
-    if (box && box !== 'watch' && box !== 'download') continue;
+    if (box && box !== 'watch') continue;
     const buttonsOut = [];
+    const seenInGroup = new Set();
     const buttons = Array.isArray(g.buttons) ? g.buttons : [];
     for (const b of buttons) {
       if (!b || typeof b !== 'object') continue;
       const bname = String(b.name || '').trim();
       const burl = String(b.url || '').trim();
       if (!bname || !burl) continue;
-      const code = extractShortCodeFromMediaUrl(burl);
+      const code = extractWatchShortCode(burl);
       if (!code) continue;
+      if (seenInGroup.has(code) || seenGlobal.has(code)) continue;
+      seenInGroup.add(code);
+      seenGlobal.add(code);
       buttonsOut.push({ name: bname, url: filestoreDeepLink(uname, code) });
     }
     if (buttonsOut.length) {
       out.push({
         box: 'telegram',
-        name: String(g.name || (box === 'download' ? 'Download' : 'Watch')).trim() || 'Telegram',
+        name: String(g.name || 'Watch').trim() || 'Watch',
         buttons: buttonsOut,
       });
     }
@@ -1246,7 +1251,7 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
       : '';
     telegramHtml = `<section class="link-box telegram" aria-label="Telegram links" data-box="telegram">
         <h2><span aria-hidden="true">✈</span>Get in Telegram</h2>
-        <p class="box-hint">Open in Telegram bot — file is sent in chat (auto-deletes after a few minutes). Same groups as Watch; deep links only for this site's media.</p>
+        <p class="box-hint">Get file in Telegram</p>
         <div class="groups-list" data-box="telegram">${tgContent}</div>
         ${tgPager}
       </section>`;
