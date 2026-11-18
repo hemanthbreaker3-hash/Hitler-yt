@@ -150,19 +150,6 @@
     .watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}
     .side{align-self:start;position:sticky;top:72px}
   }
-  .track-card,.link-box{margin-top:16px;padding:14px;border:1px solid rgba(96,165,250,.2);border-radius:15px;background:linear-gradient(145deg,rgba(19,27,48,.88),rgba(10,13,25,.94));box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
-  .track-heading,.link-box-head{display:flex;align-items:center;gap:11px;margin-bottom:11px}
-  .track-heading b,.link-box-head b{display:block;font-size:14px;color:#f5f8ff}
-  .track-heading small,.link-box-head small{display:block;color:var(--muted);font-size:11px;margin-top:3px}
-  .track-symbol,.box-symbol{width:36px;height:36px;display:grid;place-items:center;border-radius:11px;background:rgba(59,130,246,.15);border:1px solid rgba(96,165,250,.25);color:#93c5fd;font-size:20px}
-  .track-card .select{width:100%;min-width:0}
-  .track-status{display:block;margin:8px 0 0;font-size:11px;color:var(--muted)}
-  .custom-link-group{margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.07)}
-  .custom-link-group>b{font-size:12px;color:#bfdbfe}
-  .telegram-box{border-color:rgba(34,211,238,.24);background:linear-gradient(145deg,rgba(8,40,55,.7),rgba(10,13,25,.94))}
-  .telegram-box .box-symbol{color:#67e8f9;background:rgba(34,211,238,.12);border-color:rgba(34,211,238,.25)}
-  .telegram-file-btn{background:linear-gradient(135deg,#0891b2,#2563eb)!important;border-color:rgba(103,232,249,.35)!important}
-  .player-utility-actions{margin-top:12px}
   .toast{
     position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(20px);
     background:rgba(10,10,22,.95);border:1px solid rgba(59,130,246,.35);
@@ -198,10 +185,13 @@
   } catch (e) { canWasm = false; }
 
   var engine;
-  /* Movi is the built-in streaming player by default on every device.
-     Native mode remains available through the explicit fallback switch or ?engine=native. */
-  if (forced === 'native') engine = 'native';
-  else engine = 'wasm';
+  if (forced === 'wasm' || forced === 'native') engine = forced;
+  else engine = canWasm ? 'wasm' : 'native';
+
+  try {
+    var pref = localStorage.getItem('hitler:engine');
+    if (!forced && (pref === 'wasm' || pref === 'native')) engine = pref;
+  } catch (_) {}
 
   window.__HITLERPlayer = {
     initial: engine,
@@ -264,11 +254,11 @@
         <span>{{ file.access_count }} views</span>
       </div>
 
-      <section id="track-box" class="track-card" style="display:none" aria-label="Audio track selector">
-        <div class="track-heading"><span class="track-symbol">♫</span><div><b>Audio tracks</b><small>Switch the soundtrack while watching</small></div></div>
-        <select id="audio-select" class="select" aria-label="Choose audio track"></select>
-        <span id="track-status" class="track-status">Loading available tracks…</span>
-      </section>
+      <!-- Track select is mainly for native/remux fallback; WASM player has its own track menu -->
+      <div id="track-box" class="tools" style="display:none">
+        <select id="audio-select" class="select" aria-label="Audio track"></select>
+        <span id="track-status" class="track-status"></span>
+      </div>
 
       <div class="volume-tools" id="native-only-tools" style="display:none">
         <label for="volume-boost">Volume boost <b id="volume-value">100%</b></label>
@@ -277,35 +267,16 @@
         <input id="brightness" type="range" min="50" max="150" step="5" value="100" aria-label="Screen brightness">
       </div>
 
-      {% if player_settings.downloads_enabled %}
-      <section class="link-box download-box">
-        <div class="link-box-head"><span class="box-symbol">⇩</span><div><b>Download</b><small>Save the original media file</small></div></div>
-        <div class="tools">
-          <a class="btn accent" id="direct-dl-btn" href="{{ effective_stream_base }}/dl/{{ file.short_code }}" download>⬇ Direct Download</a>
-          <a class="btn" id="idm-dl-btn" href="#">⚡ 1DM Download</a>
-          <button class="btn" type="button" onclick="copyDownload()">⧉ Copy Download URL</button>
-        </div>
-        {% for group in download_groups %}
-          {% if group.buttons %}
-          <div class="custom-link-group"><b>{{ group.name }}</b><div class="tools">
-            {% for button in group.buttons %}<a class="btn" href="{{ button.url }}" target="_blank" rel="noopener">{{ button.name }}</a>{% endfor %}
-          </div></div>
-          {% endif %}
-        {% endfor %}
-      </section>
-      {% elif player_settings.filestore_bot_username %}
-      <section class="link-box telegram-box">
-        <div class="link-box-head"><span class="box-symbol">✈</span><div><b>Telegram File</b><small>Get this file directly in Telegram</small></div></div>
-        {% for group in telegram_groups %}
-        <div class="custom-link-group"><b>{{ group.name }}</b><div class="tools">
-          {% for button in group.buttons %}<a class="btn accent telegram-file-btn" href="{{ button.url }}" target="_blank" rel="noopener">{{ button.name }}</a>{% endfor %}
-        </div></div>
-        {% endfor %}
-      </section>
-      {% endif %}
-      <div class="tools player-utility-actions">
-        <button class="btn" type="button" onclick="copyStream()">⧉ Copy Stream URL</button>
-        <button class="btn" type="button" id="fix-audio-btn" onclick="enableCompatibleMode()" style="display:none">♫ Fix audio</button>
+      <div class="tools">
+        {% if player_settings.downloads_enabled %}
+        <a class="btn accent" id="direct-dl-btn" href="{{ effective_stream_base }}/dl/{{ file.short_code }}" download>⬇ Download (Chrome)</a>
+        <a class="btn" id="idm-dl-btn" href="#">⚡ 1DM Download</a>
+        {% elif player_settings.filestore_bot_username %}
+        <a class="btn accent" id="direct-dl-btn" href="https://t.me/{{ player_settings.filestore_bot_username }}?start=file_{{ file.short_code }}" target="_blank" rel="noopener">📥 Get File in Bot</a>
+        {% endif %}
+        <button class="btn" type="button" onclick="copyDownload()">Copy Download Link</button>
+        <button class="btn" type="button" onclick="copyStream()">Copy Stream URL</button>
+        <button class="btn" type="button" id="fix-audio-btn" onclick="enableCompatibleMode()" style="display:none">Fix audio (basic)</button>
       </div>
       <div id="copy-status" class="copy-ok"></div>
     </div>
@@ -313,7 +284,8 @@
 
   <aside class="side">
     <div class="card">
-      <b>✦ Open with your player</b>
+      <b>Open in player / downloader</b>
+
       <div id="mobile" class="player-panel active"><div class="player-grid" id="mobile-grid"></div></div>
       <div id="desktop" class="player-panel"><div class="player-grid" id="desktop-grid"></div></div>
       <div id="tablet" class="player-panel"><div class="player-grid" id="tablet-grid"></div></div>
@@ -324,10 +296,10 @@
 </div>
 
 <nav class="player-tabs" aria-label="Player device categories">
-  <button class="tab active" data-tab="mobile">▣ Mobile</button>
-  <button class="tab" data-tab="desktop">▰ Desktop</button>
-  <button class="tab" data-tab="tablet">▤ Tablet</button>
-  <button class="tab" data-tab="tv">⌁ TV</button>
+  <button class="tab active" data-tab="mobile">Mobile</button>
+  <button class="tab" data-tab="desktop">Desktop</button>
+  <button class="tab" data-tab="tablet">Tablet</button>
+  <button class="tab" data-tab="tv">TV</button>
 </nav>
 
 <div class="toast" id="toast"><span id="toast-message">Link copied</span></div>
@@ -346,7 +318,7 @@ const DOWNLOADS_ENABLED = {{ player_settings.downloads_enabled|tojson }};
 const FILESTORE_BOT = {{ (player_settings.filestore_bot_username or '')|tojson }};
 const DL_URL = DOWNLOADS_ENABLED
   ? (STREAM_ORIGIN + '/dl/' + SHORT_CODE)
-  : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : '');
+  : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (STREAM_ORIGIN + '/dl/' + SHORT_CODE));
 const REMUX_URL = STREAM_ORIGIN + '/remux/' + SHORT_CODE;
 const TRACKS_URL = STREAM_ORIGIN + '/api/tracks/' + SHORT_CODE;
 const PLAYER_MIME = {{ file.mime_type|tojson }};
@@ -399,7 +371,7 @@ function showLoading() { if (loadingScreen) loadingScreen.classList.add('active'
 function hideLoading() { if (loadingScreen) loadingScreen.classList.remove('active'); loadingDone = true; }
 function setEngine(e) {
   engine = e;
-  try { localStorage.setItem('hitler:engine', e); } catch (_) {}
+  try { localStorage.setItem('ddstream:engine', e); } catch (_) {}
 }
 function activeMedia() {
   return (engine === 'wasm' && !browserMode) ? moviPlayer : nativePlayer;
@@ -433,7 +405,7 @@ function idmIntent(url) {
 const dlBtn = document.getElementById('direct-dl-btn');
 if (dlBtn) dlBtn.href = DL_URL;
 const idmBtn = document.getElementById('idm-dl-btn');
-if (idmBtn && DL_URL) idmBtn.href = idmIntent(DL_URL);
+if (idmBtn) idmBtn.href = idmIntent(DL_URL);
 
 function copyText(text, statusId) {
   const el = document.getElementById(statusId || 'copy-status');
@@ -450,10 +422,7 @@ function fallbackCopy(text, cb) {
   document.body.removeChild(ta);
   if (cb) cb();
 }
-function copyDownload() {
-  if (!DL_URL) return showToast('Downloads are disabled');
-  copyText(DL_URL); showToast('Download link copied');
-}
+function copyDownload() { copyText(DL_URL); showToast('Download link copied'); }
 function copyStream() { copyText(STREAM_URL); showToast('Stream URL copied'); }
 
 /* ===== External player grids (original full set kept) ===== */
@@ -481,41 +450,41 @@ function buildPlayerGrids() {
     if (el) el.innerHTML = '';
   });
   const android = [
-    ['⇩ 1DM Download', 'idm.internet.download.manager'],
-    ['✧ HV Stream', null],
-    ['▶ PLAYit', 'com.playit.videoplayer'],
-    ['◉ VLC', 'org.videolan.vlc'],
-    ['◈ MX Player', 'com.mxtech.videoplayer.ad'],
-    ['▷ Just Player', 'com.brouken.player'],
-    ['◇ mpv', 'is.xyz.mpv'],
-    ['⌘ Kodi', 'org.xbmc.kodi']
+    ['1DM Download', 'idm.internet.download.manager'],
+    ['HV Stream', null],
+    ['PLAYit', 'com.playit.videoplayer'],
+    ['VLC', 'org.videolan.vlc'],
+    ['MX Player', 'com.mxtech.videoplayer.ad'],
+    ['Just Player', 'com.brouken.player'],
+    ['mpv', 'is.xyz.mpv'],
+    ['Kodi', 'org.xbmc.kodi']
   ];
   android.forEach(([n, p]) => {
-    if (n === '⇩ 1DM Download') {
-      if (DOWNLOADS_ENABLED && DL_URL) addPlayer('mobile-grid', n, idmIntent(DL_URL));
-    } else if (n === '✧ HV Stream') {
+    if (n === '1DM Download') {
+      addPlayer('mobile-grid', n, idmIntent(DL_URL));
+    } else if (n === 'HV Stream') {
       addPlayer('mobile-grid', n, hvStreamIntent(STREAM_URL));
     } else {
       addPlayer('mobile-grid', n, androidIntent(STREAM_URL, p, INTENT_MIME));
     }
   });
-  if (DOWNLOADS_ENABLED && DL_URL) addPlayer('mobile-grid', '⇩ Direct Download', DL_URL);
+  addPlayer('mobile-grid', 'Direct Download', DL_URL);
 
-  if (DOWNLOADS_ENABLED && DL_URL) addPlayer('tablet-grid', '1DM Download', idmIntent(DL_URL));
+  addPlayer('tablet-grid', '1DM Download', idmIntent(DL_URL));
   addPlayer('tablet-grid', 'HV Stream', hvStreamIntent(STREAM_URL));
   addPlayer('tablet-grid', 'PLAYit', androidIntent(STREAM_URL, 'com.playit.videoplayer', INTENT_MIME));
   addPlayer('tablet-grid', 'VLC', androidIntent(STREAM_URL, 'org.videolan.vlc', INTENT_MIME));
   addPlayer('tablet-grid', 'MX Player', androidIntent(STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME));
   addPlayer('tablet-grid', 'Just Player', androidIntent(STREAM_URL, 'com.brouken.player', INTENT_MIME));
 
-  if (DOWNLOADS_ENABLED && DL_URL) addPlayer('desktop-grid', '⇩ Direct Download', DL_URL);
-  addPlayer('desktop-grid', '↗ Open Stream URL', STREAM_URL);
+  addPlayer('desktop-grid', 'Direct Download', DL_URL);
+  addPlayer('desktop-grid', 'Open Stream URL', STREAM_URL);
 
   addPlayer('tv-grid', 'HV Stream', hvStreamIntent(STREAM_URL));
   addPlayer('tv-grid', 'VLC', androidIntent(STREAM_URL, 'org.videolan.vlc', INTENT_MIME));
   addPlayer('tv-grid', 'Kodi', androidIntent(STREAM_URL, 'org.xbmc.kodi', INTENT_MIME));
   addPlayer('tv-grid', 'Just Player', androidIntent(STREAM_URL, 'com.brouken.player', INTENT_MIME));
-  addPlayer('tv-grid', '↗ Open URL', STREAM_URL);
+  addPlayer('tv-grid', 'Open URL', STREAM_URL);
 }
 buildPlayerGrids();
 
@@ -560,10 +529,12 @@ async function loadTracks() {
     if (!r.ok) return;
     const d = await r.json();
     const tracks = d.audio_tracks || [];
+    if (tracks.length < 2) return;
+
     const box = document.getElementById('track-box');
     const sel = document.getElementById('audio-select');
-    if (!box || !sel || tracks.length < 2) return;
-    box.style.display = 'block';
+    if (!box || !sel) return;
+    box.style.display = 'flex';
     sel.innerHTML = '';
     tracks.forEach(t => {
       const o = document.createElement('option');
@@ -577,22 +548,14 @@ async function loadTracks() {
       if (idx !== currentAudioIndex) switchAudio(idx);
     };
     const statusEl = document.getElementById('track-status');
-    if (statusEl) statusEl.textContent = tracks.length + ' audio tracks detected · select to switch';
+    if (statusEl) statusEl.textContent = 'Select audio track (basic player / remux)';
   } catch (e) {
     console.debug('Track discovery unavailable', e);
   }
 }
 
 async function switchAudio(index) {
-  if (switchingAudio) return;
-  if (engine === 'wasm' && !browserMode) {
-    captureSwitchPosition();
-    try { moviPlayer.pause(); } catch (_) {}
-    browserMode = true;
-    initNative('audio-track-selection');
-  } else {
-    captureSwitchPosition();
-  }
+  if (switchingAudio || engine === 'wasm') return; // WASM has its own track UI
   switchingAudio = true;
   const statusEl = document.getElementById('track-status');
   const sel = document.getElementById('audio-select');
@@ -843,7 +806,6 @@ if (engine === 'wasm') {
 } else {
   initNative('bootstrap');
 }
-loadTracks();
 
 {% if player_settings.auto_player_redirect %}
 (function autoPlayerChooser(){
