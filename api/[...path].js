@@ -1946,7 +1946,8 @@ function renderWatchHtml(file, settings, streamBaseUrl) {
     ${!settings.streaming_enabled ? '.player-shell{display:none!important}' : ''}
     .player-shell{position:relative;border-radius:20px;padding:2px;overflow:hidden;background:#0a0a14;box-shadow:0 8px 40px rgba(0,0,0,.55),0 0 28px rgba(59,130,246,.18)}
     .player-box{background:#000;border-radius:18px;overflow:hidden;position:relative;z-index:1}
-    video{display:block;width:100%;max-height:72vh;background:#000;aspect-ratio:16/9}
+    #moviPlayer{display:block;width:100%;height:auto;min-height:220px;max-height:72vh;aspect-ratio:16/9;background:#000;--movi-primary:#3b82f6;--movi-primary-light:#60a5fa;--movi-accent:#22d3ee;--movi-brand-fill:linear-gradient(135deg,#3b82f6,#22d3ee);--movi-glass-bg:rgba(10,10,20,.88);--movi-chrome-bg:rgba(10,10,20,.88);--movi-bar-bg:rgba(10,10,20,.88);--movi-chrome-fg:#f5f5f5;--movi-surface:#12122a}
+    #player{display:none;width:100%;max-height:72vh;background:#000;aspect-ratio:16/9}
     .info{padding:18px 16px}
     .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;color:var(--muted);font-size:13px}
     .meta span{background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);padding:3px 10px;border-radius:20px;font-size:12px}
@@ -1965,10 +1966,8 @@ function renderWatchHtml(file, settings, streamBaseUrl) {
   <section>
     <div class="player-shell">
       <div class="player-box">
-        <video id="player" controls playsinline preload="auto" crossorigin="anonymous">
-          <source id="video-source" src="" type="video/mp4">
-          Your browser cannot play this media.
-        </video>
+        <movi-player id="moviPlayer" playsinline controls preload="auto" resume theme="dark" themecolor="#3b82f6" subtitleedge="outline" tabindex="0"></movi-player>
+        <video id="player" controls playsinline preload="auto" crossorigin="anonymous"></video>
       </div>
     </div>
     <div class="card info" style="margin-top:12px">
@@ -2001,10 +2000,23 @@ const DL_URL = STREAM_ORIGIN + '/dl/' + SHORT_CODE;
 const PLAYER_MIME = ${safeJsonForScript(file.mime_type || 'video/mp4')};
 const INTENT_MIME = (!PLAYER_MIME || PLAYER_MIME === 'application/octet-stream') ? 'video/*' : PLAYER_MIME;
 const player = document.getElementById('player');
-if (player) {
-  player.src = STREAM_URL;
-  player.load();
+const moviPlayer = document.getElementById('moviPlayer');
+function loadMoviPlayer() {
+  const urls = ['https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js','https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js'];
+  let index = 0;
+  const loadNext = () => {
+    if (customElements.get('movi-player')) { moviPlayer.src = STREAM_URL; return; }
+    if (index >= urls.length) {
+      moviPlayer.style.display = 'none'; player.style.display = 'block';
+      player.src = STREAM_URL; player.load(); return;
+    }
+    const script = document.createElement('script'); script.src = urls[index++]; script.async = true;
+    script.onload = () => customElements.get('movi-player') ? (moviPlayer.src = STREAM_URL) : loadNext();
+    script.onerror = loadNext; document.head.appendChild(script);
+  };
+  loadNext();
 }
+if (moviPlayer && player) loadMoviPlayer();
 function idmIntent(url) {
   const u = new URL(url);
   const scheme = u.protocol.replace(':','');

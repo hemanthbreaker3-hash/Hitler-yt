@@ -198,13 +198,10 @@
   } catch (e) { canWasm = false; }
 
   var engine;
-  if (forced === 'wasm' || forced === 'native') engine = forced;
-  else engine = canWasm ? 'wasm' : 'native';
-
-  try {
-    var pref = localStorage.getItem('hitler:engine');
-    if (!forced && (pref === 'wasm' || pref === 'native')) engine = pref;
-  } catch (_) {}
+  /* Movi is the built-in streaming player by default on every device.
+     Native mode remains available through the explicit fallback switch or ?engine=native. */
+  if (forced === 'native') engine = 'native';
+  else engine = 'wasm';
 
   window.__HITLERPlayer = {
     initial: engine,
@@ -402,7 +399,7 @@ function showLoading() { if (loadingScreen) loadingScreen.classList.add('active'
 function hideLoading() { if (loadingScreen) loadingScreen.classList.remove('active'); loadingDone = true; }
 function setEngine(e) {
   engine = e;
-  try { localStorage.setItem('ddstream:engine', e); } catch (_) {}
+  try { localStorage.setItem('hitler:engine', e); } catch (_) {}
 }
 function activeMedia() {
   return (engine === 'wasm' && !browserMode) ? moviPlayer : nativePlayer;
