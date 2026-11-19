@@ -2112,7 +2112,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   var isMkv = /\\.mkv(?:$|[?#])/i.test(window.location.pathname || '') ||
               /\\.mkv\\b/i.test(document.title || '');
    var engine = (forced === 'native') ? 'native' : 'wasm'; // Movi Player is the default built-in engine.
-  window.__HITLER YTPlayer = { initial: engine, engine: engine, forced: !!forced, cdn: CDN };
+  window.__HITLERYTPlayer = { initial: engine, engine: engine, forced: !!forced, cdn: CDN };
   function addLink(rel, href, attrs) {
     var l = document.createElement('link');
     l.rel = rel; l.href = href;
@@ -2309,7 +2309,7 @@ const FILE_NAME = ${safeJsonForScript(file.filename || '')};
 
 const FILE_URL = STREAM_URL;
 const REMUX_URL = PLAY_ORIGIN + '/remux/' + SHORT_CODE;
-const CFG = window.__HITLER YTPlayer || {};
+const CFG = window.__HITLERYTPlayer || {};
 const MODULE_URL = (CFG.cdn || 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/') + 'element.slim.js';
 const MOVI_GLOBAL = 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js';
 const MOVI_GLOBAL_FALLBACK = 'https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js';
@@ -2328,29 +2328,6 @@ function showToast(msg) {
   const m = document.getElementById('toast-message');
   if (m) m.textContent = msg || 'OK';
   if (t) { t.classList.add('active'); setTimeout(() => t.classList.remove('active'), 2200); }
-}
-
-function warmMedia(url) {
-  try {
-    fetch(url, { headers: { Range: 'bytes=0-65535' }, priority: 'low' })
-      .then(async (r) => {
-        const ctype = (r.headers.get('content-type') || '').toLowerCase();
-        if (!r.ok || ctype.includes('application/json') || ctype.includes('text/html')) {
-          let msg = 'Stream unavailable from VPS tunnel';
-          try {
-            const j = await r.clone().json();
-            if (j && j.message) msg = j.message;
-          } catch (_) {}
-          hideLoading();
-          showToast(msg);
-          const st = document.getElementById('copy-status');
-          if (st) st.textContent = msg + ' Use Download / external player, or fix ngrok bandwidth on the VPS.';
-          return;
-        }
-        return r.arrayBuffer();
-      })
-      .catch(() => {});
-  } catch (_) {}
 }
 
 function startMoviAutoplay() {
@@ -2381,21 +2358,53 @@ function startMoviAutoplay() {
   [250, 800, 1600, 3000, 5000].forEach(ms => setTimeout(attempt, ms));
 }
 
+let moviStallTimer = null;
+let moviStallRetries = 0;
+let moviLastProgressAt = Date.now();
+function clearMoviStallTimer() {
+  if (moviStallTimer) { clearTimeout(moviStallTimer); moviStallTimer = null; }
+}
+function scheduleMoviStallRecovery() {
+  clearMoviStallTimer();
+  moviStallTimer = setTimeout(() => {
+    moviStallTimer = null;
+    if (!moviPlayer || moviPlayer.paused) return;
+    if (Date.now() - moviLastProgressAt < 17000) { scheduleMoviStallRecovery(); return; }
+    if (moviStallRetries >= 2) {
+      showToast('Stream is still buffering. Check your connection and tap Play to retry.');
+      return;
+    }
+    moviStallRetries += 1;
+    const resumeAt = Number(moviPlayer.currentTime) || 0;
+    showLoading();
+    try {
+      moviPlayer.src = FILE_URL;
+      if (typeof moviPlayer.load === 'function') moviPlayer.load();
+      const restore = () => {
+        if (resumeAt > 1) { try { moviPlayer.currentTime = resumeAt; } catch (_) {} }
+        startMoviAutoplay();
+      };
+      moviPlayer.addEventListener('loadedmetadata', restore, { once: true });
+      setTimeout(() => { if (moviPlayer && moviPlayer.readyState >= 1) restore(); }, 1800);
+    } catch (err) { console.warn('[player] Movi buffering recovery failed', err); }
+  }, 18000);
+}
 function startWasm() {
-  if (!wasmWired && moviPlayer) {
-    wasmWired = true;
-    moviPlayer.addEventListener('playing', hideLoading);
-    moviPlayer.addEventListener('canplay', hideLoading);
-    moviPlayer.addEventListener('waiting', showLoading);
-    moviPlayer.addEventListener('stalled', showLoading);
-    moviPlayer.addEventListener('error', () => { hideLoading(); showToast('Movi Player could not load this stream. Please retry.'); });
-  }
   if (!moviPlayer) { hideLoading(); showToast('Movi Player element is missing'); return; }
+  if (!wasmWired) {
+    wasmWired = true;
+    const progress = () => { moviLastProgressAt = Date.now(); if (!moviPlayer.paused) scheduleMoviStallRecovery(); };
+    moviPlayer.addEventListener('playing', () => { moviStallRetries = 0; progress(); hideLoading(); });
+    ['progress','timeupdate','canplay','canplaythrough'].forEach(evt => moviPlayer.addEventListener(evt, () => { progress(); if (evt !== 'progress') hideLoading(); }));
+    ['waiting','stalled'].forEach(evt => moviPlayer.addEventListener(evt, () => { showLoading(); moviLastProgressAt = Date.now(); scheduleMoviStallRecovery(); }));
+    moviPlayer.addEventListener('pause', clearMoviStallTimer);
+    moviPlayer.addEventListener('error', () => { clearMoviStallTimer(); hideLoading(); showToast('Movi Player could not load this stream. Check the source or retry.'); });
+  }
   moviPlayer.style.display = 'block';
   if (!wasmLoaded) {
-    wasmLoaded = true;
     moviPlayer.src = FILE_URL;
     try { if (typeof moviPlayer.load === 'function') moviPlayer.load(); } catch (_) {}
+    wasmLoaded = true;
   }
   startMoviAutoplay();
 }

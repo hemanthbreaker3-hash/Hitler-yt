@@ -7,3 +7,11 @@
 - Kept the existing external-player choices, download actions, quality/source controls, branding, and player symbols unchanged.
 
 The supplied DDStream URL is a watch-page reference, not a direct media URL. Its `path` identifies a different file, so it is not substituted for this site's per-file stream URL.
+
+## HITLER YT Movi-only buffering recovery
+
+- Fixed the branding-derived JavaScript global name so both Flask and Vercel watch pages parse and initialize correctly.
+- Kept Movi Player as the only built-in playback engine; no native video, Plyr, or alternate embedded player was added.
+- Added stalled/waiting detection and up to two same-source recovery attempts while preserving the current playback position.
+- Added progress-aware loading-state handling and stopped the Vercel watch page from issuing an unused warm-up Range request before playback.
+- Kept the existing source switcher, external player shortcuts, download controls, episode navigation, season/episode list, and player symbols.
