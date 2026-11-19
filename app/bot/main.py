@@ -3270,8 +3270,10 @@ def register_handlers(bot):
                     "📌 <b>Usage</b>\n\n"
                     "<code>/batch https://t.me/username/14816-https://t.me/username/14851</code>\n\n"
                     "Or compact:\n"
-                    "<code>/batch https://t.me/c/1234567890/2081-2083</code>\n\n"
+                    "<code>/batch https://t.me/c/1234567890/2081-2083 The Ramparts of Ice</code>\n\n"
+                    "• Add an optional filename filter after the range (case-insensitive)\n"
                     "• Works with public (@username) and private (c/ID) links\n"
+                    "• No hard-coded range cap; large ranges are fetched in chunks\n"
                     "• Bot only needs to be a member/admin of the source channel\n"
                     "• <b>No storage channel (CHANNEL_ID) required</b> for generating links\n"
                     "• Query params like <code>?single</code> are fine",
@@ -3280,8 +3282,6 @@ def register_handlers(bot):
 
             if end_id < start_id:
                 start_id, end_id = end_id, start_id
-            if end_id - start_id > 200:
-                return await status.edit_text("❌ Range too large (max 200 messages).")
 
             # --- resolve peer so get_messages is reliable for public channels ------
             try:
@@ -3297,10 +3297,21 @@ def register_handlers(bot):
                     parse_mode=ParseMode.HTML,
                 )
 
+            # Everything after the message range is an optional filename/title filter.
+            # Remove command syntax and Telegram URLs while preserving the user's words.
+            filter_text = re.sub(r"^\s*/batch\b", "", text, flags=re.I)
+            filter_text = re.sub(r"https?://t\.me/(?:c/\d+|[A-Za-z0-9_]+)/\d+(?:\?[^\s]*)?", " ", filter_text, flags=re.I)
+            # Also strip the compact second endpoint in /batch <link>-<message_id>.
+            filter_text = re.sub(r"(?<!\w)[-–]\s*\d+\b", " ", filter_text, count=1)
+            filter_text = re.sub(r"\b\d+\s*[-–]\s*\d+\b", " ", filter_text, count=1)
+            filter_text = re.sub(r"\s+", " ", filter_text).strip(" \t\r\n-–|:")
+            filter_key = filter_text.casefold()
+
             await status.edit_text(
                 f"🔄 Batch processing <b>{html.escape(str(chat_title))}</b>\n"
                 f"Messages <code>{start_id}</code>–<code>{end_id}</code>…\n"
-                f"<i>Storage channel not required for link generation.</i>",
+                + (f"Filename filter: <b>{html.escape(filter_text)}</b>\n" if filter_text else "")
+                + "<i>Storage channel not required for link generation.</i>",
                 parse_mode=ParseMode.HTML,
             )
 
@@ -3330,19 +3341,42 @@ def register_handlers(bot):
             idx = 0
             total = end_id - start_id + 1
 
-            for i, msg_id in enumerate(range(start_id, end_id + 1)):
-                if i > 0 and i % 20 == 0:
+            async def iter_range_messages():
+                """Fetch message IDs in bounded chunks for speed without loading huge ranges at once."""
+                position = 0
+                for chunk_start in range(start_id, end_id + 1, 100):
+                    chunk_ids = list(range(chunk_start, min(chunk_start + 100, end_id + 1)))
+                    try:
+                        fetched = await client.get_messages(resolved_chat_id, chunk_ids)
+                        if not isinstance(fetched, list):
+                            fetched = [fetched]
+                        by_id = {getattr(item, "id", None): item for item in fetched if item is not None}
+                        for msg_id in chunk_ids:
+                            yield position, msg_id, by_id.get(msg_id)
+                            position += 1
+                    except Exception as batch_error:
+                        logger.warning("batch chunk %s-%s failed, falling back to individual fetches: %s", chunk_ids[0], chunk_ids[-1], batch_error)
+                        for msg_id in chunk_ids:
+                            try:
+                                item = await client.get_messages(resolved_chat_id, msg_id)
+                                if isinstance(item, list):
+                                    item = item[0] if item else None
+                            except Exception as item_error:
+                                logger.warning("batch msg %s fetch failed: %s", msg_id, item_error)
+                                item = None
+                            yield position, msg_id, item
+                            position += 1
+
+            async for i, msg_id, source_msg in iter_range_messages():
+                if i > 0 and i % 100 == 0:
                     try:
                         await status.edit_text(
-                            f"🔄 Batch processing… {i}/{total} (found {idx} media)",
+                            f"🔄 Batch processing… {i}/{total} (found {idx} matching media)",
                             parse_mode=ParseMode.HTML,
                         )
                     except Exception:
                         pass
                 try:
-                    source_msg = await client.get_messages(resolved_chat_id, msg_id)
-                    if isinstance(source_msg, list):
-                        source_msg = source_msg[0] if source_msg else None
                     if not source_msg or getattr(source_msg, "empty", False) or not _is_media_message(source_msg):
                         continue
 
@@ -3380,6 +3414,12 @@ def register_handlers(bot):
 
                     caption = getattr(source_msg, "caption", None) or getattr(source_msg, "text", None) or ""
                     file_name = extract_filename_from_caption(caption, file_name)
+
+                    # Match against both the caption text and the extracted filename.
+                    # This handles captions that contain a title even without an extension.
+                    searchable_name = f"{file_name}\n{caption}".casefold()
+                    if filter_key and filter_key not in searchable_name:
+                        continue
 
                     file_id = getattr(media, "file_id", None)
                     if not file_id:
@@ -3436,12 +3476,14 @@ def register_handlers(bot):
             if not results:
                 err_block = ("\n\n" + "\n".join(errors)) if errors else ""
                 return await status.edit_text(
-                    f"❌ No media found in messages <code>{start_id}</code>–<code>{end_id}</code> "
+                    f"❌ No matching media found in messages <code>{start_id}</code>–<code>{end_id}</code> "
                     f"of <b>{html.escape(str(chat_title))}</b>."
-                    f"{err_block}\n\n"
+                    + (f"\nFilename filter: <b>{html.escape(filter_text)}</b>" if filter_text else "")
+                    + f"{err_block}\n\n"
                     "Checklist:\n"
                     "• Bot is a member/admin of the channel\n"
                     "• Message IDs are correct and contain media\n"
+                    "• Filename filter matches the file caption/name\n"
                     "• No storage channel is required for this command",
                     parse_mode=ParseMode.HTML,
                 )

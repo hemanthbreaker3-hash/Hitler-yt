@@ -2266,7 +2266,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     </div>
   </section>
   <aside class="side">
-    <div class="card side-eps" id="sideEpsCard">
+    <div class="card side-eps" id="sideEpsCard"${watchGroups.length > 1 ? '' : ' style="display:none"'}>
       <b>Episodes / Seasons</b>
       <div class="side-season-bar" id="sideSeasonBar" aria-label="Seasons"></div>
       <div class="side-ep-tools">
@@ -2574,7 +2574,7 @@ document.addEventListener('click', () => {
   const search = document.getElementById('episodeSearch');
   const count = document.getElementById('episodeCount');
   const seasonBar = document.getElementById('sideSeasonBar');
-  if (!list || !WATCH_GROUPS.length) {
+  if (!list || WATCH_GROUPS.length <= 1) {
     const card = document.getElementById('sideEpsCard');
     if (card) card.style.display = 'none';
     return;

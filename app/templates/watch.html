@@ -451,7 +451,7 @@
   </section>
 
   <aside class="side">
-    {% if _wg and _wg|length > 0 %}
+    {% if _wg and _wg|length > 1 %}
     <div class="card side-eps" id="sideEpsCard">
       <b>Episodes / Seasons</b>
       <div class="side-season-bar" id="sideSeasonBar" aria-label="Seasons"></div>
@@ -783,7 +783,7 @@ document.addEventListener('click', () => {
   const count = document.getElementById('episodeCount');
   const seasonBar = document.getElementById('sideSeasonBar');
   const card = document.getElementById('sideEpsCard');
-  if (!list || !Array.isArray(WATCH_GROUPS) || !WATCH_GROUPS.length) {
+  if (!list || !Array.isArray(WATCH_GROUPS) || WATCH_GROUPS.length <= 1) {
     if (card) card.style.display = 'none';
     return;
   }
