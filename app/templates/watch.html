@@ -291,7 +291,7 @@
   window.__HITLERYTPlayer = {
     initial: engine,
     engine: engine,
-    forced: !!forced,
+    forced: true,
     canWasm: canWasm,
     hasWebCodecs: hasWebCodecs,
     secure: secure,
@@ -896,78 +896,168 @@ document.addEventListener('click', () => {
   render();
 })();
 
-/* ===== Movi-only playback ===== */
-function primaryPlayUrl() { return STREAM_URL; }
-
-/* ===== Movi Player only: no native/Plyr/basic-player fallback ===== */
+/* ===== Movi-only playback with verified stall recovery ===== */
 let stallRetries = 0;
 let lastMediaProgressAt = Date.now();
+let recoveryInFlight = false;
+let recoveryCooldownUntil = 0;
+let stablePlaybackSince = 0;
+let recoveryWatchTimer = null;
+const MAX_STALL_RECOVERIES = 2;
+const STALL_TIMEOUT_MS = 20000;
+const RECOVERY_COOLDOWN_MS = 30000;
+
 function clearStallWatch() {
   if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
 }
+function clearRecoveryWatch() {
+  if (recoveryWatchTimer) { clearInterval(recoveryWatchTimer); recoveryWatchTimer = null; }
+}
+function playbackTime() {
+  const value = Number(moviPlayer && moviPlayer.currentTime);
+  return Number.isFinite(value) ? value : 0;
+}
+function verifyRecovery(startAt, wasPlaying) {
+  clearRecoveryWatch();
+  let lastTime = playbackTime();
+  let advancedBy = 0;
+  let sawPlaying = false;
+  const startedAt = Date.now();
+  recoveryWatchTimer = setInterval(() => {
+    if (!moviPlayer) { clearRecoveryWatch(); return; }
+    const nowTime = playbackTime();
+    if (nowTime > lastTime + 0.15) {
+      advancedBy += nowTime - lastTime;
+      lastTime = nowTime;
+      lastMediaProgressAt = Date.now();
+    }
+    if (!moviPlayer.paused && !moviPlayer.ended) sawPlaying = true;
+    // Only count recovery after playback is genuinely moving, not on canplay/playing alone.
+    if (sawPlaying && advancedBy >= 1.25) {
+      clearRecoveryWatch();
+      recoveryInFlight = false;
+      recoveryCooldownUntil = Date.now() + RECOVERY_COOLDOWN_MS;
+      stablePlaybackSince = Date.now();
+      hideLoading();
+      showToast('Playback resumed.');
+      scheduleStallRecovery();
+      return;
+    }
+    if (Date.now() - startedAt >= 12000) {
+      clearRecoveryWatch();
+      recoveryInFlight = false;
+      showLoading();
+      showToast('Playback did not recover. Tap Play to retry or choose another source.');
+      // Do not reload again immediately; require a fresh user action or cooldown.
+      recoveryCooldownUntil = Date.now() + RECOVERY_COOLDOWN_MS;
+      if (wasPlaying && moviPlayer.paused) {
+        try { moviPlayer.pause(); } catch (_) {}
+      }
+    }
+  }, 500);
+}
 function recoverMoviAfterStall() {
-  if (!moviPlayer || stallRetries >= 2) {
-    showToast('Stream is still buffering. Check your connection and tap Play to retry.');
+  if (!moviPlayer || recoveryInFlight || Date.now() < recoveryCooldownUntil) return;
+  if (stallRetries >= MAX_STALL_RECOVERIES) {
+    clearStallWatch();
+    showLoading();
+    showToast('Stream is still stuck after recovery attempts. Tap Play or select another source.');
     return;
   }
+  recoveryInFlight = true;
   stallRetries += 1;
-  const resumeAt = Number(moviPlayer.currentTime) || 0;
-  const wasPlaying = !moviPlayer.paused;
+  const resumeAt = playbackTime();
+  const wasPlaying = !moviPlayer.paused || hasPlayedOnce;
+  lastMediaProgressAt = Date.now();
   showLoading();
   try {
-    // Re-request the same source through Movi Player; preserve playback position.
+    // One bounded re-request, then verify real time advancement before declaring success.
     moviPlayer.src = STREAM_URL;
     if (typeof moviPlayer.load === 'function') moviPlayer.load();
+    let restored = false;
     const restore = () => {
-      if (resumeAt > 1) { try { moviPlayer.currentTime = resumeAt; } catch (_) {} }
-      if (wasPlaying || hasPlayedOnce) {
-        const playResult = moviPlayer.play && moviPlayer.play();
-        if (playResult && playResult.catch) playResult.catch(() => {});
+      if (restored || !moviPlayer) return;
+      restored = true;
+      if (resumeAt > 1) {
+        try { moviPlayer.currentTime = resumeAt; } catch (_) {}
       }
+      if (wasPlaying) {
+        try {
+          const result = moviPlayer.play && moviPlayer.play();
+          if (result && result.catch) result.catch(() => {});
+        } catch (_) {}
+      }
+      verifyRecovery(resumeAt, wasPlaying);
     };
     moviPlayer.addEventListener('loadedmetadata', restore, { once: true });
     setTimeout(() => {
-      if (moviPlayer && moviPlayer.readyState >= 1) restore();
-    }, 1800);
+      if (!restored && moviPlayer && moviPlayer.readyState >= 1) restore();
+    }, 5000);
+    // If metadata never arrives, end this attempt instead of reloading indefinitely.
+    setTimeout(() => {
+      if (!restored && recoveryInFlight) {
+        recoveryInFlight = false;
+        recoveryCooldownUntil = Date.now() + RECOVERY_COOLDOWN_MS;
+        showLoading();
+        showToast('Stream did not reconnect. Tap Play to retry.');
+      }
+    }, 12000);
   } catch (err) {
+    recoveryInFlight = false;
+    recoveryCooldownUntil = Date.now() + RECOVERY_COOLDOWN_MS;
     console.warn('[player] Movi buffering recovery failed', err);
+    showToast('Could not reconnect this stream. Try another source.');
   }
 }
 function scheduleStallRecovery() {
   clearStallWatch();
+  if (!moviPlayer || moviPlayer.paused || moviPlayer.ended || recoveryInFlight) return;
   stallTimer = setTimeout(() => {
     stallTimer = null;
-    if (moviPlayer && !moviPlayer.paused && Date.now() - lastMediaProgressAt >= 17000) {
-      recoverMoviAfterStall();
-    } else if (moviPlayer && !moviPlayer.paused) {
-      scheduleStallRecovery();
-    }
-  }, 18000);
+    if (!moviPlayer || moviPlayer.paused || moviPlayer.ended) return;
+    if (Date.now() - lastMediaProgressAt >= STALL_TIMEOUT_MS) recoverMoviAfterStall();
+    else scheduleStallRecovery();
+  }, STALL_TIMEOUT_MS);
 }
 function wireStallWatch() {
-  const markProgress = () => {
+  const markRealProgress = () => {
     lastMediaProgressAt = Date.now();
-    if (moviPlayer && !moviPlayer.paused) clearStallWatch();
-    if (moviPlayer && !moviPlayer.paused) scheduleStallRecovery();
+    if (moviPlayer && !moviPlayer.paused && !recoveryInFlight) scheduleStallRecovery();
+    if (stablePlaybackSince && Date.now() - stablePlaybackSince >= 20000) {
+      // Retry budget resets only after a sustained period of verified playback.
+      stallRetries = 0;
+      stablePlaybackSince = Date.now();
+    }
   };
   moviPlayer.addEventListener('playing', () => {
-    hasPlayedOnce = true; stallRetries = 0; markProgress(); hideLoading();
+    hasPlayedOnce = true;
+    if (!recoveryInFlight) { hideLoading(); stablePlaybackSince = Date.now(); }
+    markRealProgress();
   });
-  ['progress','timeupdate','canplay','canplaythrough'].forEach(evt => {
-    moviPlayer.addEventListener(evt, () => { markProgress(); if (evt !== 'progress') hideLoading(); });
-  });
+  // Only timeupdate proves media time is advancing. Network progress/canplay do not.
+  moviPlayer.addEventListener('timeupdate', markRealProgress);
   moviPlayer.addEventListener('waiting', () => {
-    showLoading(); lastMediaProgressAt = Date.now(); scheduleStallRecovery();
+    showLoading();
+    if (!recoveryInFlight) {
+      lastMediaProgressAt = Date.now();
+      scheduleStallRecovery();
+    }
   });
   moviPlayer.addEventListener('stalled', () => {
-    showLoading(); lastMediaProgressAt = Date.now(); scheduleStallRecovery();
+    showLoading();
+    if (!recoveryInFlight) scheduleStallRecovery();
   });
   moviPlayer.addEventListener('error', () => {
-    clearStallWatch(); hideLoading();
-    showToast('Movi Player could not load this stream. Check the source or retry playback.');
+    clearStallWatch();
+    clearRecoveryWatch();
+    recoveryInFlight = false;
+    showLoading();
+    showToast('Movi Player could not load this stream. Check the source or choose another.');
   });
   moviPlayer.addEventListener('pause', clearStallWatch);
+  moviPlayer.addEventListener('ended', clearStallWatch);
 }
+
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     const s = document.createElement('script'); s.src = src; s.async = true;
