@@ -5,11 +5,11 @@
   {% if not player_settings.built_in_player_enabled %}.player-shell,.card.info{display:none!important}{% endif %}{% if not player_settings.streaming_enabled %}.player-shell{display:none!important}{% endif %}
 
   :root {
-    --blue: #3b82f6;
-    --blue-glow: #60a5fa;
+    --blue: #8b5cf6;
+    --blue-glow: #22d3ee;
     --line2: #2a2a3a;
-    --neon-blue: 0 0 12px rgba(59,130,246,.45);
-    --red-glow: #f87171;
+    --neon-blue: 0 0 12px rgba(255,106,0,.45);
+    --red-glow: #22d3ee;
   }
 
   /* ===== Player shell (keeps project neon look) ===== */
@@ -19,12 +19,12 @@
     padding:2px;
     overflow:hidden;
     background:#0a0a14;
-    box-shadow:0 8px 40px rgba(0,0,0,.55),0 0 28px rgba(59,130,246,.18),0 0 48px rgba(59,130,246,.1);
+    box-shadow:0 18px 48px rgba(0,0,0,.58),0 0 24px rgba(139,92,246,.16);
   }
   .player-shell .neon-ribbon{
     position:absolute;inset:-40%;
-    background:conic-gradient(from 0deg,#3b82f6,#22d3ee,#3b82f6,#60a5fa,#a855f7,#3b82f6);
-    animation:ribbon-rotate 8s linear infinite;z-index:0;pointer-events:none;
+    background:conic-gradient(from 0deg,#8b5cf6,#22d3ee,#8b5cf6,#22d3ee,#8b4acb,#8b5cf6);
+    animation:ribbon-rotate 14s linear infinite;z-index:0;pointer-events:none;
   }
   @keyframes ribbon-rotate{to{transform:rotate(360deg)}}
   .player-box{
@@ -33,7 +33,7 @@
   }
   .player-box::after{
     content:"";position:absolute;inset:0;border-radius:18px;
-    background:linear-gradient(145deg,rgba(255,255,255,.1),transparent 35%,transparent 65%,rgba(59,130,246,.05));
+    background:linear-gradient(145deg,rgba(255,255,255,.1),transparent 35%,transparent 65%,rgba(255,106,0,.05));
     box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 -1px 0 rgba(0,0,0,.25);
     pointer-events:none;z-index:3;
   }
@@ -49,16 +49,15 @@
     background:#000;
     contain:paint;
   }
-  .player-wrapper video,
   .player-wrapper movi-player{
     width:100%;height:100%;background:#000;object-fit:contain;display:block;
   }
   movi-player{
     /* Theme to project blue neon */
-    --movi-primary:#3b82f6;
-    --movi-primary-light:#60a5fa;
+    --movi-primary:#8b5cf6;
+    --movi-primary-light:#22d3ee;
     --movi-accent:#22d3ee;
-    --movi-brand-fill:linear-gradient(135deg,#3b82f6,#22d3ee);
+    --movi-brand-fill:linear-gradient(135deg,#8b5cf6,#22d3ee);
     --movi-glass-bg:rgba(10,10,20,.88);
     --movi-chrome-bg:rgba(10,10,20,.88);
     --movi-bar-bg:rgba(10,10,20,.88);
@@ -71,29 +70,119 @@
     position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     background:#000;opacity:0;pointer-events:none;transition:opacity .25s ease;z-index:2;
   }
-  .player-loading.active{opacity:1}
+  .player-loading.active{opacity:1;background:rgba(0,0,0,.24);backdrop-filter:blur(2px)}
   .player-loading .spinner{
     width:42px;height:42px;border-radius:50%;
-    border:3px solid rgba(255,255,255,.18);border-top-color:#3b82f6;
+    border:3px solid rgba(255,255,255,.18);border-top-color:#8b5cf6;
     animation:dd-spin .8s linear infinite;
   }
   @keyframes dd-spin{to{transform:rotate(360deg)}}
 
-  .native-switch{
-    display:block;position:absolute;top:12px;right:14px;z-index:8;
-    font-size:11px;font-weight:500;color:#9ca3af;
-    background:rgba(6,6,10,.78);border:1px solid rgba(255,255,255,.12);
-    border-radius:20px;padding:5px 12px;cursor:pointer;white-space:nowrap;
-    transition:color .2s,background .2s;
+
+  /* ===== Built-in player chrome overlays ===== */
+  .player-chrome-btn{
+    position:absolute;z-index:9;width:40px;height:40px;border-radius:12px;
+    border:1px solid rgba(255,255,255,.14);background:rgba(6,6,12,.82);
+    color:#fff;display:flex;align-items:center;justify-content:center;
+    cursor:pointer;backdrop-filter:blur(8px);transition:background .2s,border-color .2s,transform .15s;
+    padding:0;line-height:0;
   }
-  .native-switch:hover{color:#fff;background:rgba(6,6,10,.95)}
-  .native-switch[hidden]{display:none}
+  .player-chrome-btn:hover{background:rgba(255,106,0,.25);border-color:rgba(255,106,0,.55);transform:scale(1.05)}
+  .player-chrome-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .pc-switch{top:12px;left:12px}
+  .pc-laptop{top:12px;right:56px}
+  .pc-download{top:12px;right:12px}
+  .player-pop{
+    position:absolute;z-index:12;min-width:160px;max-width:min(280px,86vw);
+    background:rgba(10,10,20,.96);border:1px solid rgba(139,92,246,.35);
+    border-radius:14px;padding:8px;box-shadow:0 12px 32px rgba(0,0,0,.55);
+    display:none;flex-direction:column;gap:4px;backdrop-filter:blur(12px);
+  }
+  .player-pop.open{display:flex}
+  .player-pop.switch-pop{top:56px;left:12px}
+  .player-pop.laptop-pop{top:56px;right:12px}
+  .player-pop button,.player-pop a{
+    display:block;width:100%;text-align:left;border:0;background:transparent;
+    color:#f5f5f5;padding:10px 12px;border-radius:10px;font:600 13px var(--font,system-ui);
+    cursor:pointer;text-decoration:none;
+  }
+  .player-pop button:hover,.player-pop a:hover{background:rgba(139,92,246,.18)}
+  .player-pop .pop-title{font-size:11px;color:#9ca3af;padding:4px 12px 6px;text-transform:uppercase;letter-spacing:.06em}
+
+  .nav-row{
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;
+  }
+  .nav-row .nav-btn{
+    background:linear-gradient(180deg,#172033,#101621);border:1px solid var(--line2);
+    color:#fff;border-radius:12px;padding:10px 16px;font:700 13px var(--font,system-ui);
+    cursor:pointer;transition:border-color .2s,box-shadow .2s;
+  }
+  .nav-row .nav-btn:hover:not(:disabled){border-color:var(--blue);box-shadow:var(--neon-blue)}
+  .nav-row .nav-btn:disabled{opacity:.4;cursor:not-allowed}
+  .nav-row .nav-spacer{flex:1}
+  .nav-row .tg-btn{
+    background:linear-gradient(135deg,#0ea5e9,#2563eb);border:0;color:#fff;
+    border-radius:12px;padding:10px 16px;font:700 13px var(--font,system-ui);
+    text-decoration:none;display:inline-flex;align-items:center;gap:6px;
+  }
+  .nav-row .tg-btn:hover{filter:brightness(1.08)}
+
+  .related-groups{margin-top:18px}
+  .related-groups h3{font-size:15px;margin:0 0 12px;color:#fff}
+  .related-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+  .related-card{
+    display:block;text-decoration:none;color:inherit;border-radius:14px;overflow:hidden;
+    border:1px solid var(--line2);background:#111722;transition:border-color .2s,transform .15s;
+  }
+  .related-card:hover{border-color:var(--blue);transform:translateY(-2px)}
+  .related-card .thumb{
+    aspect-ratio:16/9;background:#000 center/cover no-repeat;position:relative;
+  }
+  .related-card .thumb::after{
+    content:"▶";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:rgba(0,0,0,.35);font-size:22px;opacity:.9;
+  }
+  .related-card .meta-line{padding:9px 10px;font-size:13px;font-weight:700;line-height:1.3;display:flex;flex-direction:column;gap:3px}.quality-count{color:#22d3ee;font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}.season-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 14px}.season-tabs button{border:1px solid rgba(148,163,184,.18);background:#111722;color:#9ca3af;border-radius:999px;padding:7px 13px;font-size:12px;font-weight:800;cursor:pointer}.season-tabs button.active{background:rgba(139,92,246,.14);border-color:rgba(139,92,246,.4);color:#c4b5fd}
+  .side-eps{max-height:min(70vh,560px);display:flex;flex-direction:column;gap:10px}
+  .side-season-bar{display:flex;flex-wrap:wrap;gap:6px}
+  .side-season-bar button{border:1px solid rgba(148,163,184,.2);background:#111722;color:#9ca3af;border-radius:999px;padding:6px 11px;font-size:11px;font-weight:800;cursor:pointer}
+  .side-season-bar button.active{background:linear-gradient(120deg,#e8d5a8,#c79a4d);border-color:transparent;color:#17130b}
+  .side-ep-tools{display:flex;flex-direction:column;gap:8px}
+  .side-ep-tools select,.side-ep-tools input{min-height:38px;border:1px solid var(--line2,#2a2a3a);border-radius:10px;background:#0d0d16;color:#fff;padding:8px 10px;outline:none;width:100%}
+  .side-ep-list{display:flex;flex-direction:column;gap:6px;overflow:auto;max-height:min(48vh,380px);padding-right:2px}
+  .side-ep-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-radius:10px;border:1px solid rgba(148,163,184,.16);background:#101621;color:#e5e7eb;text-decoration:none;font-size:12px;font-weight:700}
+  .side-ep-btn:hover{border-color:rgba(139,92,246,.4);background:#151c2a}
+  .side-ep-btn.active{border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.08);color:#fff}
+  .side-ep-btn .ep-tag{flex:0 0 auto;background:rgba(139,92,246,.18);color:#c4b5fd;border-radius:7px;padding:3px 7px;font-size:10px;font-weight:900;letter-spacing:.04em}
+  .side-ep-btn .ep-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .side-ep-count{font-size:11px;color:#9ca3af}
+
+  .player-brand-float{left:12px!important;top:12px!important;max-width:70%;font-family:var(--font-display);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#f0e8ff;background:rgba(5,6,10,.58);border-color:rgba(228,189,130,.28);text-shadow:none}
+  .player-shell{background:#101116;box-shadow:0 20px 60px rgba(0,0,0,.48),0 0 0 1px rgba(255,255,255,.06)}
+  .player-shell .neon-ribbon{background:conic-gradient(from 0deg,#b7a0ff,#e4bd82,#b7a0ff);opacity:.72}
+  .player-chrome-btn{background:rgba(7,8,12,.78);border-color:rgba(255,255,255,.18)}
+  .related-card.active{border-color:#8b5cf6;box-shadow:0 0 0 1px rgba(139,92,246,.35)}
+  .related-pager{display:flex;align-items:center;gap:8px;margin-top:12px;justify-content:center}
+  .related-pager[hidden]{display:none!important}
+  .related-pager button{
+    background:var(--bg-card,#12122a);border:1px solid var(--line2);color:#fff;
+    border-radius:8px;padding:8px 12px;font:600 13px var(--font,system-ui);cursor:pointer;
+  }
+  .related-pager button:disabled{opacity:.4;cursor:not-allowed}
+  .related-pager span{color:var(--muted,#9ca3af);font-size:13px}
+  .related-pager button.active{background:linear-gradient(125deg,#8b5cf6,#22d3ee);border-color:transparent;color:#071018;font-weight:900}
+  .episode-tools{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}
+  .episode-tools input,.episode-tools select{min-height:40px;border:1px solid var(--line2);border-radius:10px;background:#0d0d16;color:#fff;padding:8px 12px;outline:none}
+  .episode-tools input{flex:1;min-width:160px}
+  .episode-tools input:focus,.episode-tools select:focus{border-color:#ff8a33;box-shadow:0 0 0 3px rgba(255,106,0,.12)}
+  .episode-count{font-size:12px;color:var(--muted);align-self:center}
+  .related-card .meta-line{display:flex;justify-content:space-between;gap:8px}
 
   /* ===== Rest of page (project style) ===== */
   .info{padding:18px 16px}
   .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;color:var(--muted);font-size:13px}
   .meta span{
-    background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);
+    background:rgba(255,106,0,.08);border:1px solid rgba(255,106,0,.2);
     padding:3px 10px;border-radius:20px;font-size:12px;
   }
   .tools{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
@@ -104,11 +193,11 @@
     transition:border-color .2s,box-shadow .2s;
   }
   .select:focus{border-color:var(--blue);box-shadow:var(--neon-blue)}
-  .player-panel{display:none}.player-panel.active{display:block}
+  .player-panel{display:none}.player-panel.active{display:block}\n  .player-brand-float{position:absolute;z-index:12;top:12px;left:12px;max-width:65%;padding:6px 11px;border-radius:9px;background:rgba(3,10,24,.55);border:1px solid rgba(96,165,250,.32);color:#60a5fa;font-weight:900;font-size:clamp(11px,2.5vw,16px);letter-spacing:.04em;text-shadow:0 0 14px rgba(59,130,246,.65);pointer-events:none;opacity:.9;transition:top .5s,left .5s,opacity .5s;backdrop-filter:blur(8px)}
   .player-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px}
   .pbtn{
     min-height:46px;border:1px solid var(--line);border-radius:12px;
-    background:linear-gradient(180deg,#14142c,#0e0e20);color:#fff;
+    background:linear-gradient(180deg,#172033,#101621);color:#fff;
     display:flex;align-items:center;justify-content:center;text-align:center;
     padding:10px;cursor:pointer;transition:border-color .2s,box-shadow .2s,transform .15s;font-size:13px;
   }
@@ -128,7 +217,7 @@
     transition:background .2s,color .2s,box-shadow .2s;
   }
   .tab.active{
-    background:linear-gradient(135deg,rgba(59,130,246,.25),rgba(59,130,246,.2));
+    background:linear-gradient(135deg,rgba(59,130,246,.25),rgba(255,106,0,.2));
     color:#fff;box-shadow:inset 0 0 0 1px rgba(59,130,246,.35);
   }
   .volume-tools{
@@ -139,7 +228,7 @@
   .volume-tools input[type=range]{flex:1;min-width:120px;accent-color:var(--blue);height:6px}
   .notice{
     padding:11px 13px;border-radius:11px;background:rgba(59,130,246,.06);
-    border:1px solid rgba(59,130,246,.18);color:var(--muted);font-size:12px;margin-top:12px;
+    border:1px solid rgba(139,92,246,.18);color:var(--muted);font-size:12px;margin-top:12px;
   }
   .track-status{font-size:12px;color:var(--muted);margin-left:8px}
   .track-status.error{color:var(--red-glow)}
@@ -159,10 +248,25 @@
   }
   .toast.active{opacity:1;transform:translateX(-50%) translateY(0)}
   .btn.accent{
-    background:linear-gradient(135deg,#3b82f6,#2563eb);
-    border-color:#3b82f6;color:#fff;
+    background:linear-gradient(135deg,#8b5cf6,#2563eb);
+    border-color:#8b5cf6;color:#fff;
   }
   .btn.accent:hover{filter:brightness(1.08);box-shadow:0 0 14px rgba(59,130,246,.4)}
+
+  :root{--blue:#b7a0ff;--blue-glow:#e4bd82;--line2:rgba(255,255,255,.1);--neon-blue:0 0 16px rgba(183,160,255,.12);--red-glow:#e4bd82}
+  .player-shell{background:linear-gradient(135deg,#b7a0ff,#e4bd82,#b7a0ff);box-shadow:0 18px 46px rgba(0,0,0,.42)}
+  .player-box{background:#050609!important;border-radius:18px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+  .player-box::after{background:linear-gradient(145deg,rgba(255,255,255,.08),transparent 40%,rgba(228,189,130,.025));box-shadow:inset 0 1px 0 rgba(255,255,255,.1)}
+  .card.info,.nav-row,.player-pop,.switch-pop,.laptop-pop{background:rgba(15,16,22,.92)!important;color:#f5f5f7!important;border:1px solid rgba(255,255,255,.1)!important;backdrop-filter:blur(18px);box-shadow:0 14px 36px rgba(0,0,0,.35)}
+  .filename{color:#f5f5f7!important}.meta span{background:rgba(255,255,255,.055)!important;color:#c4c4cf!important;border-color:rgba(255,255,255,.1)!important}
+  .nav-btn,.btn,.select,.player-chrome-btn,.native-switch{background:rgba(18,19,26,.9)!important;color:#f5f5f7!important;border-color:rgba(255,255,255,.14)!important}
+  .tg-btn{background:linear-gradient(135deg,#8e7acb,#b99b68)!important;color:#111!important}
+  .player-loading{background:rgba(0,0,0,.28)!important;color:#e4bd82!important}
+  .spinner{border-color:rgba(255,255,255,.16)!important;border-top-color:#e4bd82!important}
+  .player-pop .pop-title{color:#e4bd82!important}
+  .player-brand-float{left:12px!important;top:12px!important;max-width:70%;font-family:var(--font-display);font-size:10px;letter-spacing:.17em;text-transform:uppercase;color:#f0e8ff;background:rgba(5,6,10,.58);border-color:rgba(228,189,130,.28);text-shadow:none}
+  .player-shell .neon-ribbon{background:conic-gradient(from 0deg,#b7a0ff,#e4bd82,#b7a0ff);opacity:.72}
+
 </style>
 
 <!-- Official movi-player (https://github.com/mrujjwalg/movi-player · https://moviplayer.com) -->
@@ -175,8 +279,6 @@
      We use the global build so we can load it dynamically without type=module. */
   var CDN = 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/';
   var OFFICIAL = 'https://cdn.jsdelivr.net/npm/movi-player/dist/';
-  var params = new URLSearchParams(window.location.search);
-  var forced = params.get('engine');
   var canWasm = false, hasWebCodecs = false, secure = false;
   try {
     secure = !!window.isSecureContext;
@@ -184,16 +286,9 @@
     canWasm = !!document.createElement('canvas').getContext('webgl2');
   } catch (e) { canWasm = false; }
 
-  var engine;
-  if (forced === 'wasm' || forced === 'native') engine = forced;
-  else engine = canWasm ? 'wasm' : 'native';
+  var engine = 'movi'; // Movi Player is the only built-in playback engine.
 
-  try {
-    var pref = localStorage.getItem('hitler:engine');
-    if (!forced && (pref === 'wasm' || pref === 'native')) engine = pref;
-  } catch (_) {}
-
-  window.__HITLERPlayer = {
+  window.__HITLER YTPlayer = {
     initial: engine,
     engine: engine,
     forced: !!forced,
@@ -208,7 +303,7 @@
     moduleScript: OFFICIAL + 'element.js'
   };
 
-  if (engine === 'wasm') {
+  if (engine === 'movi') {
     var addLink = function (rel, href, attrs) {
       var l = document.createElement('link');
       l.rel = rel; l.href = href;
@@ -227,24 +322,99 @@
 
 {% block content %}
 {% set effective_stream_base = (stream_base_url if stream_base_url is defined and stream_base_url else (base_url if base_url is defined and base_url else '')) %}
+{% set _wg = watch_groups if watch_groups is defined else [] %}
+{% set _gi = group_index if group_index is defined else 0 %}
+{% set _bi = button_index if button_index is defined else 0 %}
+{% set _slug = title_slug if title_slug is defined else '' %}
+{% set _fs = filestore_bot_username if filestore_bot_username is defined else (player_settings.filestore_bot_username if player_settings.filestore_bot_username is defined else '') %}
+{% set _poster = '' %}
+{% if title_page is defined and title_page and title_page.poster_path %}
+  {% if title_page.poster_path.startswith('http') %}
+    {% set _poster = title_page.poster_path %}
+  {% else %}
+    {% set _poster = 'https://image.tmdb.org/t/p/w500' + title_page.poster_path %}
+  {% endif %}
+{% endif %}
+{% set _backdrop_thumb = '' %}
+{% if title_page is defined and title_page and title_page.backdrop_path %}
+  {% if title_page.backdrop_path.startswith('http') %}
+    {% set _backdrop_thumb = title_page.backdrop_path %}
+  {% else %}
+    {% set _backdrop_thumb = 'https://image.tmdb.org/t/p/w780' + title_page.backdrop_path %}
+  {% endif %}
+{% endif %}
+{% set _backdrop_hero = '' %}
+{% if title_page is defined and title_page and title_page.backdrop_path %}
+  {% if title_page.backdrop_path.startswith('http') %}
+    {% set _backdrop_hero = title_page.backdrop_path %}
+  {% else %}
+    {% set _backdrop_hero = 'https://image.tmdb.org/t/p/w1280' + title_page.backdrop_path %}
+  {% endif %}
+{% endif %}
+
+{% if _backdrop_hero or title_page %}
+<section class="backdrop-hero" style="min-height:clamp(160px,30vw,300px);margin-bottom:16px">
+  {% if _backdrop_hero %}<div class="backdrop-img" style="background-image:url('{{ _backdrop_hero }}')"></div>{% endif %}
+  <div class="backdrop-scrim"></div>
+  <div class="backdrop-content">
+    {% if title_page %}
+    <div class="hero-eyebrow" style="color:var(--accent-2);font-weight:800;font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:8px;font-family:var(--font-display)">{{ BRANDING }} · Now Playing</div>
+    <h1 style="font-size:clamp(1.2rem,3.4vw,1.9rem);margin:0;line-height:1.15">{{ title_page.title }}</h1>
+    {% else %}
+    <div class="hero-eyebrow" style="color:var(--accent-2);font-weight:800;font-size:11px;letter-spacing:.16em;text-transform:uppercase;font-family:var(--font-display)">{{ BRANDING }} · Now Playing</div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
 <div class="watch-grid">
   <section>
     <div class="player-shell">
       <div class="neon-ribbon" aria-hidden="true"></div>
       <div class="player-box">
-        <div class="player-wrapper" id="playerWrapper">
+        <div class="player-wrapper" id="playerWrapper">\n          <div class="player-brand-float" id="playerBrandFloat">{{ BRANDING }}</div>
           <movi-player id="moviPlayer"
-            playsinline controls preload="auto" resume
-            theme="dark" themecolor="#3b82f6"
+            playsinline controls autoplay muted preload="auto" resume
+            theme="dark" themecolor="#8b5cf6"
             subtitleedge="outline"
             style="display:block"
             class="movi-bar-collapsed"
             tabindex="0"></movi-player>
-          <video id="nativePlayer" playsinline controls preload="auto" crossorigin="anonymous" style="display:none"></video>
           <div class="player-loading" id="playerLoading"><div class="spinner"></div></div>
-          <button type="button" class="native-switch" id="nativeSwitch" hidden onclick="switchEngine()">Buffering? Switch to basic player</button>
+
+          <!-- Top-left: switch qualities in current group -->
+          <button type="button" class="player-chrome-btn pc-switch" id="pcSwitchBtn" title="Switch quality / source" aria-label="Switch source">
+            <svg viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+          </button>
+          <!-- Laptop: external players MX / PLAYit / VLC -->
+          <button type="button" class="player-chrome-btn pc-laptop" id="pcLaptopBtn" title="Open in external player" aria-label="External players">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/><path d="M8 20v-2h8v2"/></svg>
+          </button>
+          <!-- Download -->
+          <button type="button" class="player-chrome-btn pc-download" id="pcDownloadBtn" title="Download" aria-label="Download">
+            <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+          </button>
+
+          <div class="player-pop switch-pop" id="switchPop" role="menu">
+            <div class="pop-title">This group</div>
+            <div id="switchPopList"></div>
+          </div>
+          <div class="player-pop laptop-pop" id="laptopPop" role="menu">
+            <div class="pop-title">Open in player</div>
+            <div id="laptopPopList"></div>
+          </div>
         </div>
       </div>
+    </div>
+
+    <!-- Prev / Next group + Telegram -->
+    <div class="nav-row" id="groupNavRow">
+      <button type="button" class="nav-btn" id="prevGroupBtn" disabled>← Prev</button>
+      <button type="button" class="nav-btn" id="nextGroupBtn" disabled>Next →</button>
+      <span class="nav-spacer"></span>
+      {% if _fs %}
+      <a class="tg-btn" id="tgFileBtn" href="https://t.me/{{ _fs }}?start=file_{{ file.short_code }}" target="_blank" rel="noopener">✈ Telegram</a>
+      {% endif %}
     </div>
 
     <div class="card info" style="margin-top:12px">
@@ -252,27 +422,24 @@
       <div class="meta">
         <span>{{ (file.file_size / (1024*1024))|round(2) }} MB</span>
         <span>{{ file.access_count }} views</span>
+        {% if _wg and (_wg|length) > 0 %}
+        <span id="groupLabel">{% if _gi < (_wg|length) %}{{ _wg[_gi].name }}{% else %}Watch{% endif %}</span>
+        {% endif %}
       </div>
 
-      <!-- Track select is mainly for native/remux fallback; WASM player has its own track menu -->
       <div id="track-box" class="tools" style="display:none">
         <select id="audio-select" class="select" aria-label="Audio track"></select>
         <span id="track-status" class="track-status"></span>
       </div>
 
-      <div class="volume-tools" id="native-only-tools" style="display:none">
-        <label for="volume-boost">Volume boost <b id="volume-value">100%</b></label>
-        <input id="volume-boost" type="range" min="100" max="300" step="10" value="100" aria-label="Volume boost up to 300 percent">
-        <label for="brightness">Brightness <b id="brightness-value">100%</b></label>
-        <input id="brightness" type="range" min="50" max="150" step="5" value="100" aria-label="Screen brightness">
-      </div>
 
       <div class="tools">
         {% if player_settings.downloads_enabled %}
-        <a class="btn accent" id="direct-dl-btn" href="{{ effective_stream_base }}/dl/{{ file.short_code }}" download>⬇ Download (Chrome)</a>
-        <a class="btn" id="idm-dl-btn" href="#">⚡ 1DM Download</a>
+        <a class="btn accent" id="direct-dl-btn" href="{{ effective_stream_base }}/dl/{{ file.short_code }}" download>⬇ Download</a>
         {% elif player_settings.filestore_bot_username %}
         <a class="btn accent" id="direct-dl-btn" href="https://t.me/{{ player_settings.filestore_bot_username }}?start=file_{{ file.short_code }}" target="_blank" rel="noopener">📥 Get File in Bot</a>
+        {% else %}
+        <a class="btn accent" id="direct-dl-btn" href="{{ effective_stream_base }}/dl/{{ file.short_code }}" download>⬇ Download</a>
         {% endif %}
         <button class="btn" type="button" onclick="copyDownload()">Copy Download Link</button>
         <button class="btn" type="button" onclick="copyStream()">Copy Stream URL</button>
@@ -280,76 +447,73 @@
       </div>
       <div id="copy-status" class="copy-ok"></div>
     </div>
+
   </section>
 
   <aside class="side">
-    <div class="card">
-      <b>Open in player / downloader</b>
-
+    {% if _wg and _wg|length > 0 %}
+    <div class="card side-eps" id="sideEpsCard">
+      <b>Episodes / Seasons</b>
+      <div class="side-season-bar" id="sideSeasonBar" aria-label="Seasons"></div>
+      <div class="side-ep-tools">
+        <select id="seasonFilter" aria-label="Select season"><option value="all">All seasons</option></select>
+        <input id="episodeSearch" type="search" placeholder="Search EP…" aria-label="Search episodes">
+      </div>
+      <div class="side-ep-list" id="sideEpList"></div>
+      <div class="side-ep-count" id="episodeCount"></div>
+    </div>
+    {% endif %}
+    <div class="card" style="margin-top:12px">
+      <b>Open in player</b>
       <div id="mobile" class="player-panel active"><div class="player-grid" id="mobile-grid"></div></div>
-      <div id="desktop" class="player-panel"><div class="player-grid" id="desktop-grid"></div></div>
-      <div id="tablet" class="player-panel"><div class="player-grid" id="tablet-grid"></div></div>
-      <div id="tv" class="player-panel"><div class="player-grid" id="tv-grid"></div></div>
-      <div class="notice">If a player does not open, use <b>Copy Download Link</b> or <b>Copy Stream URL</b> and paste it directly into Chrome or 1DM.</div>
+      <div class="notice">MX Player, PLAYit, VLC, and Download. If a player does not open, use <b>Copy Download Link</b> or <b>Copy Stream URL</b>.</div>
     </div>
   </aside>
 </div>
-
-<nav class="player-tabs" aria-label="Player device categories">
-  <button class="tab active" data-tab="mobile">Mobile</button>
-  <button class="tab" data-tab="desktop">Desktop</button>
-  <button class="tab" data-tab="tablet">Tablet</button>
-  <button class="tab" data-tab="tv">TV</button>
-</nav>
 
 <div class="toast" id="toast"><span id="toast-message">Link copied</span></div>
 
 <script>
 const SHORT_CODE = {{ file.short_code|tojson }};
+// Backend/VPS origin (ngrok) — used for external players & download fallback
 let STREAM_ORIGIN = ({{ effective_stream_base|tojson }} || window.location.origin).replace(/\/+$/, '');
 try {
   var host = (window.location.hostname || '').toLowerCase();
-  if (host.endsWith('.trycloudflare.com') || host.endsWith('.cfargotunnel.com') || host === 'localhost' || host === '127.0.0.1') {
+  if (host.endsWith('.trycloudflare.com') || host.endsWith('.ngrok-free.app') || host.endsWith('.ngrok-free.dev') || host.endsWith('.ngrok.io') || host.endsWith('.cfargotunnel.com') || host === 'localhost' || host === '127.0.0.1') {
     STREAM_ORIGIN = window.location.origin;
   }
 } catch (_) {}
-const STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
+// DDStream-style same-origin play path so movi-player works (Vercel proxies /stream to VPS with ngrok-skip header)
+const PLAY_ORIGIN = window.location.origin;
+const STREAM_URL = PLAY_ORIGIN + '/stream/' + SHORT_CODE;
+const BACKEND_STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
 const DOWNLOADS_ENABLED = {{ player_settings.downloads_enabled|tojson }};
 const FILESTORE_BOT = {{ (player_settings.filestore_bot_username or '')|tojson }};
 const DL_URL = DOWNLOADS_ENABLED
-  ? (STREAM_ORIGIN + '/dl/' + SHORT_CODE)
-  : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (STREAM_ORIGIN + '/dl/' + SHORT_CODE));
-const REMUX_URL = STREAM_ORIGIN + '/remux/' + SHORT_CODE;
-const TRACKS_URL = STREAM_ORIGIN + '/api/tracks/' + SHORT_CODE;
+  ? (PLAY_ORIGIN + '/dl/' + SHORT_CODE)
+  : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (PLAY_ORIGIN + '/dl/' + SHORT_CODE));
+const REMUX_URL = PLAY_ORIGIN + '/remux/' + SHORT_CODE;
+const TRACKS_URL = PLAY_ORIGIN + '/api/tracks/' + SHORT_CODE;
+const EXTERNAL_STREAM_URL = BACKEND_STREAM_URL;
 const PLAYER_MIME = {{ file.mime_type|tojson }};
 const FILE_NAME = {{ file.filename|tojson }};
 const INTENT_MIME = (!PLAYER_MIME || PLAYER_MIME === 'application/octet-stream') ? 'video/*' : PLAYER_MIME;
 
-const CFG = window.__HITLERPlayer || {};
+const CFG = window.__HITLER YTPlayer || {};
 /* Official movi-player entry points (https://github.com/mrujjwalg/movi-player) */
 const MOVI_GLOBAL = CFG.script || 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js';
 const MOVI_GLOBAL_FALLBACK = CFG.scriptFallback || 'https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js';
-const PLYR_CSS = 'https://cdn.plyr.io/3.7.8/plyr.css';
-const PLYR_JS  = 'https://cdn.plyr.io/3.7.8/plyr.polyfilled.js';
 
 const playerWrapper = document.getElementById('playerWrapper');
 const moviPlayer    = document.getElementById('moviPlayer');
-const nativePlayer  = document.getElementById('nativePlayer');
 const loadingScreen = document.getElementById('playerLoading');
-const nativeSwitch  = document.getElementById('nativeSwitch');
-const nativeTools   = document.getElementById('native-only-tools');
-const fixAudioBtn   = document.getElementById('fix-audio-btn');
 
-let engine = CFG.engine || 'native';
-const forcedEngine = !!CFG.forced;
-let plyr = null;
+let engine = 'movi';
+const forcedEngine = true;
 let loadingDone = false;
 let wasmLoading = false;
 let wasmLoaded = false;
 let wasmWired = false;
-let nativeLoaded = false;
-let nativeWired = false;
-let browserMode = false;
 let switchAt = 0;
 let switchPlaying = false;
 let hasPlayedOnce = false;
@@ -369,13 +533,9 @@ function showToast(msg) {
 }
 function showLoading() { if (loadingScreen) loadingScreen.classList.add('active'); }
 function hideLoading() { if (loadingScreen) loadingScreen.classList.remove('active'); loadingDone = true; }
-function setEngine(e) {
-  engine = e;
-  try { localStorage.setItem('ddstream:engine', e); } catch (_) {}
-}
-function activeMedia() {
-  return (engine === 'wasm' && !browserMode) ? moviPlayer : nativePlayer;
-}
+function setEngine(e) { engine = 'movi'; }
+function activeMedia() { return moviPlayer; }
+
 function captureSwitchPosition() {
   try {
     const el = activeMedia();
@@ -383,6 +543,43 @@ function captureSwitchPosition() {
     switchPlaying = !el.paused;
   } catch (_) { switchAt = 0; switchPlaying = false; }
 }
+// Movi custom elements may emit readiness events later than the source assignment.
+// Start muted first (required by most mobile autoplay policies), then let the user
+// enable sound with the existing volume controls. Never rely on a single canplay event.
+function requestAutoPlay(el) {
+  if (!el) return;
+  try {
+    el.setAttribute('autoplay', '');
+    el.setAttribute('playsinline', '');
+    el.muted = true;
+    el.setAttribute('muted', '');
+  } catch (_) {}
+  let started = false;
+  const attempt = () => {
+    if (started) return;
+    try {
+      const result = el.play && el.play();
+      if (result && typeof result.then === 'function') {
+        result.then(() => { started = true; }).catch(() => {
+          // Retry muted explicitly; custom-element play() can reject before its
+          // internal media element has completed initialization.
+          try {
+            el.muted = true;
+            const retry = el.play && el.play();
+            if (retry && retry.then) retry.then(() => { started = true; }).catch(() => {});
+          } catch (_) {}
+        });
+      }
+    } catch (_) {}
+  };
+  ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough'].forEach(evt => {
+    el.addEventListener(evt, attempt);
+  });
+  attempt();
+  // Movi initializes its internal media element asynchronously after src is set.
+  [250, 800, 1600, 3000, 5000].forEach(ms => setTimeout(attempt, ms));
+}
+
 function applySwitchPosition(el) {
   if (!el || !switchAt || switchAt < 1) return;
   const apply = () => {
@@ -396,16 +593,9 @@ function applySwitchPosition(el) {
   else el.addEventListener('loadedmetadata', apply, { once: true });
 }
 
-/* ===== Download / external player buttons (kept) ===== */
-function idmIntent(url) {
-  const u = new URL(url);
-  const scheme = u.protocol.replace(':', '');
-  return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${scheme};action=android.intent.action.VIEW;package=idm.internet.download.manager;S.browser_fallback_url=${encodeURIComponent(url)};end`;
-}
+/* ===== Download / external players (MX, PLAYit, VLC + Download only) ===== */
 const dlBtn = document.getElementById('direct-dl-btn');
 if (dlBtn) dlBtn.href = DL_URL;
-const idmBtn = document.getElementById('idm-dl-btn');
-if (idmBtn) idmBtn.href = idmIntent(DL_URL);
 
 function copyText(text, statusId) {
   const el = document.getElementById(statusId || 'copy-status');
@@ -425,15 +615,10 @@ function fallbackCopy(text, cb) {
 function copyDownload() { copyText(DL_URL); showToast('Download link copied'); }
 function copyStream() { copyText(STREAM_URL); showToast('Stream URL copied'); }
 
-/* ===== External player grids (original full set kept) ===== */
 function androidIntent(url, pkg, mime) {
   const u = new URL(url);
   const scheme = u.protocol.replace(':','');
   return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${scheme};action=android.intent.action.VIEW;type=${mime || 'video/*'};package=${pkg};S.browser_fallback_url=${encodeURIComponent(url)};end`;
-}
-function hvStreamIntent(url) {
-  const encoded = encodeURIComponent(url);
-  return `intent://play?url=${encoded}#Intent;scheme=hvstream;package=com.hvstreamplayer.app;S.browser_fallback_url=${encoded};end`;
 }
 function addPlayer(gridId, label, href) {
   const a = document.createElement('a');
@@ -445,337 +630,323 @@ function addPlayer(gridId, label, href) {
   if (el) el.appendChild(a);
 }
 function buildPlayerGrids() {
-  ['mobile-grid', 'tablet-grid', 'desktop-grid', 'tv-grid'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.innerHTML = '';
-  });
-  const android = [
-    ['1DM Download', 'idm.internet.download.manager'],
-    ['HV Stream', null],
-    ['PLAYit', 'com.playit.videoplayer'],
-    ['VLC', 'org.videolan.vlc'],
-    ['MX Player', 'com.mxtech.videoplayer.ad'],
-    ['Just Player', 'com.brouken.player'],
-    ['mpv', 'is.xyz.mpv'],
-    ['Kodi', 'org.xbmc.kodi']
-  ];
-  android.forEach(([n, p]) => {
-    if (n === '1DM Download') {
-      addPlayer('mobile-grid', n, idmIntent(DL_URL));
-    } else if (n === 'HV Stream') {
-      addPlayer('mobile-grid', n, hvStreamIntent(STREAM_URL));
-    } else {
-      addPlayer('mobile-grid', n, androidIntent(STREAM_URL, p, INTENT_MIME));
-    }
-  });
-  addPlayer('mobile-grid', 'Direct Download', DL_URL);
-
-  addPlayer('tablet-grid', '1DM Download', idmIntent(DL_URL));
-  addPlayer('tablet-grid', 'HV Stream', hvStreamIntent(STREAM_URL));
-  addPlayer('tablet-grid', 'PLAYit', androidIntent(STREAM_URL, 'com.playit.videoplayer', INTENT_MIME));
-  addPlayer('tablet-grid', 'VLC', androidIntent(STREAM_URL, 'org.videolan.vlc', INTENT_MIME));
-  addPlayer('tablet-grid', 'MX Player', androidIntent(STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME));
-  addPlayer('tablet-grid', 'Just Player', androidIntent(STREAM_URL, 'com.brouken.player', INTENT_MIME));
-
-  addPlayer('desktop-grid', 'Direct Download', DL_URL);
-  addPlayer('desktop-grid', 'Open Stream URL', STREAM_URL);
-
-  addPlayer('tv-grid', 'HV Stream', hvStreamIntent(STREAM_URL));
-  addPlayer('tv-grid', 'VLC', androidIntent(STREAM_URL, 'org.videolan.vlc', INTENT_MIME));
-  addPlayer('tv-grid', 'Kodi', androidIntent(STREAM_URL, 'org.xbmc.kodi', INTENT_MIME));
-  addPlayer('tv-grid', 'Just Player', androidIntent(STREAM_URL, 'com.brouken.player', INTENT_MIME));
-  addPlayer('tv-grid', 'Open URL', STREAM_URL);
+  const el = document.getElementById('mobile-grid');
+  if (el) el.innerHTML = '';
+  addPlayer('mobile-grid', 'MX Player', androidIntent((typeof EXTERNAL_STREAM_URL!=='undefined'?EXTERNAL_STREAM_URL:STREAM_URL), 'com.mxtech.videoplayer.ad', INTENT_MIME));
+  addPlayer('mobile-grid', 'PLAYit', androidIntent(REMUX_URL + '?audio=0&aac=1', 'com.playit.videoplayer', 'video/mp4'));
+  addPlayer('mobile-grid', 'VLC', androidIntent((typeof EXTERNAL_STREAM_URL!=='undefined'?EXTERNAL_STREAM_URL:STREAM_URL), 'org.videolan.vlc', INTENT_MIME));
+  addPlayer('mobile-grid', 'Download', DL_URL);
 }
-buildPlayerGrids();
+buildPlayerGrids();\n(function keepPlayerBrandStable(){\n const badge=document.getElementById('playerBrandFloat');\n if(!badge)return;\n badge.style.left='12px';badge.style.top='12px';\n})();
 
-document.querySelectorAll('.player-tabs .tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.player-tabs .tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.player-panel').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    const panel = document.getElementById(tab.dataset.tab);
-    if (panel) panel.classList.add('active');
+/* ===== Group / title context for switch, prev/next, related ===== */
+const WATCH_GROUPS = {{ (_wg if _wg is defined else [])|tojson }};
+const TITLE_SLUG = {{ (_slug if _slug is defined else '')|tojson }};
+const GROUP_INDEX = {{ (_gi if _gi is defined else 0)|tojson }};
+const BUTTON_INDEX = {{ (_bi if _bi is defined else 0)|tojson }};
+const POSTER_URL = {{ (_poster if _poster is defined else '')|tojson }};
+const BACKDROP_THUMB_URL = {{ (_backdrop_thumb if _backdrop_thumb is defined else '')|tojson }};
+const THUMB_URL = BACKDROP_THUMB_URL || POSTER_URL;
+const FILESTORE_USER = {{ (_fs if _fs is defined else '')|tojson }};
+
+function extractWatchCode(url) {
+  if (!url) return null;
+  try {
+    const m = String(url).match(/(?:^|\/)watch\/([A-Za-z0-9_-]{3,64})(?:\/|$|\?|#)/i);
+    return m ? m[1] : null;
+  } catch (_) { return null; }
+}
+function watchHrefFor(groupIdx, buttonIdx) {
+  const g = WATCH_GROUPS[groupIdx];
+  if (!g || !g.buttons || !g.buttons[buttonIdx]) return null;
+  const code = extractWatchCode(g.buttons[buttonIdx].url);
+  if (!code) return g.buttons[buttonIdx].url;
+  const params = new URLSearchParams();
+  if (TITLE_SLUG) params.set('title', TITLE_SLUG);
+  params.set('g', String(groupIdx));
+  params.set('b', String(buttonIdx));
+  return '/watch/' + code + '?' + params.toString();
+}
+function goToGroupButton(groupIdx, buttonIdx) {
+  const href = watchHrefFor(groupIdx, buttonIdx);
+  if (href) window.location.href = href;
+}
+
+/* Switch pop: all buttons in current group */
+(function setupSwitchPop() {
+  const btn = document.getElementById('pcSwitchBtn');
+  const pop = document.getElementById('switchPop');
+  const list = document.getElementById('switchPopList');
+  if (!btn || !pop || !list) return;
+  const g = WATCH_GROUPS[GROUP_INDEX];
+  if (!g || !g.buttons || !g.buttons.length) {
+    btn.style.display = 'none';
+    return;
+  }
+  list.innerHTML = '';
+  g.buttons.forEach((b, i) => {
+    const a = document.createElement('button');
+    a.type = 'button';
+    a.textContent = (b.name || ('Source ' + (i + 1))) + (i === BUTTON_INDEX ? ' ✓' : '');
+    a.addEventListener('click', () => {
+      pop.classList.remove('open');
+      if (i !== BUTTON_INDEX) goToGroupButton(GROUP_INDEX, i);
+    });
+    list.appendChild(a);
   });
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('laptopPop')?.classList.remove('open');
+    pop.classList.toggle('open');
+  });
+})();
+
+/* Laptop pop: MX / PLAYit / VLC */
+(function setupLaptopPop() {
+  const btn = document.getElementById('pcLaptopBtn');
+  const pop = document.getElementById('laptopPop');
+  const list = document.getElementById('laptopPopList');
+  if (!btn || !pop || !list) return;
+  const items = [
+    ['MX Player', androidIntent(STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME)],
+    ['PLAYit', androidIntent(REMUX_URL + '?audio=0&aac=1', 'com.playit.videoplayer', 'video/mp4')],
+    ['VLC', androidIntent(STREAM_URL, 'org.videolan.vlc', INTENT_MIME)],
+  ];
+  list.innerHTML = '';
+  items.forEach(([label, href]) => {
+    const a = document.createElement('a');
+    a.href = href;
+    a.textContent = label;
+    list.appendChild(a);
+  });
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('switchPop')?.classList.remove('open');
+    pop.classList.toggle('open');
+  });
+})();
+
+/* Download chrome button */
+(function setupDownloadBtn() {
+  const btn = document.getElementById('pcDownloadBtn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    // Prefer site /dl/ so Vercel/backend can serve or proxy the file
+    const a = document.createElement('a');
+    a.href = DL_URL;
+    a.setAttribute('download', '');
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast('Download started');
+  });
+})();
+
+document.addEventListener('click', () => {
+  document.getElementById('switchPop')?.classList.remove('open');
+  document.getElementById('laptopPop')?.classList.remove('open');
 });
 
-/* ===== Native (basic) player + remux multi-audio (fallback) ===== */
-function primaryPlayUrl(audioIndex) {
-  const idx = (audioIndex === undefined || audioIndex === null) ? 0 : Number(audioIndex);
-  if (useCompatible || idx !== 0) {
-    return REMUX_URL + '?audio=' + encodeURIComponent(idx) + '&aac=1';
-  }
-  return STREAM_URL;
-}
-
-function setNativeSource(src, mime) {
-  nativePlayer.pause();
-  nativePlayer.removeAttribute('src');
-  nativePlayer.src = src;
-  nativePlayer.load();
-  const t = switchAt || 0;
-  if (t > 1) {
-    const onMeta = function () {
-      nativePlayer.removeEventListener('loadedmetadata', onMeta);
-      try { nativePlayer.currentTime = t; } catch (_) {}
-      if (switchPlaying) nativePlayer.play().catch(() => {});
-    };
-    nativePlayer.addEventListener('loadedmetadata', onMeta);
-  }
-}
-
-async function loadTracks() {
-  try {
-    const r = await fetch(TRACKS_URL, { credentials: 'same-origin' });
-    if (!r.ok) return;
-    const d = await r.json();
-    const tracks = d.audio_tracks || [];
-    if (tracks.length < 2) return;
-
-    const box = document.getElementById('track-box');
-    const sel = document.getElementById('audio-select');
-    if (!box || !sel) return;
-    box.style.display = 'flex';
-    sel.innerHTML = '';
-    tracks.forEach(t => {
-      const o = document.createElement('option');
-      o.value = t.audio_index;
-      o.textContent = t.label || `Track ${t.audio_index + 1}`;
-      sel.appendChild(o);
-    });
-    sel.value = String(currentAudioIndex);
-    sel.onchange = () => {
-      const idx = Number(sel.value);
-      if (idx !== currentAudioIndex) switchAudio(idx);
-    };
-    const statusEl = document.getElementById('track-status');
-    if (statusEl) statusEl.textContent = 'Select audio track (basic player / remux)';
-  } catch (e) {
-    console.debug('Track discovery unavailable', e);
-  }
-}
-
-async function switchAudio(index) {
-  if (switchingAudio || engine === 'wasm') return; // WASM has its own track UI
-  switchingAudio = true;
-  const statusEl = document.getElementById('track-status');
-  const sel = document.getElementById('audio-select');
-  const idx = Number(index);
-  if (statusEl) statusEl.textContent = 'Preparing selected audio…';
-  try {
-    const src = (useCompatible || idx !== 0)
-      ? REMUX_URL + '?audio=' + encodeURIComponent(idx) + '&aac=1'
-      : STREAM_URL;
-    setNativeSource(src);
-    currentAudioIndex = idx;
-    if (statusEl) {
-      statusEl.textContent = (useCompatible || idx !== 0)
-        ? 'Remux / AAC track ' + (idx + 1)
-        : 'Default audio · full seeking';
-    }
-  } catch (err) {
-    console.warn('Audio track switch failed', err);
-    if (statusEl) statusEl.textContent = 'Track failed';
-  } finally {
-    switchingAudio = false;
-  }
-}
-
-function enableCompatibleMode() {
-  useCompatible = true;
-  if (engine === 'native' || browserMode) {
-    switchAudio(currentAudioIndex || 0);
-  }
-  showToast('Compatible AAC mode enabled');
-}
-
-/* ===== Engine init ===== */
-function showNativeSwitch() {
-  if (nativeSwitch && !forcedEngine) nativeSwitch.hidden = false;
-}
-
-function wireStallWatch() {
-  const el = moviPlayer;
-  el.addEventListener('playing', () => { hasPlayedOnce = true; clearStallWatch(); });
-  el.addEventListener('canplay', clearStallWatch);
-  el.addEventListener('waiting', () => {
-    if (browserMode || !hasPlayedOnce || stallTimer) return;
-    stallTimer = setTimeout(() => {
-      stallTimer = null;
-      if (!browserMode && !moviPlayer.paused) showNativeSwitch();
-    }, 6000);
-  });
-}
-function clearStallWatch() {
-  if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
-}
-
-function handOffToBrowser() {
-  // Last-resort: give the original stream to the native <video>
-  try {
-    nativePlayer.style.display = 'block';
-    moviPlayer.style.display = 'none';
-    setNativeSource(STREAM_URL, PLAYER_MIME || 'video/mp4');
-    if (nativeTools) nativeTools.style.display = 'flex';
-    if (fixAudioBtn) fixAudioBtn.style.display = '';
-    loadTracks();
-    setEngine('native');
-    return true;
-  } catch (e) { return false; }
-}
-
-function initNative(reason) {
-  if (nativeLoaded) {
-    nativePlayer.style.display = 'block';
-    moviPlayer.style.display = 'none';
-    applySwitchPosition(nativePlayer);
-    hideLoading();
+/* Prev / Next = previous/next group, first button */
+(function setupGroupNav() {
+  const prev = document.getElementById('prevGroupBtn');
+  const next = document.getElementById('nextGroupBtn');
+  if (!WATCH_GROUPS.length) {
+    if (prev) prev.disabled = true;
+    if (next) next.disabled = true;
     return;
   }
-  nativeLoaded = true;
-  setEngine('native');
-  nativePlayer.style.display = 'block';
-  moviPlayer.style.display = 'none';
-  if (nativeTools) nativeTools.style.display = 'flex';
-  if (fixAudioBtn) fixAudioBtn.style.display = '';
-  setNativeSource(primaryPlayUrl(0), useCompatible ? 'video/mp4' : (PLAYER_MIME || 'video/mp4'));
-  loadTracks();
-  hideLoading();
-  if (nativeSwitch) nativeSwitch.hidden = true;
-  console.debug('Native player started:', reason || 'default');
-}
+  if (prev) {
+    prev.disabled = GROUP_INDEX <= 0;
+    prev.addEventListener('click', () => {
+      if (GROUP_INDEX > 0) goToGroupButton(GROUP_INDEX - 1, 0);
+    });
+  }
+  if (next) {
+    next.disabled = GROUP_INDEX >= WATCH_GROUPS.length - 1;
+    next.addEventListener('click', () => {
+      if (GROUP_INDEX < WATCH_GROUPS.length - 1) goToGroupButton(GROUP_INDEX + 1, 0);
+    });
+  }
+  const tg = document.getElementById('tgFileBtn');
+  if (tg && FILESTORE_USER) {
+    tg.href = 'https://t.me/' + FILESTORE_USER + '?start=file_' + SHORT_CODE;
+  }
+})();
 
+/* Episode / Seasons: only render seasons actually present; each season is strictly isolated. */
+(function setupRelated() {
+  const list = document.getElementById('sideEpList');
+  const seasonSelect = document.getElementById('seasonFilter');
+  const search = document.getElementById('episodeSearch');
+  const count = document.getElementById('episodeCount');
+  const seasonBar = document.getElementById('sideSeasonBar');
+  const card = document.getElementById('sideEpsCard');
+  if (!list || !Array.isArray(WATCH_GROUPS) || !WATCH_GROUPS.length) {
+    if (card) card.style.display = 'none';
+    return;
+  }
+
+  function parseEpisode(name) {
+    const text = String(name || '').replace(/[._]+/g, ' ').trim();
+    let m = text.match(/\bS(?:eason\s*)?0*(\d{1,3})\s*[-_. ]*E(?:pisode\s*)?0*(\d{1,4})\b/i)
+      || text.match(/\bSeason\s*0*(\d{1,3})\s*[-_. ]*(?:Episode|Ep)\s*0*(\d{1,4})\b/i)
+      || text.match(/\b0*(\d{1,3})\s*[xX]\s*0*(\d{1,4})\b/i);
+    if (m) return { season: Number(m[1]), episode: Number(m[2]) };
+
+    // A season marker without an episode must never be treated as Season 1.
+    const seasonMarker = text.match(/\bSeason\s*0*(\d{1,3})\b|\bS0*(\d{1,3})(?!\s*[-_. ]*E)/i);
+    if (seasonMarker) return null;
+
+    // Bare EP/E numbers are Season 1 only when no other season marker exists.
+    m = text.match(/\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i);
+    if (m) return { season: 1, episode: Number(m[1]) };
+    return null;
+  }
+
+  const rows = WATCH_GROUPS.map((g, idx) => ({
+    g, idx, parsed: parseEpisode(g && g.name)
+  })).filter(row => row.parsed &&
+      Number.isInteger(row.parsed.season) && row.parsed.season > 0 &&
+      Number.isInteger(row.parsed.episode) && row.parsed.episode > 0);
+
+  rows.sort((a,b) => a.parsed.season-b.parsed.season ||
+    a.parsed.episode-b.parsed.episode || a.idx-b.idx);
+  const seasons = [...new Set(rows.map(row => row.parsed.season))].sort((a,b)=>a-b);
+  if (!rows.length || !seasons.length) {
+    if (card) card.style.display = 'none';
+    return;
+  }
+
+  const currentRow = rows.find(row => row.idx === Number(GROUP_INDEX));
+  let selected = currentRow ? String(currentRow.parsed.season) :
+    (seasons.includes(1) ? '1' : String(seasons[0]));
+
+  if (seasonSelect) {
+    seasonSelect.innerHTML = '<option value="all">All Seasons</option>';
+    seasons.forEach(season => {
+      const option = document.createElement('option');
+      option.value = String(season);
+      option.textContent = 'Season ' + season;
+      seasonSelect.appendChild(option);
+    });
+    seasonSelect.value = selected;
+  }
+
+  function setActiveSeasonUI(value) {
+    selected = value;
+    if (seasonSelect) seasonSelect.value = value;
+    if (seasonBar) seasonBar.querySelectorAll('button').forEach(button =>
+      button.classList.toggle('active', button.dataset.season === value));
+  }
+
+  if (seasonBar) {
+    seasonBar.innerHTML = '';
+    const all = document.createElement('button');
+    all.type = 'button'; all.textContent = 'All Seasons'; all.dataset.season = 'all';
+    all.className = selected === 'all' ? 'active' : '';
+    all.addEventListener('click', () => { setActiveSeasonUI('all'); render(); });
+    seasonBar.appendChild(all);
+
+    seasons.forEach(season => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Season ' + season;
+      button.dataset.season = String(season);
+      button.className = String(season) === selected ? 'active' : '';
+      button.addEventListener('click', () => {
+        setActiveSeasonUI(String(season)); render();
+      });
+      seasonBar.appendChild(button);
+    });
+  }
+
+  function render() {
+    const term = (search && search.value || '').trim().toLowerCase();
+    const filtered = rows.filter(row =>
+      (selected === 'all' || String(row.parsed.season) === selected) &&
+      (!term || String(row.g.name || '').toLowerCase().includes(term))
+    );
+    list.innerHTML = '';
+    filtered.forEach(({g, idx, parsed}) => {
+      const first = (g.buttons || [])[0];
+      if (!first || !first.url) return;
+      const href = (typeof watchHrefFor === 'function' ? watchHrefFor(idx, 0) : null) || first.url;
+      const link = document.createElement('a');
+      link.className = 'side-ep-btn' + (idx === Number(GROUP_INDEX) ? ' active' : '');
+      link.href = href;
+      const tag = document.createElement('span');
+      tag.className = 'ep-tag';
+      tag.textContent = 'S' + String(parsed.season).padStart(2,'0') +
+        ' · EP ' + String(parsed.episode).padStart(2,'0');
+      const name = document.createElement('span');
+      name.className = 'ep-name';
+      name.textContent = g.name || ('Episode ' + parsed.episode);
+      link.append(tag, name);
+      list.appendChild(link);
+    });
+    if (count) count.textContent = filtered.length + ' episode' + (filtered.length === 1 ? '' : 's');
+  }
+
+  search && search.addEventListener('input', render);
+  seasonSelect && seasonSelect.addEventListener('change', () => {
+    setActiveSeasonUI(seasonSelect.value || 'all'); render();
+  });
+  render();
+})();
+
+/* ===== Movi-only playback ===== */
+function primaryPlayUrl() { return STREAM_URL; }
+
+/* ===== Movi Player only: no native/Plyr/basic-player fallback ===== */
+function wireStallWatch() {
+  moviPlayer.addEventListener('playing', () => { hasPlayedOnce = true; clearStallWatch(); hideLoading(); });
+  moviPlayer.addEventListener('canplay', () => { clearStallWatch(); hideLoading(); });
+  moviPlayer.addEventListener('waiting', () => {
+    showLoading();
+    clearStallWatch();
+    stallTimer = setTimeout(() => { stallTimer = null; showToast('Still buffering. Please wait or retry playback.'); }, 12000);
+  });
+  moviPlayer.addEventListener('stalled', () => showLoading());
+  moviPlayer.addEventListener('error', () => { hideLoading(); showToast('Movi Player could not load this stream. Please retry.'); });
+}
+function clearStallWatch() { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } }
 function loadScript(src) {
   return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = src; s.async = true;
-    s.onload = resolve; s.onerror = reject;
-    document.head.appendChild(s);
+    const s = document.createElement('script'); s.src = src; s.async = true;
+    s.onload = resolve; s.onerror = reject; document.head.appendChild(s);
   });
 }
-
 async function initWasm() {
-  if (wasmLoading) return;
-  wasmLoading = true;
-  showLoading();
-
-  const timer = setTimeout(() => {
-    if (!forcedEngine) initNative('module-timeout');
-    else { hideLoading(); showToast('Player engine timed out'); }
-  }, 45000);
-
+  if (wasmLoading || wasmLoaded) return;
+  wasmLoading = true; showLoading();
   try {
-    /* Official movi-player load (https://github.com/mrujjwalg/movi-player) */
-    try {
-      await loadScript(MOVI_GLOBAL);
-    } catch (e1) {
-      console.warn('Primary movi-player CDN failed, trying fallback', e1);
-      await loadScript(MOVI_GLOBAL_FALLBACK);
-    }
-    clearTimeout(timer);
-
-    // Custom element should now be defined
-    if (!customElements.get('movi-player')) {
-      throw new Error('movi-player custom element not defined after script load');
-    }
-
-    setEngine('wasm');
+    try { await loadScript(MOVI_GLOBAL); }
+    catch (e) { console.warn('Movi primary CDN failed; trying same-player CDN fallback', e); await loadScript(MOVI_GLOBAL_FALLBACK); }
+    await customElements.whenDefined('movi-player');
+    if (!customElements.get('movi-player')) throw new Error('movi-player custom element unavailable');
+    setEngine('movi');
+    if (!wasmWired) { wasmWired = true; wireStallWatch(); }
     moviPlayer.style.display = 'block';
-    nativePlayer.style.display = 'none';
-
-    // Wire events once
-    if (!wasmWired) {
-      wasmWired = true;
-      wireStallWatch();
-      moviPlayer.addEventListener('error', () => {
-        if (!forcedEngine) {
-          captureSwitchPosition();
-          initNative('wasm-error');
-        }
-      });
-      moviPlayer.addEventListener('playing', () => hideLoading());
-      moviPlayer.addEventListener('canplay', () => hideLoading());
-    }
-
-    if (!wasmLoaded) {
-      wasmLoaded = true;
-      moviPlayer.src = STREAM_URL;
-    } else {
-      applySwitchPosition(moviPlayer);
-    }
+    moviPlayer.setAttribute('playsinline','');
+    moviPlayer.setAttribute('controls','');
+    moviPlayer.setAttribute('autoplay','');
+    moviPlayer.setAttribute('muted','');
+    moviPlayer.muted = true;
+    moviPlayer.src = STREAM_URL;
+    if (typeof moviPlayer.load === 'function') moviPlayer.load();
+    wasmLoaded = true;
+    requestAutoPlay(moviPlayer);
+    [1200, 3000, 6000].forEach(ms => setTimeout(() => { if (moviPlayer.paused) requestAutoPlay(moviPlayer); }, ms));
   } catch (err) {
-    clearTimeout(timer);
-    console.warn('WASM player failed to load', err);
-    if (!forcedEngine) initNative('wasm-load-fail');
-    else { hideLoading(); showToast('Enhanced player unavailable'); }
-  }
+    console.error('Movi Player initialization failed', err);
+    hideLoading(); showToast('Movi Player failed to initialize. Check your connection and retry.');
+  } finally { wasmLoading = false; }
 }
+function switchEngine() { showToast('Movi Player is the only built-in player.'); }
 
-function switchEngine() {
-  if (engine !== 'wasm' || browserMode) return;
-  captureSwitchPosition();
-  try { moviPlayer.pause(); } catch (e) {}
-  if (handOffToBrowser()) {
-    browserMode = true;
-    if (nativeSwitch) nativeSwitch.hidden = true;
-    showToast('Browser player');
-    return;
-  }
-  initNative('user-switch');
-  showToast('Basic player');
-}
-
-/* ===== Volume boost + brightness (native only) ===== */
-let audioContext, gainNode, compressor, mediaSourceNode;
-let boost = 1, brightness = 1;
-const boostInput = document.getElementById('volume-boost');
-const brightnessInput = document.getElementById('brightness');
-const volumeValue = document.getElementById('volume-value');
-const brightnessValue = document.getElementById('brightness-value');
-
-async function setupAudioBoost() {
-  if (engine === 'wasm') return;
-  if (audioContext) {
-    if (audioContext.state === 'suspended') {
-      try { await audioContext.resume(); } catch (_) {}
-    }
-    return;
-  }
-  try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    audioContext = new Ctx();
-    mediaSourceNode = audioContext.createMediaElementSource(nativePlayer);
-    gainNode = audioContext.createGain();
-    compressor = audioContext.createDynamicsCompressor();
-    mediaSourceNode.connect(gainNode);
-    gainNode.connect(compressor);
-    compressor.connect(audioContext.destination);
-    await audioContext.resume();
-  } catch (e) { console.debug('Audio boost unavailable', e); }
-}
-function updateGain() {
-  if (gainNode && audioContext) {
-    try { gainNode.gain.setTargetAtTime(boost, audioContext.currentTime, 0.04); } catch (_) {}
-  }
-  if (volumeValue) volumeValue.textContent = Math.round(boost * 100) + '%';
-}
-function updateBrightness() {
-  if (nativePlayer) nativePlayer.style.filter = `brightness(${brightness})`;
-  if (brightnessValue) brightnessValue.textContent = Math.round(brightness * 100) + '%';
-}
-if (boostInput) {
-  boostInput.addEventListener('input', () => {
-    boost = Number(boostInput.value) / 100;
-    updateGain();
-  });
-}
-if (brightnessInput) {
-  brightnessInput.addEventListener('input', () => {
-    brightness = Number(brightnessInput.value) / 100;
-    updateBrightness();
-  });
-}
-nativePlayer.addEventListener('play', setupAudioBoost, { once: true });
+/* Volume and brightness are controlled by Movi Player's own controls. */
 
 /* ===== Resume position (shared) ===== */
 const RESUME_ID = SHORT_CODE;
@@ -801,23 +972,49 @@ if (savedPos > 5) {
   // Will be applied after metadata
 }
 
-if (engine === 'wasm') {
-  initWasm();
-} else {
-  initNative('bootstrap');
-}
+initWasm();
 
 {% if player_settings.auto_player_redirect %}
 (function autoPlayerChooser(){
-  if (!/Android/i.test(navigator.userAgent||'')) return;
   const chooser = document.querySelector('.player-shell');
   if (chooser) {
     chooser.classList.add('auto-player-ready');
     setTimeout(() => chooser.scrollIntoView({behavior:'smooth', block:'start'}), 250);
-    const firstTab = document.querySelector('.player-tabs button');
-    if (firstTab) firstTab.click();
   }
 })();
 {% endif %}
 </script>
 {% endblock %}
+
+
+<script>
+(() => {
+  const code = {{ file.short_code|tojson }};
+  const counter = document.querySelector('.meta span:nth-child(2)');
+  const key = 'amz-play-view-' + code;
+  let token = localStorage.getItem(key);
+  if (!token) { token = (crypto.randomUUID ? crypto.randomUUID() : 'v-' + Date.now() + '-' + Math.random().toString(36).slice(2)) + '-visitor'; localStorage.setItem(key, token); }
+  let registered = false;
+  async function registerPlaybackView() {
+    if (registered) return; registered = true;
+    try {
+      const res = await fetch('/api/views/' + encodeURIComponent(code), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor_token:token})});
+      if (!res.ok) return; const data = await res.json();
+      if (counter && Number.isFinite(data.views)) counter.textContent = data.views.toLocaleString() + ' views';
+    } catch (_) {}
+  }
+  const custom = document.getElementById('moviPlayer');
+  if (custom) { custom.addEventListener('play', registerPlaybackView, {once:true}); custom.addEventListener('playing', registerPlaybackView, {once:true}); }
+})();
+</script>
+
+<style>
+/* Clean, compact episode and player controls */
+.side-season-bar button{border-radius:999px;padding:7px 12px;background:#151515;color:#d4d0c7;border-color:rgba(255,255,255,.12)}
+.side-season-bar button:hover{border-color:rgba(216,179,106,.45);color:#f3dfb8}
+.side-ep-btn.active{border-color:rgba(216,179,106,.6)!important;background:rgba(216,179,106,.10)!important}
+.side-ep-btn .ep-tag{color:#e2c17f}
+.player-shell{background:#080808;box-shadow:0 18px 48px rgba(0,0,0,.58),0 0 20px rgba(216,179,106,.10)}
+.player-shell .neon-ribbon{background:conic-gradient(from 0deg,#8b6b34,#e7c77f,#8b6b34,#d4ad61,#8b6b34)}
+.player-loading .spinner{border-top-color:#d8b36a}
+</style>

@@ -1,16 +1,30 @@
 {% extends "base.html" %}
 {% block title %}{% if query %}Search: {{ query }}{% else %}Search{% endif %} · HITLER YT{% endblock %}
 {% block nav_search %}active{% endblock %}
+{% block head %}
+<style>
+  .filters select.chip{appearance:none;-webkit-appearance:none;padding-right:30px;
+    background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+    background-position:calc(100% - 16px) calc(50% - 2px),calc(100% - 11px) calc(50% - 2px);
+    background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+</style>
+{% endblock %}
 {% block content %}
+<div class="page-hero" style="min-height:120px;padding:24px clamp(20px,4vw,40px)">
+  <div>
+    <h1 style="font-size:clamp(1.4rem,3.6vw,2.1rem)">{% if query %}Results for "{{ query }}"{% else %}Browse the catalog{% endif %}</h1>
+    <p>Find anime, movies and series by title, year, genre or category.</p>
+  </div>
+</div>
 
-<form class="search-bar" action="/search" method="get" role="search" style="margin-top:12px">
+<form class="search-bar" action="/search" method="get" role="search" style="margin-top:0">
   <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
   <input name="q" value="{{ query }}" placeholder="Search here…" autocomplete="off" maxlength="100" aria-label="Search">
   <button type="submit">Search</button>
 </form>
 
 <div class="announce announce-red">
-  <strong>Notice:</strong> Domains may change. Prefer Cloudflare DNS, restart your browser, and use this official site for the latest links.
+  <strong>Notice:</strong> Links are refreshed automatically. Use HITLER YT for the latest watch and download links.
 </div>
 <div class="announce announce-dark">
   Avoid unofficial copies. Always use <a href="/">HITLER YT</a> and follow trusted update channels for the official domain.
@@ -19,19 +33,19 @@
 <form action="/search" method="get" class="filters" style="margin:16px 0 8px">
   {% if query %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
   <div class="cat-nav" style="margin-bottom:12px">
-    <select name="type" class="chip" style="appearance:auto;cursor:pointer" onchange="this.form.submit()" aria-label="Type">
+    <select name="type" class="chip" style="cursor:pointer" onchange="this.form.submit()" aria-label="Type">
       <option value="">All types</option>
       <option value="movie" {% if type_filter == 'movie' %}selected{% endif %}>Movies</option>
       <option value="tv" {% if type_filter == 'tv' %}selected{% endif %}>Web series</option>
     </select>
-    <select name="year" class="chip" style="appearance:auto;cursor:pointer" onchange="this.form.submit()" aria-label="Year">
+    <select name="year" class="chip" style="cursor:pointer" onchange="this.form.submit()" aria-label="Year">
       <option value="">All years</option>
       {% for y in range(2026, 1990, -1) %}
       <option value="{{ y }}" {% if year_filter == y|string %}selected{% endif %}>{{ y }}</option>
       {% endfor %}
     </select>
     {% if genres %}
-    <select name="genre" class="chip" style="appearance:auto;cursor:pointer" onchange="this.form.submit()" aria-label="Genre">
+    <select name="genre" class="chip" style="cursor:pointer" onchange="this.form.submit()" aria-label="Genre">
       <option value="">All genres</option>
       {% for g in genres %}
       <option value="{{ g }}" {% if genre_filter == g %}selected{% endif %}>{{ g }}</option>
@@ -39,7 +53,7 @@
     </select>
     {% endif %}
     {% if categories %}
-    <select name="category" class="chip" style="appearance:auto;cursor:pointer" onchange="this.form.submit()" aria-label="Category">
+    <select name="category" class="chip" style="cursor:pointer" onchange="this.form.submit()" aria-label="Category">
       <option value="">All categories</option>
       {% for c in categories %}
       <option value="{{ c.slug }}" {% if category_filter == c.slug %}selected{% endif %}>{{ c.name }}</option>
@@ -50,7 +64,7 @@
 </form>
 
 <div class="section-head">
-  <h2>{% if query %}Results for “{{ query }}”{% else %}Browse{% endif %}</h2>
+  <h2>All titles</h2>
   <span class="chip">{{ results|length if results is defined else 0 }} titles</span>
 </div>
 

@@ -208,7 +208,7 @@ async def generate_sample_video(
     return out_path
 
 
-def make_work_dir(prefix: str = "hitler_media_") -> str:
+def make_work_dir(prefix: str = "HITLER YT_media_") -> str:
     return tempfile.mkdtemp(prefix=prefix)
 
 

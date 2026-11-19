@@ -2,34 +2,44 @@
 {% block title %}Admin Panel · HITLER YT{% endblock %}
 {% block head %}
 <style>
-  .admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
-  .admin-card{padding:18px}
-  .switch{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #2a2a2a}
-  .switch input{accent-color:#facc15;width:20px;height:20px}
-  .admin-card input,.admin-card select{width:100%;padding:11px;background:#141414;border:1px solid #2a2a2a;color:white;border-radius:10px;margin:6px 0}
-  .result{padding:12px;border:1px solid #2a2a2a;border-radius:10px;margin:10px 0;background:#141414}
+  .admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+  .admin-card{padding:20px}
+  .admin-card h2{font-size:1.05rem;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+  .switch{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--line);font-size:13px;font-weight:600}
+  .switch:last-of-type{border-bottom:0}
+  .switch input{accent-color:var(--accent);width:20px;height:20px}
+  .admin-card input,.admin-card select{
+    width:100%;padding:12px 14px;background:var(--bg-elevated);border:1px solid var(--line);
+    color:var(--text);border-radius:var(--radius-sm);margin:6px 0;transition:border-color .2s,box-shadow .2s;
+  }
+  .admin-card input:focus,.admin-card select:focus{outline:none;border-color:rgba(255,106,0,.55);box-shadow:0 0 0 3px var(--accent-soft)}
+  .result{padding:13px;border:1px solid var(--line);border-radius:var(--radius-sm);margin:10px 0;background:var(--bg-elevated);transition:border-color .15s,background .15s}
   #tmdb-results .result,#categories .result{cursor:pointer}
-  #tmdb-results .result:hover{background:#1a1a1a}
+  #tmdb-results .result:hover,#categories .result:hover{background:var(--bg-card-hover);border-color:rgba(255,106,0,.4)}
   #page-search{font-weight:700}
   .admin-card h2,.admin-card h3{font-weight:900;letter-spacing:.2px}
   .admin-card button{font-weight:800}
-  .box-panel{border:1px solid #2a2a2a;border-radius:14px;padding:16px;background:#141414}
-  .box-panel.watch-panel{border-color:#facc15}
-  .box-panel.download-panel{border-color:#10b981}
-  .group-card{border:1px solid #333333;border-radius:12px;padding:12px;margin:12px 0;background:#141414}
+  .box-panel{border:1px solid var(--line);border-radius:var(--radius);padding:16px;background:var(--bg-elevated)}
+  .box-panel.watch-panel{border-color:rgba(255,106,0,.55)}
+  .box-panel.download-panel{border-color:rgba(30,187,255,.5)}
+  .group-card{border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:12px;margin:12px 0;background:var(--bg-card)}
   .group-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-  .btn-row{border:1px solid #2a2a2a;border-radius:10px;padding:10px;margin-top:8px;background:#111111}
-  .field-label{display:block;font-size:12px;font-weight:700;color:#facc15;margin-top:6px}
+  .btn-row{border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px;margin-top:8px;background:var(--bg)}
+  .field-label{display:block;font-size:12px;font-weight:700;color:var(--accent-2);margin-top:6px;letter-spacing:.03em}
   @media(max-width:600px){
-    .admin-card{padding:13px}
+    .admin-card{padding:14px}
     .admin-grid{grid-template-columns:1fr}
     .admin-card input,.admin-card select,.admin-card button{min-height:44px}
   }
 </style>
 {% endblock %}
 {% block content %}
-<h1>HITLER YT · Control Center</h1>
-<p class="muted">Manage website and playback settings. Changes are saved to MongoDB.</p>
+<div class="page-hero" style="min-height:110px;padding:22px clamp(20px,4vw,40px)">
+  <div>
+    <h1 style="font-size:clamp(1.3rem,3.2vw,1.9rem)">Control Center</h1>
+    <p>Manage website and playback settings. Changes are saved to MongoDB.</p>
+  </div>
+</div>
 
 <div class="admin-grid">
   <section class="card admin-card">
@@ -49,16 +59,16 @@
   </section>
 
   <section class="card admin-card">
-    <h2>🌐 Website & Cloudflare Tunnel URLs</h2>
-    <label class="field-label">Cloudflare Try URL (Download, Stream & Button Links)</label>
-    <input id="base-url" type="url" placeholder="https://name.trycloudflare.com">
-    <label class="field-label">Backend Tunnel URL (Cloudflare → VPS)</label>
-    <input id="backend-url" type="url" placeholder="https://name.trycloudflare.com">
+    <h2>🌐 Website & ngrok Tunnel URLs</h2>
+    <label class="field-label">ngrok URL (Download, Stream & Button Links)</label>
+    <input id="base-url" type="url" placeholder="https://your-ngrok-domain.ngrok-free.app">
+    <label class="field-label">Backend Tunnel URL (ngrok → VPS)</label>
+    <input id="backend-url" type="url" placeholder="https://your-ngrok-domain.ngrok-free.app">
     <label class="field-label">Vercel Website URL (Catalog Website)</label>
     <input id="vercel-url" type="url" readonly placeholder="Detected on first Vercel visit">
     <small class="muted" id="website-urls"></small>
     <button class="btn accent" type="button" onclick="saveUrls()" style="margin-top:8px;width:100%">Save & Rewrite Button URLs</button>
-    <p id="url-status" class="muted" style="margin-top:6px">All download links, stream links, and title-page button URLs automatically use your Cloudflare trycloudflare.com URL.</p>
+    <p id="url-status" class="muted" style="margin-top:6px">All download links, stream links, and title-page button URLs automatically use your ngrok URL.</p>
   </section>
 
   <section class="card admin-card">
@@ -92,6 +102,7 @@
       <input id="edit-overview" placeholder="Description">
       <label class="field-label">Poster URL or TMDB poster path</label>
       <input id="edit-poster" placeholder="Poster URL or TMDB poster path">
+      <input id="edit-backdrop" placeholder="Backdrop URL or TMDB backdrop path (landscape, used on title/watch pages)">
     </div>
     <div>
       <label class="field-label">Release Date</label>
@@ -188,7 +199,7 @@ async function saveUrls() {
     document.getElementById('vercel-url').value = d.vercel_url || '';
     document.getElementById('website-urls').textContent =
       'Registered Vercel Website URLs: ' + ((d.website_urls || []).join(' · ') || 'Waiting for first Vercel visit');
-    box.textContent = 'Saved to MongoDB! Download links, stream links, and title-page button URLs now use this Cloudflare URL.';
+    box.textContent = 'Saved to MongoDB! Download links, stream links, and title-page button URLs now use this ngrok URL.';
     if (document.getElementById('page-select').value) {
       await loadPageEditor();
     }
@@ -323,6 +334,7 @@ async function loadPageEditor() {
   document.getElementById('edit-title').value = p.title || '';
   document.getElementById('edit-overview').value = p.overview || '';
   document.getElementById('edit-poster').value = p.poster_path || '';
+  document.getElementById('edit-backdrop').value = p.backdrop_path || '';
   document.getElementById('edit-date').value = p.release_date || '';
   document.getElementById('edit-rating').value = p.rating ?? '';
   document.getElementById('edit-type').value = p.media_type || 'movie';
@@ -600,6 +612,7 @@ async function savePageEditor() {
         title: document.getElementById('edit-title').value.trim(),
         overview: document.getElementById('edit-overview').value,
         poster_path: document.getElementById('edit-poster').value.trim(),
+        backdrop_path: document.getElementById('edit-backdrop').value.trim(),
         release_date: document.getElementById('edit-date').value.trim(),
         rating: document.getElementById('edit-rating').value ? Number(document.getElementById('edit-rating').value) : null,
         media_type: document.getElementById('edit-type').value,
@@ -608,7 +621,7 @@ async function savePageEditor() {
       }),
     });
     await loadPageEditor();
-    document.getElementById('edit-status').textContent = '✅ Saved to shared MongoDB! Watch & Download groups and Cloudflare button URLs are now live.';
+    document.getElementById('edit-status').textContent = '✅ Saved to shared MongoDB! Watch & Download groups and ngrok button URLs are now live.';
   } catch (e) {
     document.getElementById('edit-status').textContent = '❌ Save failed: ' + e.message;
   }

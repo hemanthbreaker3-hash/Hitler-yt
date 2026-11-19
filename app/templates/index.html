@@ -1,30 +1,46 @@
 {% extends "base.html" %}
-{% block title %}HITLER YT · Movies & Series{% endblock %}
+{% block title %}{{ BRANDING }} · Movies & Series{% endblock %}
 {% block nav_home %}active{% endblock %}
 {% block content %}
-<div class="page-hero">
-  <div>
-    <h1>Discover media</h1>
-    <p>Browse the catalog, open a title, then stream or get files in Telegram.</p>
+<style>#catalog-pagination[hidden]{display:none!important}#catalog-pagination button{background:var(--bg-card);border:1px solid var(--line-strong);color:var(--text);border-radius:9px;padding:8px 12px;cursor:pointer;font-weight:700}#catalog-pagination button:disabled{opacity:.4;cursor:not-allowed}#catalog-pagination button.active{background:linear-gradient(125deg,var(--accent),var(--accent-2));color:#180b02;border-color:transparent}</style>
+<style>
+.home-cinema{position:relative;margin:22px 0 28px;min-height:clamp(300px,42vw,500px);border:1px solid rgba(255,255,255,.09);border-radius:24px;overflow:hidden;background:#101116;box-shadow:0 28px 80px rgba(0,0,0,.48)}
+.home-cinema .backdrop-img{filter:saturate(.86);transform:scale(1.015)}
+.home-cinema .backdrop-scrim{background:linear-gradient(90deg,rgba(4,5,8,.94) 0%,rgba(4,5,8,.68) 48%,rgba(4,5,8,.08) 100%),linear-gradient(0deg,rgba(4,5,8,.68),transparent 52%)}
+.home-cinema .backdrop-content{padding:clamp(22px,5vw,54px);max-width:760px}
+.home-cinema #homeHeroTitle{font-size:clamp(2rem,5.2vw,4rem)!important;letter-spacing:-.045em!important;background:linear-gradient(100deg,#fff 10%,#f2dfb7 65%,#d8b36a)!important;-webkit-background-clip:text!important;background-clip:text!important;color:transparent!important}
+.home-cinema .hero-eyebrow{letter-spacing:.24em!important;color:#d8b36a!important}
+#trending-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(142px,1fr));gap:16px}
+@media(max-width:600px){.home-cinema{min-height:330px;border-radius:18px}.home-cinema .backdrop-scrim{background:linear-gradient(0deg,rgba(4,5,8,.94),rgba(4,5,8,.2) 100%)}#trending-row{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}}
+</style>
+<section class="backdrop-hero home-cinema" id="homeHero" style="min-height:clamp(300px,42vw,500px)">
+  <div class="backdrop-img" id="homeHeroImg"></div>
+  <div class="backdrop-scrim"></div>
+  <div class="backdrop-content" style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-height:clamp(300px,42vw,500px)">
+    <div class="hero-eyebrow" style="color:var(--accent-2);font-weight:800;font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:10px;font-family:var(--font-display)">{{ BRANDING }}</div>
+    <h1 id="homeHeroTitle" style="font-size:clamp(1.6rem,5vw,3rem);margin:0 0 10px;line-height:1.08;background:linear-gradient(100deg,#fff 15%,#c4b5fd 55%,var(--accent-2));-webkit-background-clip:text;background-clip:text;color:transparent">Discover Your Next Favourite</h1>
+    <p id="homeHeroOverview" class="muted" style="max-width:60ch;margin-bottom:16px">Explore the worlds you love. Discover your next movie, anime or series.</p>
+    <div id="homeHeroActions" style="display:flex;gap:10px;flex-wrap:wrap"></div>
   </div>
-</div>
+</section>
 
 <form class="search-bar" action="/search" method="get" role="search">
   <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
-  <input name="q" placeholder="Search movies, series, or keywords…" autocomplete="off" maxlength="100" aria-label="Search catalog">
+  <input name="q" placeholder="Search anime, movies, series…" autocomplete="off" maxlength="100" aria-label="Search catalog">
   <button type="submit">Search</button>
 </form>
 
 <div id="trending-row" class="trending-row" style="display:none" aria-label="Trending"></div>
 
 <div class="section-head" id="catalog">
-  <h2>Catalog</h2>
+  <h2>Now Showing</h2>
   <span class="chip" id="result-count">Loading…</span>
 </div>
 <div class="cat-nav" id="category-nav"></div>
 <div class="poster-grid" id="catalog-grid">
   <p class="muted" style="grid-column:1/-1;padding:48px 0;text-align:center">Loading titles…</p>
 </div>
+<div id="catalog-pagination" class="related-pager" hidden aria-label="Catalog pagination" style="display:flex;align-items:center;justify-content:center;gap:8px;margin:20px 0;flex-wrap:wrap"></div>
 
 <script>
 (async () => {
@@ -32,6 +48,9 @@
   const nav = document.getElementById('category-nav');
   const countEl = document.getElementById('result-count');
   const trend = document.getElementById('trending-row');
+  let catalogPage = 1;
+  const CATALOG_PER_PAGE = 24;
+  let catalogItems = [];
   const params = new URLSearchParams(location.search);
   let category = params.get('category') || '';
   let q = params.get('q') || '';
@@ -39,7 +58,52 @@
   function posterUrl(p) {
     if (!p) return '/static/images/poster.jpg';
     if (String(p).startsWith('http')) return p;
-    return 'https://image.tmdb.org/t/p/w500' + p;
+    return 'https://image.tmdb.org/t/p/w780' + p;
+  }
+
+  function backdropUrl(p) {
+    if (!p) return '';
+    if (String(p).startsWith('http')) return p;
+    return 'https://image.tmdb.org/t/p/original' + p;
+  }
+
+  function applyHero(list) {
+    const pick = list.find(x => x.backdrop_path) || list[0];
+    if (!pick) return;
+    const heroImg = document.getElementById('homeHeroImg');
+    const heroTitle = document.getElementById('homeHeroTitle');
+    const heroOverview = document.getElementById('homeHeroOverview');
+    const heroActions = document.getElementById('homeHeroActions');
+    const bg = backdropUrl(pick.backdrop_path) || posterUrl(pick.poster_path);
+    if (heroImg && bg) heroImg.style.backgroundImage = 'url("' + bg.replace(/"/g, '\\"') + '")';
+    if (heroTitle) heroTitle.textContent = pick.title || 'Discover Your Next Favourite';
+    if (heroOverview) heroOverview.textContent = pick.overview || 'Explore the worlds you love. Discover your next movie, anime or series.';
+    if (heroActions) {
+      heroActions.innerHTML = '';
+      const meta = document.createElement('div');
+      meta.className = 'hero-meta';
+      const year = (pick.release_date || pick.first_air_date || '').toString().slice(0, 4);
+      if (year) { const pill = document.createElement('span'); pill.className = 'pill'; pill.textContent = year; meta.appendChild(pill); }
+      if (pick.rating != null && Number(pick.rating) > 0) {
+        const pill = document.createElement('span'); pill.className = 'pill gold';
+        pill.textContent = '★ ' + Number(pick.rating).toFixed(1); meta.appendChild(pill);
+      }
+      if (pick.media_type) { const pill = document.createElement('span'); pill.className = 'pill'; pill.textContent = String(pick.media_type).toUpperCase(); meta.appendChild(pill); }
+      if ((pick.genres || []).length) { const pill = document.createElement('span'); pill.className = 'pill'; pill.textContent = pick.genres.slice(0, 2).join(' · '); meta.appendChild(pill); }
+      heroActions.appendChild(meta);
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap';
+      const watchBtn = document.createElement('a');
+      watchBtn.className = 'btn btn-yellow';
+      watchBtn.href = '/title/' + encodeURIComponent(pick.slug);
+      watchBtn.textContent = '▶ Play';
+      const infoBtn = document.createElement('a');
+      infoBtn.className = 'btn';
+      infoBtn.href = '/title/' + encodeURIComponent(pick.slug);
+      infoBtn.textContent = 'More info';
+      row.appendChild(watchBtn); row.appendChild(infoBtn);
+      heroActions.appendChild(row);
+    }
   }
 
   function card(p) {
@@ -50,20 +114,68 @@
     img.src = posterUrl(p.poster_path);
     img.alt = (p.title || 'Poster') + ' poster';
     img.loading = 'lazy';
+    img.decoding = 'async';
+    const badges = document.createElement('div');
+    badges.className = 'badge-row';
+    const rating = p.rating != null && p.rating !== '' ? Number(p.rating) : null;
+    if (rating != null && !Number.isNaN(rating) && rating > 0) {
+      const b = document.createElement('span');
+      b.className = 'badge badge-rating';
+      b.textContent = '★ ' + (rating % 1 ? rating.toFixed(1) : rating);
+      badges.appendChild(b);
+    }
+    const year = (p.release_date || p.first_air_date || '').toString().slice(0, 4);
+    if (year) {
+      const y = document.createElement('span');
+      y.className = 'badge badge-year';
+      y.textContent = year;
+      badges.appendChild(y);
+    }
+    const play = document.createElement('div');
+    play.className = 'play-hint';
+    play.innerHTML = '<span>▶</span>';
     const info = document.createElement('div');
     info.className = 'info';
-    const t = document.createElement('div');
-    t.className = 'title';
-    const year = (p.release_date || '').slice(0, 4);
-    t.textContent = (p.title || 'Untitled') + (year ? ' (' + year + ')' : '');
-    const m = document.createElement('div');
-    m.className = 'meta';
-    m.textContent = [p.media_type || '', p.rating != null ? '★ ' + p.rating : ''].filter(Boolean).join(' · ');
-    info.appendChild(t);
-    info.appendChild(m);
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = p.title || 'Untitled';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const parts = [];
+    if (p.media_type) parts.push(String(p.media_type).toUpperCase());
+    if (Array.isArray(p.genres) && p.genres.length) parts.push(p.genres.slice(0, 2).join(', '));
+    meta.textContent = parts.join(' · ');
+    info.appendChild(title);
+    info.appendChild(meta);
     a.appendChild(img);
+    a.appendChild(badges);
+    a.appendChild(play);
     a.appendChild(info);
     return a;
+  }
+
+  function renderCatalogPage() {
+    const pages = Math.max(1, Math.ceil(catalogItems.length / CATALOG_PER_PAGE));
+    catalogPage = Math.min(Math.max(1, catalogPage), pages);
+    grid.innerHTML = '';
+    catalogItems.slice((catalogPage - 1) * CATALOG_PER_PAGE, catalogPage * CATALOG_PER_PAGE).forEach(p => grid.appendChild(card(p)));
+    const pager = document.getElementById('catalog-pagination');
+    if (!pager) return;
+    pager.hidden = pages <= 1;
+    pager.innerHTML = '';
+    if (pages <= 1) return;
+    const make = (label, page, disabled = false, active = false) => {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+      b.disabled = disabled; if (active) b.classList.add('active');
+      b.setAttribute('aria-label', label === '‹' ? 'Previous page' : label === '›' ? 'Next page' : 'Page ' + label);
+      b.onclick = () => { catalogPage = page; renderCatalogPage(); document.getElementById('catalog')?.scrollIntoView({behavior:'smooth',block:'start'}); };
+      pager.appendChild(b);
+    };
+    make('‹', catalogPage - 1, catalogPage <= 1);
+    const start = Math.max(1, Math.min(catalogPage - 2, pages - 4));
+    const end = Math.min(pages, start + 4);
+    for (let n = start; n <= end; n++) make(String(n), n, false, n === catalogPage);
+    make('›', catalogPage + 1, catalogPage >= pages);
   }
 
   function chip(label, value, active) {
@@ -89,11 +201,12 @@
       const qs = new URLSearchParams();
       if (category) qs.set('category', category);
       if (q) qs.set('q', q);
-      const r = await fetch('/api/public/catalog?' + qs.toString(), { cache: 'no-store' });
+      const r = await fetch('/api/catalog?' + qs.toString(), { cache: 'no-store' });
       if (!r.ok) throw new Error('Catalog API returned HTTP ' + r.status);
       const data = await r.json();
       const list = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
-      const cats = Array.isArray(data.categories) ? data.categories : [];
+      let cats = Array.isArray(data.categories) ? data.categories : [];
+      if (!cats.length) { try { const cr = await fetch('/api/categories', {cache:'no-store'}); if (cr.ok) { const cd = await cr.json(); cats = Array.isArray(cd.items) ? cd.items : []; } } catch (_) {} }
 
       countEl.textContent = list.length ? list.length + ' titles' : '0 titles';
       nav.innerHTML = '';
@@ -106,7 +219,10 @@
         grid.innerHTML = '<p class="muted" style="grid-column:1/-1;padding:48px 0;text-align:center">No titles found. Publish movies or series from the bot or the panel.</p>';
         return;
       }
-      list.forEach(p => grid.appendChild(card(p)));
+      catalogItems = list;
+      catalogPage = 1;
+      renderCatalogPage();
+      applyHero(list);
 
       const top = list.slice(0, 12);
       if (top.length) {
@@ -140,3 +256,12 @@
 })();
 </script>
 {% endblock %}
+
+<style>
+/* Reference-inspired cinematic catalogue */
+.home-cinema{border-radius:22px;background:#090909;box-shadow:0 24px 70px rgba(0,0,0,.55);border-color:rgba(216,179,106,.18)}
+.poster-card{border-radius:16px;background:#101010;border-color:rgba(255,255,255,.08)}
+.poster-card:hover{border-color:rgba(216,179,106,.55);box-shadow:0 20px 42px rgba(0,0,0,.55),0 0 22px rgba(216,179,106,.10)}
+.section-head h2::before{background:linear-gradient(180deg,#f2dfb7,#b98a3e)}
+.search-bar:focus-within{border-color:rgba(216,179,106,.55);box-shadow:0 0 0 4px rgba(216,179,106,.10),0 10px 30px rgba(0,0,0,.3)}
+</style>

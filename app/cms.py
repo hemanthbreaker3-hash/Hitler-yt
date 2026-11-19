@@ -19,6 +19,7 @@ from app.utils.helpers import (
     is_trycloudflare_url,
     normalize_public_base_url,
     rewrite_page_groups_to_cloudflare,
+    extract_watch_short_code,
 )
 
 router = APIRouter()
@@ -48,6 +49,7 @@ class PageInput(BaseModel):
     title: str = Field(min_length=1, max_length=180)
     overview: str = Field(default='', max_length=10000)
     poster_path: str = ''
+    backdrop_path: str = ''
     release_date: str = ''
     rating: float | None = None
     media_type: str = 'movie'
@@ -124,7 +126,7 @@ def serialize_catalog_doc(doc: dict, cloudflare_base: str | None = None) -> dict
 
 
 async def rewrite_all_stored_catalog_buttons(cloudflare_base: str | None) -> int:
-    """Update all stored button URLs in catalog_pages so their domain uses the active Cloudflare try URL."""
+    """Update all stored button URLs in catalog_pages so their domain uses the active ngrok URL."""
     if not cloudflare_base:
         return 0
     try:
@@ -148,7 +150,7 @@ async def rewrite_all_stored_catalog_buttons(cloudflare_base: str | None) -> int
 async def get_settings():
     doc = await site_settings.find_one({'_id': 'runtime'}) or {}
     rows = await settings_col.find(
-        {'key': {'$in': ['base_url', 'backend_url', 'cloudflare_url', 'vercel_url', 'website_urls']}},
+        {'key': {'$in': ['base_url', 'backend_url', 'ngrok_url', 'cloudflare_url', 'vercel_url', 'website_urls']}},
         {'key': 1, 'value': 1},
     ).to_list(10)
     urls = {x['key']: x.get('value', '') for x in rows if isinstance(x, dict) and 'key' in x}
@@ -168,6 +170,7 @@ async def get_settings():
         'filestore_bot_username': fs_user,
         'base_url': cf_url or urls.get('base_url') or settings.BASE_URL,
         'backend_url': cf_url or urls.get('backend_url') or (settings.BACKEND_URL or ''),
+        'ngrok_url': cf_url,
         'cloudflare_url': cf_url,
         'vercel_url': urls.get('vercel_url') or os.getenv('WEBSITE_URL', '') or (web_url if not is_trycloudflare_url(web_url) else ''),
         'website_urls': website_urls,
@@ -369,6 +372,19 @@ async def title_page(request: Request, slug: str):
         raise HTTPException(404, 'Title not found')
     cf_base = await get_active_cloudflare_url() or settings.BASE_URL.rstrip('/')
     page = serialize_catalog_doc(raw_page, cf_base)
+    # Aggregate persisted view counts from this title's Watch links only.
+    watch_codes = set()
+    for group in (page.get('groups') or []):
+        if str((group or {}).get('box') or 'watch').strip().lower() not in ('watch', ''):
+            continue
+        for button in (group or {}).get('buttons') or []:
+            code = extract_watch_short_code((button or {}).get('url'))
+            if code:
+                watch_codes.add(code)
+    page['view_count'] = 0
+    if watch_codes:
+        rows = await db.files.find({'short_code': {'$in': list(watch_codes)}}, {'access_count': 1}).to_list(None)
+        page['view_count'] = sum(int(row.get('access_count') or 0) for row in rows)
     settings_doc = await get_settings()
     fs_user = (settings_doc.get('filestore_bot_username') or '').strip().lstrip('@')
     telegram_groups = build_telegram_groups_from_watch(page.get('groups') or [], fs_user) if fs_user else []
@@ -515,6 +531,7 @@ async def tmdb_search(q: str, media_type: str = 'multi', _: bool = Depends(admin
                 'title': x.get('title') or x.get('name'),
                 'overview': x.get('overview', ''),
                 'poster_path': x.get('poster_path'),
+                'backdrop_path': x.get('backdrop_path'),
                 'release_date': x.get('release_date') or x.get('first_air_date', ''),
                 'rating': x.get('vote_average'),
             }
@@ -569,18 +586,46 @@ async def create_page(data: PageInput, _: bool = Depends(admin_auth)):
     )
     if data.tmdb_id and settings.TMDB_API_KEY:
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=20) as client:
                 endpoint = 'tv' if data.media_type == 'tv' else 'movie'
                 detail = await client.get(
                     f'https://api.themoviedb.org/3/{endpoint}/{data.tmdb_id}',
-                    params={'api_key': settings.TMDB_API_KEY, 'append_to_response': 'external_ids'},
+                    params={
+                        'api_key': settings.TMDB_API_KEY,
+                        'append_to_response': 'external_ids,credits,images,content_ratings,release_dates',
+                        'language': 'en-US',
+                    },
                 )
                 detail.raise_for_status()
                 meta = detail.json()
             doc['genres'] = [g.get('name', '') for g in meta.get('genres', []) if g.get('name')]
             doc['imdb_id'] = (meta.get('external_ids') or {}).get('imdb_id') or meta.get('imdb_id', '')
             doc['runtime'] = meta.get('runtime') or (meta.get('episode_run_time') or [None])[0]
-            doc['tagline'] = meta.get('tagline', '')
+            doc['tagline'] = meta.get('tagline') or doc.get('tagline') or ''
+            if meta.get('vote_average') is not None:
+                doc['rating'] = round(float(meta['vote_average']), 1)
+            if meta.get('vote_count') is not None:
+                doc['vote_count'] = int(meta['vote_count'])
+            if not doc.get('overview') and meta.get('overview'):
+                doc['overview'] = meta.get('overview')
+            if not doc.get('poster_path') and meta.get('poster_path'):
+                doc['poster_path'] = meta['poster_path']
+            if not doc.get('backdrop_path') and meta.get('backdrop_path'):
+                doc['backdrop_path'] = meta['backdrop_path']
+            if not doc.get('release_date'):
+                doc['release_date'] = meta.get('release_date') or meta.get('first_air_date') or ''
+            # Top cast (up to 8) for title page UI
+            cast = (meta.get('credits') or {}).get('cast') or []
+            if cast:
+                doc['cast'] = [
+                    {
+                        'name': c.get('name') or '',
+                        'character': c.get('character') or '',
+                        'profile_path': c.get('profile_path') or '',
+                    }
+                    for c in cast[:8]
+                    if c.get('name')
+                ]
         except Exception:
             pass
     doc['updated_at'] = doc['created_at']

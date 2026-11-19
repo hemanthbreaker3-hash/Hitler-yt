@@ -87,7 +87,7 @@ def format_bytes(size: int):
 
 
 def normalize_public_base_url(value: str) -> str:
-    """Validate and normalize a public URL (including *.trycloudflare.com Quick Tunnels) for Telegram buttons and links."""
+    """Validate and normalize a public URL (including ngrok public tunnel domains) for Telegram buttons and links."""
     if not isinstance(value, str) or not value.strip():
         raise ValueError("BASE_URL is empty. Set it to a public HTTPS URL using /baseurl.")
 
@@ -129,7 +129,12 @@ def is_trycloudflare_url(value: str | None) -> bool:
         if not raw.startswith(("http://", "https://")):
             raw = "https://" + raw
         host = (urlparse(raw).hostname or "").lower().rstrip(".")
-        return host == "trycloudflare.com" or host.endswith(".trycloudflare.com")
+        return (
+            host == "ngrok-free.app" or host.endswith(".ngrok-free.app")
+            or host == "ngrok-free.dev" or host.endswith(".ngrok-free.dev")
+            or host == "ngrok.io" or host.endswith(".ngrok.io")
+            or host == "trycloudflare.com" or host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok-free.dev", ".ngrok.io"))
+        )
     except Exception:
         return False
 
@@ -150,7 +155,7 @@ def is_vercel_url(value: str | None) -> bool:
 def rewrite_media_or_button_url(target_url: str, cloudflare_base: str | None, force_replace_domain: bool = True) -> str:
     """
     Replace the domain of a button URL, download link (/dl/), stream link (/stream/),
-    watch link (/watch/), or remux link (/remux/) with the active Cloudflare trycloudflare.com URL.
+    watch link (/watch/), or remux link (/remux/) with the active public ngrok tunnel URL.
     """
     target = str(target_url or "").strip()
     if not target or not cloudflare_base:
@@ -174,7 +179,7 @@ def rewrite_media_or_button_url(target_url: str, cloudflare_base: str | None, fo
     should_replace_domain = (
         force_replace_domain
         or parsed.path.startswith(media_prefixes)
-        or host.endswith(".trycloudflare.com")
+        or host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok-free.dev", ".ngrok.io"))
         or host.endswith(".vercel.app")
     )
     if should_replace_domain:

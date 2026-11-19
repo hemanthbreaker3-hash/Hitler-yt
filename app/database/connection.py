@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     SESSIONS: str = ""
     ADMIN_PANEL_TOKEN: str = ""
     TMDB_API_KEY: str = ""
+    BRANDING: str = "HITLER YT"
+    LOGO_URL: str = ""
     STREAM_CHUNK_SIZE: int = 4194304
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=True)
@@ -131,12 +133,12 @@ def _valid_public_candidate(value: str | None) -> str | None:
 
 async def get_active_cloudflare_url() -> str | None:
     """
-    Resolve the active Cloudflare tunnel URL (https://*.trycloudflare.com) used exclusively
+    Resolve the active ngrok tunnel URL (https://*.ngrok-free.app) used exclusively
     for download links (/dl/), stream/watch links (/watch/, /stream/, /remux/), and catalog button URLs.
     """
     try:
         rows = await settings_col.find(
-            {"key": {"$in": ["cloudflare_url", "backend_url", "base_url"]}},
+            {"key": {"$in": ["ngrok_url", "cloudflare_url", "backend_url", "base_url"]}},
             {"key": 1, "value": 1},
         ).to_list(10)
         stored = {r["key"]: r.get("value") for r in rows if isinstance(r, dict) and "key" in r}
@@ -144,9 +146,10 @@ async def get_active_cloudflare_url() -> str | None:
         stored = {}
 
     candidates = [
+        stored.get("ngrok_url"),
         stored.get("cloudflare_url"),
         stored.get("backend_url"),
-        os.environ.get("CLOUDFLARE_URL"),
+        os.environ.get("NGROK_URL"),
         settings.BACKEND_URL,
         stored.get("base_url"),
         settings.BASE_URL,
@@ -158,7 +161,7 @@ async def get_active_cloudflare_url() -> str | None:
         if norm and norm not in valid_candidates:
             valid_candidates.append(norm)
 
-    # 1. Always prefer any *.trycloudflare.com URL
+    # 1. Always prefer any *.ngrok-free.app URL
     for c in valid_candidates:
         if is_trycloudflare_url(c):
             return c
@@ -216,6 +219,27 @@ async def get_active_website_url() -> str | None:
     if cf_url:
         return cf_url
     return settings.BASE_URL.rstrip("/")
+
+
+async def get_watch_page_base_url() -> str | None:
+    """
+    Base URL for user-facing Watch Online / title links.
+
+    Prefer the Vercel website so /watch pages open even when the tunnel is
+    rate-limited; Vercel proxies /stream|/dl|/remux to the VPS backend.
+    Fall back to the media tunnel URL, then BASE_URL.
+    """
+    site = await get_active_vercel_website_url()
+    if site:
+        return site.rstrip("/")
+    site = await get_active_website_url()
+    if site:
+        return site.rstrip("/")
+    media = await get_active_cloudflare_url()
+    if media:
+        return media.rstrip("/")
+    base = (settings.BASE_URL or settings.WEBSITE_URL or "").rstrip("/")
+    return base or None
 
 
 async def load_custom_settings() -> None:
@@ -281,7 +305,7 @@ async def load_custom_settings() -> None:
                 upsert=True,
             )
 
-    # Clean any *.trycloudflare.com entries out of website_urls so website_urls stays strictly for Vercel
+    # Clean any *.ngrok-free.app entries out of website_urls so website_urls stays strictly for Vercel
     web_doc = await settings_col.find_one({"key": "website_urls"}, {"value": 1})
     if web_doc and isinstance(web_doc.get("value"), list):
         cleaned = [u for u in web_doc["value"] if not is_trycloudflare_url(str(u))]
@@ -291,7 +315,7 @@ async def load_custom_settings() -> None:
                 {"$set": {"value": cleaned, "updated_at": now}},
             )
 
-    # If an active Cloudflare URL is present on startup, ensure all catalog button URLs use it
+    # If an active ngrok URL is present on startup, ensure all catalog button URLs use it
     if active_cf:
         cursor = db.catalog_pages.find({"groups.0": {"$exists": True}}, {"_id": 1, "groups": 1})
         async for doc in cursor:

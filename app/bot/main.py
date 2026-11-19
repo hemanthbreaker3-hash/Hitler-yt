@@ -25,12 +25,13 @@ from app.database.connection import (
     db,
     get_active_cloudflare_url,
     get_active_website_url,
+    get_watch_page_base_url,
 )
 from app.admin.auth import make_password_hash
 from app.cms import rewrite_all_stored_catalog_buttons
 from app.models.schemas import FileMetadata, User
 from app.streamer.manager import session_manager
-from app.utils.cloudflare_tunnel import _extract_tunnel_url_from_logs, apply_auto_cloudflare_url
+from app.utils.ngrok_tunnel import _extract_tunnel_url_from_logs, apply_auto_cloudflare_url
 from app.utils.helpers import (
     generate_short_code,
     format_bytes,
@@ -67,6 +68,9 @@ _awaiting_link_admins: set[int] = set()
 
 # /addgroups state: user_id -> {"page_slug": str, "box": "watch"|"download"}
 _awaiting_addgroups: dict[int, dict] = {}
+# Short tokens for callback_data (Telegram limit 64 bytes) -> page slug
+# token is ~8 hex chars so callback stays well under the limit even with long slugs
+_addgroups_slug_tokens: dict[str, str] = {}
 # /save restore: set of admin user_ids waiting for a backup ZIP
 _awaiting_restore: set[int] = set()
 
@@ -162,12 +166,13 @@ async def _auto_delete_messages(client, chat_id: int, message_ids: list[int], de
 async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to_message: Message | None = None) -> bool:
     """
     Deliver the stored Telegram file to the user with Watch/Download buttons.
-    Tries multiple sources in order:
-      1) storage_chat_id / storage_message_id (log/storage channel — preferred)
-      2) chat_id / message_id (original upload message)
-      3) settings.CHANNEL_ID + storage_message_id
-      4) re-send by file_id (document/video/audio/photo)
-    Then schedules auto-delete when configured.
+
+    Does NOT require CHANNEL_ID. Priority:
+      1) Original source chat_id / message_id (batch / link / upload source)
+      2) storage_chat_id / storage_message_id (optional mirror)
+      3) settings.CHANNEL_ID + stored message ids (optional)
+      4) Live get_messages → fresh file_id → send_*
+      5) Stored file_id send_* fallback
     """
     short_code = file_data.get("short_code") or ""
     fname = file_data.get("filename") or "file"
@@ -179,7 +184,6 @@ async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to
     orig_chat = file_data.get("chat_id")
     orig_msg = file_data.get("message_id")
 
-    # Build candidate (from_chat_id, message_id) pairs — storage first
     candidates: list[tuple[int, int]] = []
     seen: set[tuple[int, int]] = set()
 
@@ -194,17 +198,34 @@ async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to
             seen.add(pair)
             candidates.append(pair)
 
-    _add(storage_chat, storage_msg)
+    # Prefer the original source the bot already has access to (batch/link).
+    # Storage channel is optional, not required.
     _add(orig_chat, orig_msg)
+    _add(storage_chat, storage_msg)
     if settings.CHANNEL_ID and storage_msg is not None:
         _add(settings.CHANNEL_ID, storage_msg)
     if settings.CHANNEL_ID and orig_msg is not None:
         _add(settings.CHANNEL_ID, orig_msg)
 
+    async def _send_by_file_id(fid: str, media_mime: str):
+        send_kwargs = {"chat_id": user_id, "caption": f"📂 {fname}"}
+        m = (media_mime or mime or "").lower()
+        if m.startswith("video/") or "video" in m:
+            return await client.send_video(video=fid, **send_kwargs)
+        if m.startswith("audio/") or "audio" in m:
+            return await client.send_audio(audio=fid, **send_kwargs)
+        if m.startswith("image/") or "photo" in m:
+            try:
+                return await client.send_photo(photo=fid, **send_kwargs)
+            except Exception:
+                return await client.send_document(document=fid, **send_kwargs)
+        return await client.send_document(document=fid, **send_kwargs)
+
     copied = None
     last_err: Exception | None = None
 
     for from_chat, mid in candidates:
+        # 1) copy
         try:
             copied = await client.copy_message(
                 chat_id=user_id,
@@ -223,51 +244,82 @@ async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to
                 "FileStore copy failed short_code=%s from %s/%s: %s",
                 short_code, from_chat, mid, e,
             )
-            # Try forward as alternate
-            try:
-                if hasattr(client, "forward_messages"):
-                    copied = await client.forward_messages(
-                        chat_id=user_id,
-                        from_chat_id=from_chat,
-                        message_ids=mid,
+
+        # 2) forward
+        try:
+            if hasattr(client, "forward_messages"):
+                copied = await client.forward_messages(
+                    chat_id=user_id,
+                    from_chat_id=from_chat,
+                    message_ids=mid,
+                )
+                if isinstance(copied, list):
+                    copied = copied[0] if copied else None
+                if copied is not None:
+                    logger.info(
+                        "FileStore delivered short_code=%s via forward from %s/%s",
+                        short_code, from_chat, mid,
                     )
-                    # forward may return list
-                    if isinstance(copied, list):
-                        copied = copied[0] if copied else None
+                    break
+        except Exception as e2:
+            last_err = e2
+            logger.warning(
+                "FileStore forward failed short_code=%s from %s/%s: %s",
+                short_code, from_chat, mid, e2,
+            )
+
+        # 3) get_messages → fresh file_id → send (works when bot can read the source)
+        try:
+            src = await client.get_messages(from_chat, mid)
+            if isinstance(src, list):
+                src = src[0] if src else None
+            if src and not getattr(src, "empty", False):
+                media = (
+                    src.document or src.video or src.audio or src.animation
+                    or src.voice or src.video_note or src.photo
+                )
+                if src.photo and isinstance(src.photo, (list, tuple)):
+                    media = src.photo[-1]
+                live_fid = getattr(media, "file_id", None) if media else None
+                live_mime = getattr(media, "mime_type", None) if media else None
+                if live_fid:
+                    copied = await _send_by_file_id(str(live_fid), live_mime or "")
                     if copied is not None:
                         logger.info(
-                            "FileStore delivered short_code=%s via forward from %s/%s",
+                            "FileStore delivered short_code=%s via live file_id from %s/%s",
                             short_code, from_chat, mid,
                         )
+                        # Persist fresher file_id for next time
+                        try:
+                            await files_col.update_one(
+                                {"short_code": short_code},
+                                {"$set": {
+                                    "file_id": str(live_fid),
+                                    "file_unique_id": str(getattr(media, "file_unique_id", "") or ""),
+                                    "mime_type": live_mime or file_data.get("mime_type"),
+                                    "chat_id": from_chat,
+                                    "message_id": mid,
+                                }},
+                            )
+                        except Exception:
+                            pass
                         break
-            except Exception as e2:
-                last_err = e2
-                logger.warning(
-                    "FileStore forward failed short_code=%s from %s/%s: %s",
-                    short_code, from_chat, mid, e2,
-                )
+        except Exception as e3:
+            last_err = e3
+            logger.warning(
+                "FileStore get_messages/send failed short_code=%s from %s/%s: %s",
+                short_code, from_chat, mid, e3,
+            )
 
-    # Last resort: send by file_id (works when this bot owns the file_id)
+    # Last resort: stored file_id
     if copied is None and file_id:
         try:
-            send_kwargs = {"chat_id": user_id, "caption": f"📂 {fname}"}
-            if mime.startswith("video/") or "video" in mime:
-                copied = await client.send_video(video=file_id, **send_kwargs)
-            elif mime.startswith("audio/") or "audio" in mime:
-                copied = await client.send_audio(audio=file_id, **send_kwargs)
-            elif mime.startswith("image/") or "photo" in mime:
-                try:
-                    copied = await client.send_photo(photo=file_id, **send_kwargs)
-                except Exception:
-                    copied = await client.send_document(document=file_id, **send_kwargs)
-            else:
-                copied = await client.send_document(document=file_id, **send_kwargs)
+            copied = await _send_by_file_id(file_id, mime)
             if copied is not None:
-                logger.info("FileStore delivered short_code=%s via file_id", short_code)
+                logger.info("FileStore delivered short_code=%s via stored file_id", short_code)
         except Exception as e:
             last_err = e
             logger.warning("FileStore send by file_id failed short_code=%s: %s", short_code, e)
-            # one more try as document
             try:
                 copied = await client.send_document(
                     chat_id=user_id,
@@ -283,29 +335,34 @@ async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to
             "FileStore delivery exhausted for short_code=%s candidates=%s last_err=%s",
             short_code, candidates, last_err,
         )
+        detail = str(last_err) if last_err else "no reachable source"
         raise RuntimeError(
-            last_err or "No accessible storage for this file (set CHANNEL_ID and keep the storage message)."
+            f"Could not deliver file (bot needs access to the source message). "
+            f"Tried: {candidates or 'none'}. Last error: {detail}"
         )
 
     button_rows = []
     try:
-        base = await get_active_cloudflare_url()
-        if not base:
+        # Watch Online → Vercel website (proxies stream to VPS). Download can use same.
+        watch_base = await get_watch_page_base_url()
+        media_base = await get_active_cloudflare_url()
+        if not watch_base:
             try:
-                base = normalize_public_base_url(settings.BASE_URL)
+                watch_base = normalize_public_base_url(settings.BASE_URL or settings.WEBSITE_URL or "")
             except Exception:
-                base = (settings.BASE_URL or "").rstrip("/")
+                watch_base = (settings.BASE_URL or settings.WEBSITE_URL or "").rstrip("/")
+        dl_base = watch_base or media_base
         runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
         downloads_enabled = runtime.get("downloads_enabled", True)
         streaming_enabled = runtime.get("streaming_enabled", True)
         fs_username = (runtime.get("filestore_bot_username") or "").strip().lstrip("@")
 
-        if streaming_enabled and base and short_code:
-            watch_url = f"{base.rstrip('/')}/watch/{short_code}"
+        if streaming_enabled and watch_base and short_code:
+            watch_url = f"{watch_base.rstrip('/')}/watch/{short_code}"
             button_rows.append(InlineKeyboardButton("🍿 Watch Online", url=watch_url))
-        if base and short_code:
+        if dl_base and short_code:
             if downloads_enabled:
-                dl_url = f"{base.rstrip('/')}/dl/{short_code}"
+                dl_url = f"{dl_base.rstrip('/')}/dl/{short_code}"
                 button_rows.append(InlineKeyboardButton("⚡ Direct Download", url=dl_url))
             elif fs_username:
                 dl_url = filestore_deep_link(fs_username, short_code)
@@ -391,7 +448,7 @@ async def start_filestore_client(token: str, username: str | None = None) -> dic
     await stop_filestore_client()
 
     client = Client(
-        name=f"hitler_filestore_{clean.split(':', 1)[0]}",
+        name=f"HITLER YT_filestore_{clean.split(':', 1)[0]}",
         api_id=settings.API_ID,
         api_hash=settings.API_HASH,
         bot_token=clean,
@@ -441,7 +498,17 @@ async def start_filestore_client(token: str, username: str | None = None) -> dic
             await deliver_filestore_file(c, uid, file_data, message)
         except Exception as e:
             logger.exception("FileStore secondary delivery failed: %s", e)
-            await message.reply("❌ **Could not deliver this file**\n\n> Possible causes:\n> • Storage channel message missing (set `CHANNEL_ID`, re-upload file)\n> • Bot is not admin in the storage channel\n> • File was deleted from Telegram\n\n> Re-upload the file to the bot, then open the new deep link.")
+            err = html.escape(str(e)[:220])
+            await message.reply(
+                "❌ **Could not deliver this file**\n\n"
+                f"<code>{err}</code>\n\n"
+                "> Possible causes:\n"
+                "> • Bot cannot access the **source** channel/message (add bot as member/admin there)\n"
+                "> • Original message was deleted from Telegram\n"
+                "> • file_id expired — re-run `/batch` or `/link` on the source\n\n"
+                "> Storage channel (`CHANNEL_ID`) is **optional**. Access to the source chat is enough.",
+                parse_mode=ParseMode.HTML,
+            )
 
     await client.start()
     try:
@@ -508,7 +575,7 @@ async def resolve_bot_username_from_token(token: str) -> str:
             return ""
 
     client = Client(
-        name=f"hitler_fs_resolve_{clean.split(':', 1)[0]}",
+        name=f"HITLER YT_fs_resolve_{clean.split(':', 1)[0]}",
         api_id=settings.API_ID,
         api_hash=settings.API_HASH,
         bot_token=clean,
@@ -580,7 +647,7 @@ async def find_catalog_page(slug_or_title: str) -> dict | None:
     """Resolve a catalog page by slug (exact, then case-insensitive) or title fragment.
 
     Searches the bot DATABASE_NAME first, then alternate names Vercel may use
-    (tg_media_bot / file2link) so website pages are findable even if env differs slightly.
+    (tg_media_bot / animovieszoneflix) so website pages are findable even if env differs slightly.
     """
     from app.database.connection import client as mongo_client
 
@@ -592,7 +659,7 @@ async def find_catalog_page(slug_or_title: str) -> dict | None:
 
     primary_name = getattr(settings, "DATABASE_NAME", None) or "tg_media_bot"
     names = []
-    for n in (primary_name, "tg_media_bot", "file2link"):
+    for n in (primary_name, "tg_media_bot", "animovieszoneflix"):
         if n and n not in names:
             names.append(n)
 
@@ -626,7 +693,7 @@ async def catalog_page_suggestions(query: str, limit: int = 8) -> list[str]:
     seen_slugs: set[str] = set()
     primary_name = getattr(settings, "DATABASE_NAME", None) or "tg_media_bot"
     names = []
-    for n in (primary_name, "tg_media_bot", "file2link"):
+    for n in (primary_name, "tg_media_bot", "animovieszoneflix"):
         if n and n not in names:
             names.append(n)
     try:
@@ -721,8 +788,8 @@ async def setup_bot_commands(bot):
             BotCommand("manage", "Edit website pages and bot settings (admin)"),
             BotCommand("username", "Set website panel username (admin)"),
             BotCommand("password", "Set website panel password (admin)"),
-            BotCommand("backendurl", "Set backend / Cloudflare URL (admin)"),
-            BotCommand("baseurl", "Set primary / Cloudflare URL (admin)"),
+            BotCommand("backendurl", "Set backend / ngrok URL (admin)"),
+            BotCommand("baseurl", "Set primary / ngrok URL (admin)"),
             BotCommand("filestore", "Set FileStore bot for deep-link downloads (admin)"),
             BotCommand("fspanel", "FileStore panel: admins, fsub, auto-delete (admin)"),
             BotCommand("categories", "Manage categories (admin)"),
@@ -734,6 +801,7 @@ async def setup_bot_commands(bot):
             BotCommand("unban", "Unban a user (admin)"),
             BotCommand("autodel", "Auto-delete settings (admin)"),
             BotCommand("addgroups", "Add download/watch groups to a page (admin)"),
+            BotCommand("del", "Delete a website page by link, title, or slug (admin)"),
             BotCommand("save", "Backup or restore full project data (admin)"),
             BotCommand("batch", "Generate links for a message ID range (admin)"),
             BotCommand("ss", "Generate screenshots"),
@@ -954,12 +1022,25 @@ def register_handlers(bot):
                         if ok:
                             return
                         return await message.reply(
-                            "❌ **Could not deliver this file**\n\n> Possible causes:\n> • Storage channel message missing (set `CHANNEL_ID`, re-upload file)\n> • Bot is not admin in the storage channel\n> • File was deleted from Telegram\n\n> Re-upload the file to the bot, then open the new deep link."
+                            "❌ **Could not deliver this file**\n\n"
+                            "> Possible causes:\n"
+                            "> • Bot cannot access the **source** channel/message (add bot as member/admin there)\n"
+                            "> • Original message was deleted from Telegram\n"
+                            "> • file_id expired — re-run `/batch` or `/link` on the source\n\n"
+                            "> Storage channel (`CHANNEL_ID`) is **optional**. Access to the source chat is enough."
                         )
                     except Exception as e:
                         logger.exception("FileStore delivery failed for short_code=%s: %s", code, e)
+                        err = html.escape(str(e)[:220])
                         return await message.reply(
-                            "❌ **Could not deliver this file**\n\n> Possible causes:\n> • Storage channel message missing (set `CHANNEL_ID`, re-upload file)\n> • Bot is not admin in the storage channel\n> • File was deleted from Telegram\n\n> Re-upload the file to the bot, then open the new deep link."
+                            "❌ **Could not deliver this file**\n\n"
+                            f"<code>{err}</code>\n\n"
+                            "> Possible causes:\n"
+                            "> • Bot cannot access the **source** channel/message (add bot as member/admin there)\n"
+                            "> • Original message was deleted from Telegram\n"
+                            "> • file_id expired — re-run `/batch` or `/link` on the source\n\n"
+                            "> Storage channel (`CHANNEL_ID`) is **optional**. Access to the source chat is enough.",
+                            parse_mode=ParseMode.HTML,
                         )
                 else:
                     # Unknown code — fall through to normal greeting (avoid leaking existence)
@@ -1284,13 +1365,15 @@ def register_handlers(bot):
         if log_cf:
             await apply_auto_cloudflare_url(log_cf, source="media-upload-check")
 
+        # Prefer Vercel website for Watch Online; tunnel still used as fallback
         media_base = await get_active_cloudflare_url()
-        if media_base:
-            base_url = media_base
+        watch_base = await get_watch_page_base_url()
+        if watch_base or media_base:
+            base_url = watch_base or media_base
             links_ready = True
         else:
             try:
-                base_url = normalize_public_base_url(settings.BASE_URL)
+                base_url = normalize_public_base_url(settings.BASE_URL or settings.WEBSITE_URL or "")
                 links_ready = True
             except ValueError as exc:
                 logger.warning("Public BASE_URL not configured: %s", exc)
@@ -1342,7 +1425,7 @@ def register_handlers(bot):
                 f"📦 <b>File Size:</b> <code>{html.escape(formatted_size)}</code>\n"
                 f"⚙️ <b>MIME Type:</b> <code>{safe_mime}</code>\n\n"
                 "⚠️ <b>Public links are initializing...</b>\n"
-                "The Cloudflare Quick Tunnel URL is being auto-detected. Try again in a few seconds or use `/baseurl https://your-tunnel.trycloudflare.com`.\n\n"
+                "The ngrok tunnel URL is being auto-detected. Try again in a few seconds or use `/baseurl https://your-domain.ngrok-free.app`.\n\n"
                 f"📢 <a href=\"{html.escape(settings.UPDATE_CHANNEL_URL, quote=True)}\">Updates Channel</a>"
             )
             user_buttons = _kb([[InlineKeyboardButton("📢 Updates Channel", url=settings.UPDATE_CHANNEL_URL)], [InlineKeyboardButton("🗑️ Delete Link", callback_data=f"del_{short_code}")]])
@@ -1456,9 +1539,27 @@ def register_handlers(bot):
                     "`Watch Now: https://...`"
                 )
             existing = list(page.get("groups") or [])
-            # Keep groups of the other box; replace same-box groups that match names or append
-            other_box = [g for g in existing if (g.get("box") or "watch") != box]
-            merged = other_box + new_groups
+            # /addgroups is append-only: preserve every previously saved group.
+            # Skip only exact duplicates (same box, normalized name, and buttons/URLs).
+            merged = list(existing)
+            def _group_signature(group):
+                group_box = (group.get("box") or "watch").strip().lower()
+                group_name = (group.get("name") or "").strip().casefold()
+                buttons = tuple(
+                    ((button.get("name") or button.get("text") or "").strip().casefold(),
+                     (button.get("url") or button.get("link") or "").strip())
+                    for button in (group.get("buttons") or [])
+                )
+                return group_box, group_name, buttons
+            existing_signatures = {_group_signature(group) for group in existing}
+            added_groups = []
+            for group in new_groups:
+                signature = _group_signature(group)
+                if signature in existing_signatures:
+                    continue
+                merged.append(group)
+                existing_signatures.add(signature)
+                added_groups.append(group)
             # Rewrite URLs to active Cloudflare base if configured
             cf = await get_active_cloudflare_url()
             if cf:
@@ -1471,12 +1572,14 @@ def register_handlers(bot):
                 {"$set": {"groups": merged, "updated_at": datetime.datetime.now(datetime.timezone.utc)}},
             )
             _awaiting_addgroups.pop(user.id, None)
-            total_btns = sum(len(g.get("buttons") or []) for g in new_groups)
+            total_btns = sum(len(g.get("buttons") or []) for g in added_groups)
             return await message.reply(
                 f"✅ **Groups saved** for `/{page_slug}`\n\n"
                 f"> Box: **{box.upper()}**\n"
-                f"> Groups added: `{len(new_groups)}`\n"
+                f"> Groups added: `{len(added_groups)}`\n"
+                f"> Existing groups kept: `{len(existing)}`\n"
                 f"> Buttons added: `{total_btns}`\n"
+                f"> Duplicate groups skipped: `{len(new_groups) - len(added_groups)}`\n"
                 f"> DB: `{target_db_name}`\n\n"
                 f"They are now live on the page Watch/Download section."
             )
@@ -1577,10 +1680,12 @@ def register_handlers(bot):
             log_cf = _extract_tunnel_url_from_logs()
             if log_cf:
                 await apply_auto_cloudflare_url(log_cf, source="telegram-message-link")
-            base_url = await get_active_cloudflare_url()
+            base_url = await get_watch_page_base_url()
+            if not base_url:
+                base_url = await get_active_cloudflare_url()
             if not base_url:
                 try:
-                    base_url = normalize_public_base_url(settings.BASE_URL)
+                    base_url = normalize_public_base_url(settings.BASE_URL or settings.WEBSITE_URL or "")
                 except ValueError:
                     base_url = None
             if not base_url:
@@ -1887,7 +1992,7 @@ def register_handlers(bot):
         fs_user = (runtime.get("filestore_bot_username") or "").strip().lstrip("@") or "*(not set)*"
         await message.reply(
             "🔐 **HITLER YT · Control Panel**\n\n"
-            f"> ☁️ Cloudflare media URL: `{current_cf}`\n"
+            f"> ☁️ ngrok media URL: `{current_cf}`\n"
             f"> ▲ Vercel website: `{vercel_url}`\n"
             f"> 📦 FileStore bot: `@{fs_user}`\n"
             f"> 🤖 Clients: `{len(session_manager.get_all_clients())}`\n\n"
@@ -1974,7 +2079,7 @@ def register_handlers(bot):
         website_lines = "\n".join(f"• `{url}`" for url in website_urls) or "Waiting for first Vercel visit"
         return await message.reply(
             "🔐 **HITLER YT · Control Panel**\n\n"
-            f"> ☁️ **Auto Cloudflare Stream/Download/Button URL:** `{current_cf}`\n"
+            f"> ☁️ **Auto ngrok Stream/Download/Button URL:** `{current_cf}`\n"
             f"> ▲ **Vercel Website URL (Website Only):** `{vercel_url}`\n"
             f"> 🤖 **Active Booster Clients:** `{len(session_manager.get_all_clients())}` (use `/addbots` to add more)\n\n"
             f"**Registered Vercel website domains**\n{website_lines}\n\n"
@@ -1982,7 +2087,7 @@ def register_handlers(bot):
             "• `/username new_username` — change the website panel username\n"
             "• `/password new_password` — change the website panel password (10+ characters)\n"
             "• `/addbots` — add unlimited bot tokens to boost download speeds\n\n"
-            "The Cloudflare `trycloudflare.com` URL is auto-detected and automatically replaces all button URL domains and generates all download & stream links, while Vercel serves the website.",
+            "The ngrok public URL is auto-detected and automatically replaces all button URL domains and generates all download & stream links, while Vercel serves the website.",
             reply_markup=_kb([[InlineKeyboardButton("Open HITLER YT Website Panel", url=f"{base}/panel")]]),
         )
 
@@ -1995,9 +2100,9 @@ def register_handlers(bot):
         current = (await get_active_cloudflare_url()) or settings.BACKEND_URL or "Auto-detecting"
         if len(args) < 2:
             return await message.reply(
-                "☁️ **Cloudflare Tunnel URL**\n\n"
-                f"> Current Auto Cloudflare URL: `{current}`\n\n"
-                "Usage: `/backendurl https://your-tunnel.trycloudflare.com`\n"
+                "☁️ **ngrok Tunnel URL**\n\n"
+                f"> Current Auto ngrok URL: `{current}`\n\n"
+                "Usage: `/backendurl https://your-domain.ngrok-free.app`\n"
                 "This URL is auto-detected by the VPS and automatically used for all download links, stream links, and button URLs."
             )
         candidate = args[1].strip()
@@ -2025,10 +2130,10 @@ def register_handlers(bot):
             settings.BACKEND_URL = candidate
             rewritten = await rewrite_all_stored_catalog_buttons(candidate)
             await message.reply(
-                "✅ **Cloudflare URL Saved & Synced!**\n\n"
-                f"> ☁️ **Cloudflare URL:** `{candidate}`\n"
+                "✅ **ngrok URL Saved & Synced!**\n\n"
+                f"> ☁️ **ngrok URL:** `{candidate}`\n"
                 f"> 🔄 **Catalog Pages Rewritten:** `{rewritten}`\n\n"
-                "All download links (`/dl/`), stream links (`/watch/`, `/stream/`), and website button URLs now use this Cloudflare URL."
+                "All download links (`/dl/`), stream links (`/watch/`, `/stream/`), and website button URLs now use this ngrok URL."
             )
         except ValueError as exc:
             await message.reply(f"❌ Invalid backend URL: `{html.escape(str(exc))}`")
@@ -2050,10 +2155,10 @@ def register_handlers(bot):
         if len(args) < 2:
             current_cf = (await get_active_cloudflare_url()) or settings.BASE_URL
             return await message.reply(
-                "🌐 **Cloudflare / Base URL Management**\n\n"
-                f"> 🔗 **Current Active Cloudflare URL:** `{current_cf}`\n"
+                "🌐 **ngrok / Base URL Management**\n\n"
+                f"> 🔗 **Current Active ngrok URL:** `{current_cf}`\n"
                 f"> 📢 **Updates Channel:** `{settings.UPDATE_CHANNEL_URL}`\n\n"
-                "*(Cloudflare Try URL is set automatically on startup, or override with `/baseurl https://name.trycloudflare.com`)*"
+                "*(ngrok URL is set automatically on startup, or override with `/baseurl https://your-ngrok-domain.ngrok-free.app`)*"
             )
         new_url = args[1].strip()
         try:
@@ -2062,7 +2167,7 @@ def register_handlers(bot):
             return await message.reply(
                 "❌ **Invalid public Base URL**\n\n"
                 f"> {html.escape(str(exc))}\n\n"
-                "Use your public URL, for example: `/baseurl https://name.trycloudflare.com`"
+                "Use your public URL, for example: `/baseurl https://your-ngrok-domain.ngrok-free.app`"
             )
         try:
             now = datetime.datetime.utcnow()
@@ -2098,7 +2203,7 @@ def register_handlers(bot):
                 f"> 🔗 **New URL:** `{new_url}`\n"
                 f"> 🔄 **Catalog Pages Rewritten:** `{rewritten}`\n"
                 f"> 👤 **Updated By:** `{user.id}`\n\n"
-                "✨ *All download links, stream links, and website button URLs now use this Cloudflare URL.*"
+                "✨ *All download links, stream links, and website button URLs now use this ngrok URL.*"
             )
         except Exception as e:
             logger.error("Error updating baseurl: %s", e)
@@ -2358,7 +2463,21 @@ def register_handlers(bot):
         await callback.answer()
         await callback.message.reply(f"✏️ {prompt}\n\nSend /cancel to abort.")
 
-    @bot.on_message(filters.private & filters.text & ~filters.command(["start", "cancel", "fspanel", "panel", "filestore"]))
+    # IMPORTANT: exclude every command that has its own handler registered later.
+    # Overlapping filters on the same group mean only the first matching handler runs
+    # (see comment near telegram_message_link_handler). Without excluding "batch" etc.,
+    # those commands were swallowed here with a silent return.
+    @bot.on_message(
+        filters.private
+        & filters.text
+        & ~filters.command([
+            "start", "cancel", "fspanel", "panel", "filestore",
+            "batch", "ss", "sv", "mi", "stats", "broadcast", "ban", "unban",
+            "autodel", "del", "addgroups", "save", "link", "addbots", "shorteners",
+            "search", "username", "password", "backendurl", "baseurl",
+            "categories", "edit", "manage",
+        ])
+    )
     async def fspanel_text_input(client, message: Message):
         user = message.from_user
         if not user or user.id not in _awaiting_fspanel:
@@ -2603,6 +2722,75 @@ def register_handlers(bot):
         except Exception:
             await message.reply("⚠️ **Usage:** `/autodel 24h` or `/autodel off`")
 
+
+    @bot.on_message(filters.command("del") & filters.private)
+    async def delete_catalog_page_command(client, message: Message):
+        user = message.from_user
+        if not user or not _is_admin_user(user.id):
+            return await message.reply("🚫 Admins only.")
+
+        args = (message.text or "").split(maxsplit=1)
+        target = args[1].strip() if len(args) > 1 else ""
+        if not target:
+            return await message.reply(
+                "🗑️ **Delete website page**\n\n"
+                "Usage:\n"
+                "• `/del https://your-site/title/page-slug`\n"
+                "• `/del page-slug`\n"
+                "• `/del Exact Page Title`\n\n"
+                "The matching page is deleted immediately, without a confirmation step. "
+                "Only an exact title or slug match is accepted."
+            )
+
+        # Accept a title slug, /title/slug URL, or exact page title. Never use fuzzy
+        # matching for destructive actions; ambiguous or partial names are rejected.
+        slug = None
+        url_match = re.search(r"/title/([A-Za-z0-9][A-Za-z0-9_-]{0,500})", target, re.I)
+        if url_match:
+            slug = url_match.group(1).lower()
+        else:
+            candidate = target.strip().strip("/").split("?", 1)[0].split("#", 1)[0]
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,500}", candidate):
+                slug = candidate.lower()
+
+        page = None
+        if slug:
+            page = await db.catalog_pages.find_one({"slug": slug})
+        if page is None:
+            # Exact, case-insensitive title lookup (escaped to prevent regex injection).
+            safe_title = re.escape(target[:180])
+            matches = await db.catalog_pages.find(
+                {"title": {"$regex": f"^{safe_title}$", "$options": "i"}},
+                {"_id": 0, "slug": 1, "title": 1},
+            ).to_list(3)
+            if len(matches) == 1:
+                page = matches[0]
+            elif len(matches) > 1:
+                return await message.reply(
+                    "⚠️ More than one page matches that title. Use its exact page URL or slug instead."
+                )
+
+        if not page:
+            return await message.reply(
+                "❌ Page not found. Nothing was deleted. Use the exact page title, slug, or `/title/` URL."
+            )
+
+        page_slug = page.get("slug")
+        page_title = page.get("title") or page_slug or "Untitled"
+        if not page_slug:
+            return await message.reply("❌ This page record has no slug. Nothing was deleted.")
+
+        result = await db.catalog_pages.delete_one({"slug": page_slug})
+        if not result.deleted_count:
+            return await message.reply("❌ Page was not deleted (it may have already been removed).")
+
+        await message.reply(
+            "🗑️ **Page deleted successfully**\n\n"
+            f"**Title:** {page_title}\n"
+            f"**Slug:** `{page_slug}`\n\n"
+            "The page is now removed from the catalog database and will no longer appear in public catalog queries."
+        )
+
     @bot.on_message(filters.command("addgroups") & filters.private)
     async def addgroups_command(client, message: Message):
         user = message.from_user
@@ -2617,19 +2805,28 @@ def register_handlers(bot):
                 url = getattr(ent, "url", None)
                 if url and "/title/" in url:
                     source_text = f"{source_text} {url}"
+        # Keep full argument text — do not truncate long slugs/URLs
         parts = (message.text or "").split(maxsplit=1)
         if len(parts) > 1:
             source_text = (source_text + " " + parts[1]).strip()
 
         page_slug = None
-        match = re.search(r"/title/([A-Za-z0-9_-]+)", source_text or "", re.I)
+        # Support arbitrarily long slugs (letters, digits, hyphen, underscore)
+        match = re.search(r"/title/([A-Za-z0-9][A-Za-z0-9_-]{0,500})", source_text or "", re.I)
         if match:
-            page_slug = match.group(1).lower()
+            page_slug = match.group(1).lower().rstrip("/")
         elif parts and len(parts) > 1:
-            # Bare slug: /addgroups premada-oorali
-            bare = parts[1].strip().strip("/")
-            if re.fullmatch(r"[A-Za-z0-9_-]+", bare):
-                page_slug = bare.lower()
+            # Bare slug or full URL without needing /title/ only once
+            bare = parts[1].strip()
+            # If it's a full URL, extract last path segment
+            url_m = re.search(r"https?://[^\s]+/title/([A-Za-z0-9][A-Za-z0-9_-]{0,500})", bare, re.I)
+            if url_m:
+                page_slug = url_m.group(1).lower().rstrip("/")
+            else:
+                bare = bare.strip("/").split("?")[0].split("#")[0]
+                # Allow very long slug names
+                if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,500}", bare):
+                    page_slug = bare.lower()
 
         if not page_slug:
             suggestions = await catalog_page_suggestions("", limit=8)
@@ -2637,8 +2834,9 @@ def register_handlers(bot):
             return await message.reply(
                 "📌 **Usage**\n"
                 "• Reply to a `/title/...` page link with `/addgroups`\n"
-                "• Or: `/addgroups https://hitler-yt.vercel.app/title/slug`\n"
-                "• Or: `/addgroups slug-name`\n\n"
+                "• Or: `/addgroups https://yoursite.vercel.app/title/very-long-slug-name-here`\n"
+                "• Or: `/addgroups very-long-slug-name-here`\n\n"
+                "Long slug names are fully supported.\n\n"
                 f"**Recent pages:**\n{tip}"
             )
 
@@ -2647,7 +2845,7 @@ def register_handlers(bot):
             suggestions = await catalog_page_suggestions(page_slug, limit=8)
             tip = "\n".join(suggestions) if suggestions else (
                 "_No matching pages. Check `DATABASE_NAME` matches the Vercel MongoDB "
-                "(often `tg_media_bot` or `file2link`), and that the page was published._"
+                "(often `tg_media_bot` or `animovieszoneflix`), and that the page was published._"
             )
             return await message.reply(
                 f"❌ Catalog page `{page_slug}` not found in the bot database.\n\n"
@@ -2657,18 +2855,28 @@ def register_handlers(bot):
             )
 
         page_slug = page.get("slug") or page_slug
+        # Telegram callback_data max 64 bytes — never put long slugs in it.
+        # Use a short token mapped to the full slug.
+        token = secrets.token_hex(4)
+        _addgroups_slug_tokens[token] = page_slug
+        # Prevent unbounded growth
+        if len(_addgroups_slug_tokens) > 500:
+            for k in list(_addgroups_slug_tokens.keys())[:200]:
+                _addgroups_slug_tokens.pop(k, None)
+
         kb = _kb([
             [
-                InlineKeyboardButton("📥 Download", callback_data=f"addg:dl:{page_slug}"),
-                InlineKeyboardButton("▶️ Watch", callback_data=f"addg:wt:{page_slug}"),
+                InlineKeyboardButton("📥 Download", callback_data=f"addg:dl:{token}"),
+                InlineKeyboardButton("▶️ Watch", callback_data=f"addg:wt:{token}"),
             ]
         ])
         title = page.get("title") or page_slug
         await message.reply(
             f"📁 **Add Groups** for **{html.escape(str(title))}**\n"
-            f"`/title/{page_slug}`\n\n"
+            f"`/title/{html.escape(page_slug)}`\n\n"
             f"Choose which section to configure:",
             reply_markup=kb,
+            parse_mode=ParseMode.HTML,
         )
 
     @bot.on_callback_query(filters.regex(r"^addg:(dl|wt):"))
@@ -2680,26 +2888,32 @@ def register_handlers(bot):
         if len(parts) < 3:
             return await callback.answer("Invalid data", show_alert=True)
         box = "download" if parts[1] == "dl" else "watch"
-        page_slug = parts[2]
+        token_or_slug = parts[2]
+        # Resolve short token → full slug (supports unlimited-length slugs)
+        page_slug = _addgroups_slug_tokens.get(token_or_slug) or token_or_slug
         page = await find_catalog_page(page_slug)
         if not page:
             return await callback.answer("Page not found in bot DB", show_alert=True)
         page_slug = page.get("slug") or page_slug
         _awaiting_addgroups[user.id] = {"page_slug": page_slug, "box": box}
+        # Escape for HTML; long names OK in message text (4096 limit)
+        safe_slug = html.escape(page_slug)
         try:
             await callback.message.edit_text(
-                f"✏️ **Configure {box.upper()} groups** for `{page_slug}`\n\n"
-                f"Send groups and buttons in this format (unlimited):\n\n"
-                f"`1. Group Name`\n"
-                f"`Button Name: https://example.com/link`\n\n"
-                f"`2. Another Group`\n"
-                f"`Stream: https://...`\n"
-                f"`Mirror: https://...`\n\n"
-                f"Send everything in **one message**. After saving, buttons appear in the {box} section of the page."
+                f"✏️ <b>Configure {box.upper()} groups</b> for <code>{safe_slug}</code>\n\n"
+                f"Send groups and buttons in this format (unlimited length):\n\n"
+                f"<code>1. Group Name</code>\n"
+                f"<code>Button Name: https://example.com/link</code>\n\n"
+                f"<code>2. Another Group</code>\n"
+                f"<code>Stream: https://...</code>\n"
+                f"<code>Mirror: https://...</code>\n\n"
+                f"Send everything in <b>one message</b>. After saving, buttons appear in the {box} section of the page.",
+                parse_mode=ParseMode.HTML,
             )
         except Exception:
             await callback.message.reply(
-                f"✏️ Send groups/buttons for **{box}** on `{page_slug}` using the format above."
+                f"✏️ Send groups/buttons for <b>{box}</b> on <code>{safe_slug}</code> using the format above.",
+                parse_mode=ParseMode.HTML,
             )
         await callback.answer()
 
@@ -2978,167 +3192,292 @@ def register_handlers(bot):
 
     @bot.on_message(filters.command("batch") & filters.private)
     async def batch_command(client, message: Message):
+        """Generate download/watch links for a range of messages in any channel/group
+        the bot can access. Does NOT require CHANNEL_ID / storage channel for generation.
+        """
         user = message.from_user
         if not user or not _is_admin_user(user.id):
             return await message.reply("🚫 Admins only.")
-        text = (message.text or "").strip()
-        # Support: /batch https://t.me/c/ID/START-https://t.me/c/ID/END
-        # or /batch https://t.me/c/ID/START-END
-        range_m = re.search(
-            r"https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))"
-            r"\s*[-–]\s*"
-            r"(?:https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))|(\d+))",
-            text,
-            re.I,
-        )
-        if not range_m:
-            return await message.reply(
-                "📌 **Usage:**\n"
-                "`/batch https://t.me/c/4357571996/2081-https://t.me/c/4357571996/2083`\n\n"
-                "Or: `/batch https://t.me/c/4357571996/2081-2083`"
+
+        # Immediate ack so the user always sees the command was received
+        status = await message.reply("⏳ Parsing batch range…")
+        text = (message.text or message.caption or "").strip()
+
+        try:
+            # --- parse links / range -------------------------------------------------
+            link_re = re.compile(
+                r"https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))(?:\?[^\s]*)?",
+                re.I,
             )
-        # Resolve chat + start/end ids
-        if range_m.group(1):
-            chat_ref = int("-100" + range_m.group(1))
-            start_id = int(range_m.group(2))
-        else:
-            chat_ref = "@" + range_m.group(3)
-            start_id = int(range_m.group(4))
-        if range_m.group(5):
-            end_chat = int("-100" + range_m.group(5))
-            end_id = int(range_m.group(6))
-            if end_chat != chat_ref:
-                return await message.reply("❌ Start and end must be in the same channel.")
-        elif range_m.group(7):
-            end_chat_name = range_m.group(7)
-            end_id = int(range_m.group(8))
-            if ("@" + end_chat_name) != chat_ref and end_chat_name != str(chat_ref).lstrip("@"):
-                return await message.reply("❌ Start and end must be in the same channel.")
-        else:
-            end_id = int(range_m.group(9))
-        if end_id < start_id:
-            start_id, end_id = end_id, start_id
-        if end_id - start_id > 200:
-            return await message.reply("❌ Range too large (max 200 messages).")
+            range_re = re.compile(
+                r"https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))(?:\?[^\s\-]*)?"
+                r"\s*[-–]\s*"
+                r"(?:https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))(?:\?[^\s]*)?|(\d+))",
+                re.I,
+            )
 
-        status = await message.reply(f"🔄 Batch processing messages `{start_id}`–`{end_id}`…")
-        base_url = (await get_active_cloudflare_url()) or (await get_active_website_url()) or settings.BASE_URL
-        base_url = str(base_url).rstrip("/")
-        runtime_cfg = await db.site_settings.find_one({"_id": "runtime"}) or {}
-        downloads_enabled = runtime_cfg.get("downloads_enabled", True)
-        streaming_enabled = runtime_cfg.get("streaming_enabled", True)
+            chat_ref = None  # str "@name" or int -100...
+            start_id = end_id = None
 
-        results: list[str] = []
-        idx = 0
-        for msg_id in range(start_id, end_id + 1):
-            try:
-                source_msg = await client.get_messages(chat_ref, msg_id)
-                if isinstance(source_msg, list):
-                    source_msg = source_msg[0] if source_msg else None
-                if not source_msg or not _is_media_message(source_msg):
-                    continue
-                media = (
-                    source_msg.document or source_msg.video or source_msg.audio
-                    or source_msg.animation or source_msg.photo or source_msg.voice
-                    or source_msg.video_note
-                )
-                if source_msg.document:
-                    file_name = media.file_name or "file"
-                    mime_type = media.mime_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
-                    file_size = getattr(media, "file_size", None) or 0
-                elif source_msg.video:
-                    file_name = getattr(media, "file_name", None) or f"video_{media.file_unique_id}.mp4"
-                    mime_type = media.mime_type or "video/mp4"
-                    file_size = getattr(media, "file_size", None) or 0
-                elif source_msg.audio:
-                    file_name = media.file_name or f"audio_{media.file_unique_id}.mp3"
-                    mime_type = media.mime_type or "audio/mpeg"
-                    file_size = getattr(media, "file_size", None) or 0
-                elif source_msg.animation:
-                    file_name = getattr(media, "file_name", None) or f"animation_{media.file_unique_id}.mp4"
-                    mime_type = media.mime_type or "video/mp4"
-                    file_size = getattr(media, "file_size", None) or 0
-                elif source_msg.photo:
-                    media = source_msg.photo[-1] if isinstance(source_msg.photo, (list, tuple)) else source_msg.photo
-                    file_name, mime_type = f"photo_{media.file_unique_id}.jpg", "image/jpeg"
-                    file_size = getattr(media, "file_size", None) or 0
-                elif source_msg.voice:
-                    file_name, mime_type = f"voice_{media.file_unique_id}.ogg", media.mime_type or "audio/ogg"
-                    file_size = getattr(media, "file_size", None) or 0
+            range_m = range_re.search(text)
+            if range_m:
+                if range_m.group(1):
+                    chat_ref = int("-100" + range_m.group(1))
+                    start_id = int(range_m.group(2))
                 else:
-                    file_name, mime_type = f"video_note_{media.file_unique_id}.mp4", "video/mp4"
-                    file_size = getattr(media, "file_size", None) or 0
-
-                caption = getattr(source_msg, "caption", None) or getattr(source_msg, "text", None) or ""
-                file_name = extract_filename_from_caption(caption, file_name)
-
-                file_id = getattr(media, "file_id", None)
-                if not file_id:
-                    continue
-                existing = await files_col.find_one({
-                    "chat_id": source_msg.chat.id,
-                    "message_id": source_msg.id,
-                    "file_id": file_id,
-                })
-                if existing:
-                    short_code = existing["short_code"]
+                    chat_ref = "@" + range_m.group(3)
+                    start_id = int(range_m.group(4))
+                if range_m.group(5):
+                    end_chat = int("-100" + range_m.group(5))
+                    end_id = int(range_m.group(6))
+                    if end_chat != chat_ref:
+                        return await status.edit_text("❌ Start and end must be in the same channel.")
+                elif range_m.group(7):
+                    end_chat_name = range_m.group(7)
+                    end_id = int(range_m.group(8))
+                    if ("@" + end_chat_name) != chat_ref and end_chat_name != str(chat_ref).lstrip("@"):
+                        return await status.edit_text("❌ Start and end must be in the same channel.")
                 else:
-                    short_code = generate_short_code()
-                    file_meta = FileMetadata(
-                        file_id=file_id,
-                        file_unique_id=str(getattr(media, "file_unique_id", source_msg.id)),
-                        filename=file_name,
-                        mime_type=mime_type,
-                        file_size=file_size or 0,
-                        uploader_id=user.id,
-                        short_code=short_code,
-                        chat_id=source_msg.chat.id,
-                        message_id=source_msg.id,
-                        expiry_time=None,
-                    )
-                    await files_col.insert_one(file_meta.dict())
-
-                idx += 1
-                size_str = format_bytes(file_size) if file_size else "—"
-                block = (
-                    f"{idx}. 📁 File: {html.escape(file_name)}\n\n"
-                    f"📦 Size: {size_str}\n\n"
-                    f"🔗 Generated Links\n\n"
-                )
-                fs_username = (runtime_cfg.get("filestore_bot_username") or "").strip().lstrip("@")
-                if downloads_enabled:
-                    dl = f"{base_url}/dl/{short_code}"
-                    block += f"⬇️ Direct Download: <code>{html.escape(dl)}</code>\n\n"
-                elif fs_username:
-                    dl = f"https://t.me/{fs_username}?start=file_{short_code}"
-                    block += f"📥 Get File in Bot: <code>{html.escape(dl)}</code>\n\n"
-                if streaming_enabled:
-                    watch = f"{base_url}/watch/{short_code}"
-                    block += f"▶️ Watch / Stream: <code>{html.escape(watch)}</code>\n"
-                results.append(block)
-            except Exception as e:
-                logger.warning("batch msg %s failed: %s", msg_id, e)
-                continue
-
-        if not results:
-            return await status.edit_text("❌ No media found in that message range.")
-
-        header = f"✅ <b>Batch Generated</b>\n\n"
-        # Split into Telegram-safe messages (~3500 chars)
-        chunks: list[str] = []
-        current = header
-        for block in results:
-            if len(current) + len(block) + 2 > 3500:
-                chunks.append(current.rstrip())
-                current = header + f"<i>(continued)</i>\n\n" + block + "\n"
+                    end_id = int(range_m.group(9))
             else:
-                current += block + "\n"
-        if current.strip():
-            chunks.append(current.rstrip())
+                matches = list(link_re.finditer(text))
+                if len(matches) >= 2:
+                    def _parse_link(m):
+                        if m.group(1):
+                            return int("-100" + m.group(1)), int(m.group(2))
+                        return "@" + m.group(3), int(m.group(4))
 
-        await status.delete()
-        for i, chunk in enumerate(chunks):
-            await message.reply(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                    chat1, id1 = _parse_link(matches[0])
+                    chat2, id2 = _parse_link(matches[-1])
+                    if chat1 != chat2:
+                        return await status.edit_text("❌ Start and end must be in the same channel.")
+                    chat_ref, start_id, end_id = chat1, id1, id2
+                elif len(matches) == 1:
+                    m = matches[0]
+                    if m.group(1):
+                        chat_ref = int("-100" + m.group(1))
+                        start_id = int(m.group(2))
+                    else:
+                        chat_ref = "@" + m.group(3)
+                        start_id = int(m.group(4))
+                    bare = re.search(r"(\d+)\s*[-–]\s*(\d+)", text)
+                    if bare:
+                        a, b = int(bare.group(1)), int(bare.group(2))
+                        start_id, end_id = min(a, b), max(a, b)
+
+            if chat_ref is None or start_id is None or end_id is None:
+                return await status.edit_text(
+                    "📌 <b>Usage</b>\n\n"
+                    "<code>/batch https://t.me/username/14816-https://t.me/username/14851</code>\n\n"
+                    "Or compact:\n"
+                    "<code>/batch https://t.me/c/1234567890/2081-2083</code>\n\n"
+                    "• Works with public (@username) and private (c/ID) links\n"
+                    "• Bot only needs to be a member/admin of the source channel\n"
+                    "• <b>No storage channel (CHANNEL_ID) required</b> for generating links\n"
+                    "• Query params like <code>?single</code> are fine",
+                    parse_mode=ParseMode.HTML,
+                )
+
+            if end_id < start_id:
+                start_id, end_id = end_id, start_id
+            if end_id - start_id > 200:
+                return await status.edit_text("❌ Range too large (max 200 messages).")
+
+            # --- resolve peer so get_messages is reliable for public channels ------
+            try:
+                chat_obj = await client.get_chat(chat_ref)
+                resolved_chat_id = chat_obj.id
+                chat_title = getattr(chat_obj, "title", None) or getattr(chat_obj, "username", None) or str(resolved_chat_id)
+            except Exception as e:
+                return await status.edit_text(
+                    f"❌ Cannot access chat <code>{html.escape(str(chat_ref))}</code>\n\n"
+                    f"<code>{html.escape(type(e).__name__)}: {html.escape(str(e)[:200])}</code>\n\n"
+                    "Add the bot as a member (or admin) of that channel/group and try again.\n"
+                    "No storage channel is required — only access to the source chat.",
+                    parse_mode=ParseMode.HTML,
+                )
+
+            await status.edit_text(
+                f"🔄 Batch processing <b>{html.escape(str(chat_title))}</b>\n"
+                f"Messages <code>{start_id}</code>–<code>{end_id}</code>…\n"
+                f"<i>Storage channel not required for link generation.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+
+            # Prefer Vercel website for Watch Online links (stream proxied to VPS)
+            base_url = (
+                (await get_watch_page_base_url())
+                or (await get_active_cloudflare_url())
+                or (await get_active_website_url())
+                or settings.BASE_URL
+                or settings.WEBSITE_URL
+            )
+            base_url = str(base_url or "").rstrip("/")
+            if not base_url:
+                return await status.edit_text(
+                    "❌ No public website URL configured. "
+                    "Set WEBSITE_URL / BASE_URL to your Vercel site "
+                    "(e.g. https://animovieszoneflix.vercel.app) or start the tunnel."
+                )
+
+            runtime_cfg = await db.site_settings.find_one({"_id": "runtime"}) or {}
+            downloads_enabled = runtime_cfg.get("downloads_enabled", True)
+            streaming_enabled = runtime_cfg.get("streaming_enabled", True)
+            fs_username = (runtime_cfg.get("filestore_bot_username") or "").strip().lstrip("@")
+
+            results: list[str] = []
+            errors: list[str] = []
+            idx = 0
+            total = end_id - start_id + 1
+
+            for i, msg_id in enumerate(range(start_id, end_id + 1)):
+                if i > 0 and i % 20 == 0:
+                    try:
+                        await status.edit_text(
+                            f"🔄 Batch processing… {i}/{total} (found {idx} media)",
+                            parse_mode=ParseMode.HTML,
+                        )
+                    except Exception:
+                        pass
+                try:
+                    source_msg = await client.get_messages(resolved_chat_id, msg_id)
+                    if isinstance(source_msg, list):
+                        source_msg = source_msg[0] if source_msg else None
+                    if not source_msg or getattr(source_msg, "empty", False) or not _is_media_message(source_msg):
+                        continue
+
+                    media = (
+                        source_msg.document or source_msg.video or source_msg.audio
+                        or source_msg.animation or source_msg.photo or source_msg.voice
+                        or source_msg.video_note
+                    )
+                    if source_msg.document:
+                        file_name = media.file_name or "file"
+                        mime_type = media.mime_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+                        file_size = getattr(media, "file_size", None) or 0
+                    elif source_msg.video:
+                        file_name = getattr(media, "file_name", None) or f"video_{media.file_unique_id}.mp4"
+                        mime_type = media.mime_type or "video/mp4"
+                        file_size = getattr(media, "file_size", None) or 0
+                    elif source_msg.audio:
+                        file_name = media.file_name or f"audio_{media.file_unique_id}.mp3"
+                        mime_type = media.mime_type or "audio/mpeg"
+                        file_size = getattr(media, "file_size", None) or 0
+                    elif source_msg.animation:
+                        file_name = getattr(media, "file_name", None) or f"animation_{media.file_unique_id}.mp4"
+                        mime_type = media.mime_type or "video/mp4"
+                        file_size = getattr(media, "file_size", None) or 0
+                    elif source_msg.photo:
+                        media = source_msg.photo[-1] if isinstance(source_msg.photo, (list, tuple)) else source_msg.photo
+                        file_name, mime_type = f"photo_{media.file_unique_id}.jpg", "image/jpeg"
+                        file_size = getattr(media, "file_size", None) or 0
+                    elif source_msg.voice:
+                        file_name, mime_type = f"voice_{media.file_unique_id}.ogg", media.mime_type or "audio/ogg"
+                        file_size = getattr(media, "file_size", None) or 0
+                    else:
+                        file_name, mime_type = f"video_note_{media.file_unique_id}.mp4", "video/mp4"
+                        file_size = getattr(media, "file_size", None) or 0
+
+                    caption = getattr(source_msg, "caption", None) or getattr(source_msg, "text", None) or ""
+                    file_name = extract_filename_from_caption(caption, file_name)
+
+                    file_id = getattr(media, "file_id", None)
+                    if not file_id:
+                        continue
+
+                    # Prefer source chat + message (no storage channel needed)
+                    src_chat_id = source_msg.chat.id if source_msg.chat else resolved_chat_id
+                    existing = await files_col.find_one({
+                        "chat_id": src_chat_id,
+                        "message_id": source_msg.id,
+                    })
+                    if existing and existing.get("short_code"):
+                        short_code = existing["short_code"]
+                    else:
+                        short_code = generate_short_code()
+                        file_meta = FileMetadata(
+                            file_id=file_id,
+                            file_unique_id=str(getattr(media, "file_unique_id", source_msg.id)),
+                            filename=file_name,
+                            mime_type=mime_type,
+                            file_size=file_size or 0,
+                            uploader_id=user.id,
+                            short_code=short_code,
+                            chat_id=src_chat_id,
+                            message_id=source_msg.id,
+                            expiry_time=None,
+                        )
+                        await files_col.insert_one(file_meta.dict())
+
+                    idx += 1
+                    size_str = format_bytes(file_size) if file_size else "—"
+                    block = (
+                        f"{idx}. 📁 File: {html.escape(file_name)}\n\n"
+                        f"📦 Size: {size_str}\n\n"
+                        f"🔗 Generated Links\n\n"
+                    )
+                    if downloads_enabled and base_url:
+                        dl = f"{base_url}/dl/{short_code}"
+                        block += f"⬇️ Direct Download: <code>{html.escape(dl)}</code>\n\n"
+                    elif fs_username:
+                        dl = f"https://t.me/{fs_username}?start=file_{short_code}"
+                        block += f"📥 Get File in Bot: <code>{html.escape(dl)}</code>\n\n"
+                    if streaming_enabled and base_url:
+                        watch = f"{base_url}/watch/{short_code}"
+                        block += f"▶️ Watch / Stream: <code>{html.escape(watch)}</code>\n"
+                    results.append(block)
+                except Exception as e:
+                    err_txt = f"{type(e).__name__}: {e}"
+                    logger.warning("batch msg %s failed: %s", msg_id, err_txt)
+                    if len(errors) < 6:
+                        errors.append(f"• msg {msg_id}: {html.escape(err_txt[:140])}")
+                    continue
+
+            if not results:
+                err_block = ("\n\n" + "\n".join(errors)) if errors else ""
+                return await status.edit_text(
+                    f"❌ No media found in messages <code>{start_id}</code>–<code>{end_id}</code> "
+                    f"of <b>{html.escape(str(chat_title))}</b>."
+                    f"{err_block}\n\n"
+                    "Checklist:\n"
+                    "• Bot is a member/admin of the channel\n"
+                    "• Message IDs are correct and contain media\n"
+                    "• No storage channel is required for this command",
+                    parse_mode=ParseMode.HTML,
+                )
+
+            header = f"✅ <b>Batch Generated</b> ({idx} file{'s' if idx != 1 else ''})\n\n"
+            chunks: list[str] = []
+            current = header
+            for block in results:
+                if len(current) + len(block) + 2 > 3500:
+                    chunks.append(current.rstrip())
+                    current = header + "<i>(continued)</i>\n\n" + block + "\n"
+                else:
+                    current += block + "\n"
+            if current.strip():
+                chunks.append(current.rstrip())
+
+            try:
+                await status.delete()
+            except Exception:
+                pass
+            for chunk in chunks:
+                await message.reply(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+        except Exception as e:
+            logger.exception("batch_command failed: %s", e)
+            err = f"❌ <b>Batch failed</b>\n\n<code>{html.escape(type(e).__name__)}: {html.escape(str(e)[:300])}</code>"
+            try:
+                if status:
+                    await status.edit_text(err, parse_mode=ParseMode.HTML)
+                else:
+                    await message.reply(err, parse_mode=ParseMode.HTML)
+            except Exception:
+                try:
+                    await message.reply(f"Batch failed: {type(e).__name__}: {e}")
+                except Exception:
+                    pass
 
     def _is_media_message(msg: Message) -> bool:
         if not msg:

@@ -28,7 +28,7 @@ class SessionManager:
         if self.bot_client is not None:
             return
         self.bot_client = Client(
-            name="hitler_bot",
+            name="HITLER YT_bot",
             api_id=settings.API_ID,
             api_hash=settings.API_HASH,
             bot_token=settings.BOT_TOKEN,
@@ -48,7 +48,7 @@ class SessionManager:
         if self.bot_client is None:
             self.prepare_bot()
         await self.bot_client.start()
-        logger.info("HITLER primary bot client started (wzgram)")
+        logger.info("HITLER YT primary bot client started (wzgram)")
         await self.register_bot_commands()
 
         # Always include primary bot client in the streaming pool
@@ -65,7 +65,7 @@ class SessionManager:
         for i, session_str in enumerate(session_strings):
             try:
                 client = Client(
-                    name=f"hitler_user_{i}",
+                    name=f"HITLER YT_user_{i}",
                     api_id=settings.API_ID,
                     api_hash=settings.API_HASH,
                     session_string=session_str,
@@ -138,7 +138,7 @@ class SessionManager:
 
         bot_prefix = clean_token.split(":", 1)[0]
         client = Client(
-            name=f"hitler_helper_{bot_prefix}_{len(self.helper_bots) + 1}",
+            name=f"HITLER YT_helper_{bot_prefix}_{len(self.helper_bots) + 1}",
             api_id=settings.API_ID,
             api_hash=settings.API_HASH,
             bot_token=clean_token,
@@ -249,8 +249,8 @@ class SessionManager:
             BotCommand("addbots", "Add unlimited helper bot tokens for speed boost (admin)"),
             BotCommand("panel", "Open control panel (admin)"),
             BotCommand("manage", "Edit website pages and bot settings (admin)"),
-            BotCommand("baseurl", "Set public base / Cloudflare URL (admin)"),
-            BotCommand("backendurl", "Set backend / Cloudflare URL (admin)"),
+            BotCommand("baseurl", "Set public base / ngrok URL (admin)"),
+            BotCommand("backendurl", "Set backend / ngrok URL (admin)"),
             BotCommand("search", "Search TMDB & publish catalog page (admin)"),
             BotCommand("categories", "Manage categories (admin)"),
             BotCommand("edit", "Open page editor (admin)"),

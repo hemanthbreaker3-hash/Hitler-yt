@@ -4,8 +4,8 @@ This Pages project is a thin reverse-proxy to the same always-on FastAPI backend
 
 1. Create a Cloudflare Pages project and connect this repository.
 2. Set the Pages project root/build output to `cloudflare/pages` (no build command; output directory `public`).
-3. Add the Pages environment variable `BACKEND_URL` with the public HTTPS Cloudflare Tunnel/VPS backend origin, e.g. `https://your-tunnel.example.com`. Do not point it at the Pages domain itself.
+3. Add the Pages environment variable `BACKEND_URL` with the public HTTPS ngrok tunnel/VPS backend origin, e.g. `https://your-tunnel.example.com`. Do not point it at the Pages domain itself.
 4. Deploy and test `/health`, `/`, `/panel`, `/api/site-settings`, `/watch/<code>` and `/dl/<code>`.
 5. Keep the VPS backend and MongoDB running. Download/watch traffic is streamed from the VPS backend; Pages is not a media-storage service.
 
-The `BACKEND_URL` must be stable and reachable from Cloudflare. For production, use a named Cloudflare Tunnel hostname rather than an ephemeral `trycloudflare.com` quick tunnel.
+The `BACKEND_URL` must be stable and reachable from Cloudflare. For production, use a named ngrok tunnel hostname rather than an ephemeral `ngrok-free.app` quick tunnel.

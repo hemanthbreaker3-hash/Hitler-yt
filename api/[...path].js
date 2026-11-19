@@ -3,7 +3,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { MongoClient } from 'mongodb';
 
-export const config = { api: { bodyParser: false } };
+export const config = { api: { bodyParser: false }, maxDuration: 300 };
 
 const API_SUBPATHS = new Set([
   'catalog',
@@ -183,7 +183,10 @@ function isTryCloudflareUrl(value) {
   if (!valid) return false;
   try {
     const host = new URL(valid).hostname.toLowerCase();
-    return host === 'trycloudflare.com' || host.endsWith('.trycloudflare.com');
+    return host === 'ngrok-free.app' || host.endsWith('.ngrok-free.app') ||
+    host === 'ngrok-free.dev' || host.endsWith('.ngrok-free.dev') ||
+    host === 'ngrok.io' || host.endsWith('.ngrok.io') ||
+    host === 'trycloudflare.com' || host.endsWith('.trycloudflare.com');
   } catch {
     return false;
   }
@@ -215,7 +218,7 @@ function rewriteMediaOrButtonUrl(targetUrl, cloudflareBase, forceReplaceDomain =
     const cf = new URL(cfValid);
     const host = parsed.hostname.toLowerCase();
     const isMediaPath = /^\/(dl|stream|watch|remux)\//.test(parsed.pathname);
-    if (forceReplaceDomain || isMediaPath || host.endsWith('.trycloudflare.com') || host.endsWith('.vercel.app')) {
+    if (forceReplaceDomain || isMediaPath || host.endsWith('.trycloudflare.com') || host.endsWith('.ngrok-free.app') || host.endsWith('.ngrok-free.dev') || host.endsWith('.ngrok.io') || host.endsWith('.vercel.app')) {
       parsed.protocol = cf.protocol;
       parsed.host = cf.host;
       return parsed.toString();
@@ -298,7 +301,7 @@ async function getSettingsState(db, req = null) {
   const rows = await db
     .collection('settings')
     .find(
-      { key: { $in: ['base_url', 'backend_url', 'cloudflare_url', 'vercel_url', 'website_urls', 'tmdb_api_key', 'admin_panel_token', 'panel_username', 'panel_password_salt', 'panel_password_hash'] } },
+      { key: { $in: ['base_url', 'backend_url', 'ngrok_url', 'cloudflare_url', 'vercel_url', 'website_urls', 'tmdb_api_key', 'admin_panel_token', 'panel_username', 'panel_password_salt', 'panel_password_hash'] } },
       { projection: { key: 1, value: 1 } },
     )
     .toArray()
@@ -313,10 +316,14 @@ async function getSettingsState(db, req = null) {
   const websiteUrls = rawWebsiteUrls.filter((u) => !isTryCloudflareUrl(u));
 
   const cfCandidates = [
+    map.ngrok_url,
+    map.ngrok_url,
     map.cloudflare_url,
     map.backend_url,
     map.base_url,
     process.env.BACKEND_URL,
+    process.env.NGROK_URL,
+    process.env.NGROK_URL,
     process.env.CLOUDFLARE_URL,
     process.env.BASE_URL,
   ]
@@ -353,6 +360,8 @@ async function getSettingsState(db, req = null) {
     filestore_bot_username: fsUser,
     base_url: cloudflareUrl || validPublicUrl(map.base_url) || vercelUrl || '',
     backend_url: cloudflareUrl || validPublicUrl(map.backend_url) || '',
+    ngrok_url: cloudflareUrl,
+    ngrok_url: cloudflareUrl,
     cloudflare_url: cloudflareUrl,
     vercel_url: vercelUrl,
     website_urls: websiteUrls,
@@ -549,7 +558,7 @@ async function verifyAdminAuth(req, db) {
 
 function sendUnauthorized(res) {
   res.statusCode = 401;
-  res.setHeader('WWW-Authenticate', 'Basic realm="HITLER-YT-Panel"');
+  res.setHeader('WWW-Authenticate', 'Basic realm="HITLER YT-Panel"');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify({ detail: 'Invalid panel username or password' }));
 }
@@ -560,8 +569,8 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#07080c">
-  <meta name="description" content="HITLER YT — stream and download your media library with fast, reliable links.">
+  <meta name="theme-color" content="#0a0a0c">
+  <meta name="description" content="HITLER YT — discover anime, movies and series.">
   <meta name="color-scheme" content="dark">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -571,38 +580,38 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
   <style>
     :root{
       color-scheme:dark;
-      --bg:#07080c;--bg-elevated:#0d0f16;--bg-card:#12151f;--bg-card-hover:#171b28;
-      --line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);
-      --text:#f4f6fb;--muted:#8b93a7;--accent:#f5c518;--accent-2:#ff8a3d;
-      --accent-soft:rgba(245,197,24,.14);--cyan:#3dd6c6;--danger:#ff5c5c;
-      --radius:14px;--radius-sm:10px;--shadow:0 18px 50px rgba(0,0,0,.45);
+      --bg:#0a0a0c;--bg-elevated:#121214;--bg-card:#16161a;--bg-card-hover:#1e1e24;
+      --line:rgba(255,255,255,.06);--line-strong:rgba(255,255,255,.12);
+      --text:#f5f5f7;--muted:#8e8e98;--accent:#a78bfa;--accent-2:#22d3ee;
+      --accent-soft:rgba(167,139,250,.14);--cyan:#22d3ee;--prime:#f5c518;--danger:#ff5c5c;
+      --radius:12px;--radius-sm:8px;--shadow:0 24px 60px rgba(0,0,0,.55);
       --font:"Outfit",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      --font-display:"Syne","Outfit",system-ui,sans-serif;--max:1160px;
+      --font-display:"Syne","Outfit",system-ui,sans-serif;--max:1400px;--pad:4vw;
     }
     *{box-sizing:border-box;margin:0;padding:0}
     html{scroll-behavior:smooth}
     body{margin:0;min-height:100vh;color:var(--text);font:500 15px/1.55 var(--font);
-      background:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(245,197,24,.09),transparent 50%),
-        radial-gradient(ellipse 60% 40% at 90% 0%,rgba(61,214,198,.05),transparent 45%),var(--bg);
+      background:radial-gradient(ellipse 80% 50% at 15% -15%,rgba(167,139,250,.12),transparent 55%),
+        radial-gradient(ellipse 50% 40% at 90% 10%,rgba(34,211,238,.06),transparent 50%),var(--bg);
       letter-spacing:.01em;-webkit-font-smoothing:antialiased}
     h1,h2,h3,h4,.brand-word{font-family:var(--font-display);font-weight:800;letter-spacing:-.02em}
     a{color:inherit;text-decoration:none} button,input,select{font:inherit} img{max-width:100%;display:block}
     .wrap{width:min(100% - 28px,var(--max));margin-inline:auto}
     .topbar{position:sticky;top:0;z-index:80;backdrop-filter:blur(18px) saturate(1.2);-webkit-backdrop-filter:blur(18px) saturate(1.2);
-      background:rgba(7,8,12,.82);border-bottom:1px solid var(--line)}
+      background:rgba(9,9,13,.88);border-bottom:1px solid var(--line)}
     .topbar-inner{width:min(100% - 28px,var(--max));margin:auto;min-height:64px;display:flex;flex-wrap:wrap;
       align-items:center;justify-content:space-between;gap:14px;padding:10px 0}
     .topbar-logo{display:inline-flex;align-items:center;gap:12px;transition:transform .2s ease}
     .topbar-logo:hover{transform:translateY(-1px)}
     .topbar-logo img{width:42px;height:42px;border-radius:12px;object-fit:cover;border:1px solid var(--line-strong);
-      box-shadow:0 8px 24px rgba(245,197,24,.18)}
+      box-shadow:0 8px 24px rgba(255,106,0,.2)}
     .brand-lockup{display:flex;align-items:center;gap:10px}
     .brand-mark{position:relative;width:28px;height:42px;display:grid;place-items:center}
     .brand-mark span{position:absolute;font-family:var(--font-display);font-weight:800;font-size:11px;letter-spacing:.18em;
       writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);
       background:linear-gradient(180deg,var(--accent),var(--accent-2));-webkit-background-clip:text;background-clip:text;color:transparent}
     .brand-mark::before{content:"";position:absolute;inset:4px 12px;border-left:2px solid var(--accent);
-      border-right:2px solid rgba(61,214,198,.5);transform:skewY(-12deg);opacity:.85}
+      border-right:2px solid rgba(255,155,66,.75);transform:skewY(-12deg);opacity:.85}
     .brand-word{font-size:clamp(1.15rem,2.4vw,1.45rem);line-height:1;
       background:linear-gradient(105deg,#fff 20%,var(--accent) 55%,var(--accent-2) 100%);
       -webkit-background-clip:text;background-clip:text;color:transparent}
@@ -631,12 +640,25 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     .chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg-card);border:1px solid var(--line);
       border-radius:999px;padding:7px 13px;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;
       transition:border-color .15s,color .15s,background .15s}
-    .chip:hover,.chip.active{color:var(--accent);border-color:rgba(245,197,24,.4);background:var(--accent-soft)}
+    .chip:hover,.chip.active{color:var(--accent);border-color:rgba(255,106,0,.5);background:var(--accent-soft)}
     .cat-nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+    
+    .poster-card .badge-row{position:absolute;top:8px;left:8px;right:8px;display:flex;justify-content:space-between;gap:6px;z-index:2;pointer-events:none}
+    .poster-card .badge{font-size:10px;font-weight:800;padding:4px 8px;border-radius:6px;backdrop-filter:blur(8px)}
+    .poster-card .badge-rating{background:rgba(0,0,0,.72);color:var(--prime);border:1px solid rgba(245,197,24,.25)}
+    .poster-card .badge-year{background:rgba(0,0,0,.55);color:#e5e7eb;border:1px solid rgba(255,255,255,.1);margin-left:auto}
+    .poster-card .play-hint{position:absolute;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.35);opacity:0;transition:opacity .25s;z-index:1}
+    .poster-card:hover .play-hint{opacity:1}
+    .poster-card .play-hint span{width:48px;height:48px;border-radius:50%;background:rgba(167,139,250,.95);display:grid;place-items:center;color:#0a0a0c;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+    .hero-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 14px}
+    .hero-meta .pill{font-size:11px;font-weight:800;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#e5e7eb}
+    .hero-meta .pill.gold{color:var(--prime);border-color:rgba(245,197,24,.35);background:rgba(245,197,24,.1)}
+    .poster-card{position:relative}
+
     .poster-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:16px;margin-top:8px}
     .poster-card{background:var(--bg-card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
       transition:transform .22s cubic-bezier(.2,.8,.2,1),border-color .2s,box-shadow .22s}
-    .poster-card:hover{transform:translateY(-6px);border-color:rgba(245,197,24,.35);box-shadow:var(--shadow);background:var(--bg-card-hover)}
+    .poster-card:hover{transform:translateY(-6px);border-color:rgba(255,106,0,.45);box-shadow:var(--shadow);background:var(--bg-card-hover)}
     .poster-card img{width:100%;aspect-ratio:2/3;object-fit:cover;background:#1a1d28;transition:transform .35s ease}
     .poster-card:hover img{transform:scale(1.04)}
     .poster-card .info{padding:12px 12px 14px}
@@ -645,7 +667,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     .poster-card .meta{font-size:11px;color:var(--muted);line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
     .trending-row{display:flex;gap:12px;overflow-x:auto;padding:6px 0 14px;scroll-snap-type:x mandatory;scrollbar-width:thin;scrollbar-color:#333 transparent}
     .trending-item{flex:0 0 118px;scroll-snap-align:start;border-radius:12px;overflow:hidden;border:1px solid var(--line);background:var(--bg-card);transition:transform .2s,border-color .2s}
-    .trending-item:hover{transform:translateY(-3px);border-color:rgba(245,197,24,.35)}
+    .trending-item:hover{transform:translateY(-3px);border-color:rgba(255,106,0,.45)}
     .trending-item img{width:100%;aspect-ratio:2/3;object-fit:cover}
     main{padding:8px 0 96px}
     .footer{text-align:center;color:#5c6378;font-size:12px;padding:28px 0 48px;border-top:1px solid var(--line)}
@@ -653,7 +675,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     .muted{color:var(--muted)}
     .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:0 16px;border-radius:var(--radius-sm);
       border:1px solid var(--line);background:var(--bg-card);color:var(--text);cursor:pointer;font-weight:700;font-size:13px}
-    .btn:hover{border-color:rgba(245,197,24,.4);color:var(--accent)}
+    .btn:hover{border-color:rgba(255,106,0,.5);color:var(--accent)}
     .btn-yellow{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#0b0c10;border:0;font-weight:800;border-radius:999px;padding:10px 16px}
     .page-hero{margin:10px 0 18px;padding:18px 0 6px}
     .page-hero h1{font-size:clamp(1.4rem,3.5vw,2rem);background:linear-gradient(100deg,#fff,var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -665,6 +687,26 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     }
     @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
     .fade-up{animation:fadeUp .45s ease both}
+
+    /* HITLER YT anime-cinema theme */
+    body{background:radial-gradient(ellipse 75% 38% at 5% -8%,rgba(139,92,246,.16),transparent 62%),radial-gradient(ellipse 65% 42% at 100% 5%,rgba(111,48,151,.13),transparent 60%),linear-gradient(180deg,#09090d,#0b0a10 52%,#09090d)}
+    .topbar{border-bottom-color:rgba(139,92,246,.18)}
+    .topbar-logo img{display:block;object-fit:contain;background:#0a0a0c}
+    .brand-word{font-family:var(--font-display);font-weight:900;letter-spacing:-.055em;background:linear-gradient(100deg,#fff 8%,#c4b5fd 43%,#8b5cf6 83%,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
+    .brand-mark span{background:linear-gradient(180deg,#22d3ee,#7c3aed);-webkit-background-clip:text;background-clip:text}
+    .brand-mark::before{border-left-color:#8b5cf6;border-right-color:rgba(255,155,66,.75)}
+    .topbar-links a:hover{background:rgba(139,92,246,.08);border-color:rgba(139,92,246,.28)}
+    .search-bar{background:rgba(22,21,28,.94);border-color:rgba(255,255,255,.1)}
+    .search-bar:focus-within{border-color:rgba(139,92,246,.7);box-shadow:0 0 0 4px rgba(139,92,246,.12)}
+    .page-hero{position:relative;overflow:hidden;margin:18px 0 20px;padding:clamp(24px,5vw,48px);min-height:155px;border:1px solid rgba(139,92,246,.22);border-radius:22px;background:linear-gradient(105deg,rgba(139,92,246,.18),rgba(28,17,35,.72) 54%,rgba(13,13,19,.96));box-shadow:0 20px 60px rgba(0,0,0,.25)}
+    .page-hero h1{font-size:clamp(1.8rem,5vw,3.1rem);background:linear-gradient(100deg,#fff 15%,#ffd1ad 55%,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
+    .poster-card{border-radius:13px;background:linear-gradient(180deg,#1b1921,#111116);border-color:rgba(255,255,255,.07);box-shadow:0 8px 24px rgba(0,0,0,.24)}
+    .poster-card:hover{transform:translateY(-6px) scale(1.012);border-color:rgba(139,92,246,.58);box-shadow:0 18px 38px rgba(0,0,0,.45),0 0 24px rgba(139,92,246,.12)}
+    .poster-card img{transition:transform .4s ease}.poster-card:hover img{transform:scale(1.045)}
+    .section-head h2::before{background:linear-gradient(#22d3ee,#7c3aed)}
+    .chip:hover,.chip.active{color:#ffad70;border-color:rgba(139,92,246,.55);background:rgba(139,92,246,.16)}
+    .footer{border-top-color:rgba(139,92,246,.16)}
+    @media(max-width:640px){.page-hero{padding:22px 18px;min-height:135px}.brand-mark{display:grid;width:25px}}
   </style>
   ${headExtra}
 </head>
@@ -672,10 +714,10 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
 <header class="topbar">
   <div class="topbar-inner">
     <a class="topbar-logo" href="/" title="HITLER YT Home">
-      <img src="/static/images/logo.jpg" alt="HITLER YT logo" width="42" height="42" loading="eager">
+      <img src="/static/images/logo.jpg" alt="HITLER YT" width="42" height="42" loading="eager" onerror="this.style.display='none'">
       <span class="brand-lockup">
         <span class="brand-mark" aria-hidden="true"><span>HYT</span></span>
-        <span class="brand-word">HITLER<em>YT</em></span>
+        <span class="brand-word">HITLER YT</span>
       </span>
     </a>
     <nav class="topbar-links" aria-label="Primary">
@@ -694,7 +736,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
 
 function pagePosterPath(p) {
   if (!p) return '/static/images/poster.jpg';
-  return String(p).startsWith('http') ? p : `https://image.tmdb.org/t/p/w500${p}`;
+  return String(p).startsWith('http') ? p : `https://image.tmdb.org/t/p/w780${p}`;
 }
 
 function renderIndexHtml(initialItems, initialCategories, queryStr = '') {
@@ -722,6 +764,7 @@ function renderIndexHtml(initialItems, initialCategories, queryStr = '') {
 <div class="poster-grid" id="catalog-grid">
   <p class="muted" style="grid-column:1/-1;padding:40px 0;text-align:center">Loading titles…</p>
 </div>
+<div class="related-pager catalog-pager" id="catalogPager" hidden></div>
 
 <script>
 window.__INITIAL_CATALOG__ = ${safeJsonForScript(initialItems)};
@@ -819,26 +862,63 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
       trend.style.display = 'none';
     }
 
-    for (const p of list) {
+    const pager = document.getElementById('catalogPager');
+    const PER_PAGE = 24;
+    let catalogPage = 1;
+    const maxPages = Math.max(1, Math.ceil(list.length / PER_PAGE));
+    const drawPage = () => {
+      el.innerHTML = '';
+      for (const p of list.slice((catalogPage - 1) * PER_PAGE, catalogPage * PER_PAGE)) {
       const a = document.createElement('a');
       a.className = 'poster-card';
       a.href = '/title/' + encodeURIComponent(p.slug);
       const img = document.createElement('img');
       img.loading = 'lazy';
-      img.src = p.poster_path?.startsWith('http') ? p.poster_path : (p.poster_path ? 'https://image.tmdb.org/t/p/w500' + p.poster_path : '/static/images/poster.jpg');
+      img.decoding = 'async';
+      img.src = p.poster_path?.startsWith('http') ? p.poster_path : (p.poster_path ? 'https://image.tmdb.org/t/p/w780' + p.poster_path : '/static/images/poster.jpg');
       img.alt = p.title || 'Poster';
+      const badges = document.createElement('div');
+      badges.className = 'badge-row';
+      const rating = p.rating != null && p.rating !== '' ? Number(p.rating) : null;
+      if (rating != null && !Number.isNaN(rating) && rating > 0) {
+        const b = document.createElement('span'); b.className = 'badge badge-rating';
+        b.textContent = '★ ' + (rating % 1 ? rating.toFixed(1) : rating); badges.appendChild(b);
+      }
+      const year = (p.release_date || '').toString().slice(0, 4);
+      if (year) {
+        const y = document.createElement('span'); y.className = 'badge badge-year'; y.textContent = year; badges.appendChild(y);
+      }
+      const play = document.createElement('div'); play.className = 'play-hint'; play.innerHTML = '<span>▶</span>';
       const info = document.createElement('div');
       info.className = 'info';
       const t = document.createElement('div');
       t.className = 'title';
-      t.textContent = (p.title || 'Untitled') + (p.release_date ? ' (' + (p.release_date.slice(0, 4) || '') + ')' : '');
+      t.textContent = p.title || 'Untitled';
       const m = document.createElement('div');
       m.className = 'meta';
       m.textContent = qualityLine(p);
       info.append(t, m);
-      a.append(img, info);
+      a.append(img, badges, play, info);
       el.append(a);
-    }
+      }
+      if (pager) {
+        pager.hidden = maxPages <= 1;
+        pager.innerHTML = '';
+        if (maxPages > 1) {
+          const make = (label, target, disabled = false, active = false) => {
+            const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.disabled = disabled;
+            if (active) b.classList.add('active');
+            b.onclick = () => { catalogPage = target; drawPage(); document.getElementById('catalog')?.scrollIntoView({behavior:'smooth',block:'start'}); };
+            pager.appendChild(b);
+          };
+          make('‹', catalogPage - 1, catalogPage <= 1);
+          const first = Math.max(1, Math.min(catalogPage - 2, maxPages - 4));
+          for (let n = first; n <= Math.min(maxPages, first + 4); n++) make(String(n), n, false, n === catalogPage);
+          make('›', catalogPage + 1, catalogPage >= maxPages);
+        }
+      }
+    };
+    drawPage();
   }
 
   function filterInitialItems() {
@@ -1070,6 +1150,10 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
     .groups-pager .pg-jump label{color:var(--muted);font-size:12px}
     .groups-pager .pg-jump input{width:64px;background:var(--bg);border:1px solid var(--line);color:#fff;border-radius:8px;padding:8px 10px;font:600 13px var(--font);text-align:center}
     .groups-pager .pg-jump button{background:var(--accent);border:0;color:#0b0c10;border-radius:8px;padding:8px 12px;font:700 13px var(--font);cursor:pointer}
+    .auto-open-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 16px;margin:12px 0 0;border-radius:14px;background:linear-gradient(135deg,rgba(139,92,246,.12),rgba(37,99,235,.1));border:1px solid rgba(139,92,246,.28);color:var(--text)}
+    .auto-open-banner .spinner{width:22px;height:22px;border-radius:50%;border:2px solid rgba(255,255,255,.2);border-top-color:#8b5cf6;animation:title-spin .7s linear infinite}
+    @keyframes title-spin{to{transform:rotate(360deg)}}
+    .auto-open-banner a{color:#22d3ee;font-weight:700}
     @media(max-width:650px){.detail{grid-template-columns:1fr}.detail img{max-width:220px}.groups-pager .pg-jump{margin-left:0;width:100%}}
   </style>`;
 
@@ -1092,8 +1176,8 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
             const buttons = Array.isArray(group.buttons) ? group.buttons : [];
             const btnsHtml = buttons
               .map(
-                (btn) =>
-                  `<a class="btn-yellow cf-media-btn" href="${escapeHtml(btn.url || '#')}" data-raw-url="${escapeHtml(btn.url || '#')}" rel="noopener" target="_blank">${escapeHtml(btn.name || 'Link')}</a>`,
+                (btn, bi) =>
+                  `<a class="btn-yellow cf-media-btn${boxKey === 'watch' ? ' watch-btn' : ''}" href="${escapeHtml(btn.url || '#')}" data-raw-url="${escapeHtml(btn.url || '#')}" data-group-index="${idx}" data-button-index="${bi}" rel="noopener"${boxKey === 'watch' ? '' : ' target="_blank"'}>${escapeHtml(btn.name || 'Link')}</a>`,
               )
               .join('');
             return `<div class="group-block" data-group-index="${idx}">
@@ -1125,7 +1209,6 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
     })
     .join('');
 
-  // Telegram box for existing + new pages (only when FileStore is configured)
   const tgGroups = buildTelegramGroupsFromWatch(allGroups, filestoreUsername);
   let telegramHtml = '';
   if (tgGroups.length) {
@@ -1159,6 +1242,19 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
       </section>`;
   }
 
+  const watchBoxGroups = allGroups.filter((g) => (g?.box || 'watch') === 'watch');
+  const hasFirstWatch = watchBoxGroups.some((g) => Array.isArray(g.buttons) && g.buttons[0] && g.buttons[0].url);
+  const autoBanner = hasFirstWatch
+    ? `<div class="auto-open-banner" id="autoOpenBanner">
+      <div class="spinner" aria-hidden="true"></div>
+      <div>
+        <strong>Opening built-in player…</strong>
+        <div class="muted" style="font-size:12px;margin-top:2px">First Watch group · first quality</div>
+      </div>
+      <a href="#" id="manualWatchLink">Open manually</a>
+    </div>`
+    : '';
+
   const genresHtml =
     Array.isArray(page.genres) && page.genres.length
       ? `<div class="meta">${page.genres.map((g) => `<span>${escapeHtml(g)}</span>`).join('')}</div>`
@@ -1178,48 +1274,89 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
     ${genresHtml}
     ${page.imdb_id ? `<p class="muted" style="margin-top:8px">IMDb: ${escapeHtml(page.imdb_id)}</p>` : ''}
     ${page.tagline ? `<p style="margin-top:8px"><em>${escapeHtml(page.tagline)}</em></p>` : ''}
+    ${autoBanner}
     ${boxesHtml}
     ${telegramHtml}
   </div>
 </article>
 <script>
-(async () => {
-  let cfBase = ${safeJsonForScript(cloudflareUrl || '')};
-  function rewriteToCloudflare(rawHref, baseOrigin) {
-    if (!rawHref || !baseOrigin) return rawHref;
-    const cleanBase = String(baseOrigin).trim().replace(/\\/+$/, '');
-    if (!cleanBase.startsWith('http://') && !cleanBase.startsWith('https://')) return rawHref;
-    if (rawHref.startsWith('/')) return cleanBase + rawHref;
+(function(){
+  const TITLE_SLUG = ${safeJsonForScript(page.slug || '')};
+  function extractWatchCode(url) {
+    if (!url) return null;
     try {
-      const u = new URL(rawHref, window.location.origin);
-      const cf = new URL(cleanBase);
-      if (u.protocol === 'http:' || u.protocol === 'https:') {
-        u.protocol = cf.protocol;
-        u.host = cf.host;
-        return u.toString();
+      const m = String(url).match(/(?:^|\\/)watch\\/([A-Za-z0-9_-]{3,64})(?:\\/|$|\\?|#)/i);
+      return m ? m[1] : null;
+    } catch (_) { return null; }
+  }
+  function buildWatchHref(rawUrl, groupIndex, buttonIndex) {
+    const code = extractWatchCode(rawUrl);
+    if (!code) return rawUrl;
+    const params = new URLSearchParams();
+    if (TITLE_SLUG) params.set('title', TITLE_SLUG);
+    params.set('g', String(groupIndex || 0));
+    params.set('b', String(buttonIndex || 0));
+    return '/watch/' + code + '?' + params.toString();
+  }
+  document.querySelectorAll('a.watch-btn').forEach(a => {
+    const raw = a.getAttribute('data-raw-url') || a.getAttribute('href') || '';
+    const gi = parseInt(a.getAttribute('data-group-index') || '0', 10) || 0;
+    const bi = parseInt(a.getAttribute('data-button-index') || '0', 10) || 0;
+    const href = buildWatchHref(raw, gi, bi);
+    a.setAttribute('href', href);
+    a.removeAttribute('target');
+  });
+  (async () => {
+    let cfBase = ${safeJsonForScript(cloudflareUrl || '')};
+    function rewriteToCloudflare(rawHref, baseOrigin) {
+      if (!rawHref || !baseOrigin) return rawHref;
+      const cleanBase = String(baseOrigin).trim().replace(/\\/+$/, '');
+      if (!cleanBase.startsWith('http://') && !cleanBase.startsWith('https://')) return rawHref;
+      if (rawHref.startsWith('/')) return cleanBase + rawHref;
+      try {
+        const u = new URL(rawHref, window.location.origin);
+        const cf = new URL(cleanBase);
+        if (u.protocol === 'http:' || u.protocol === 'https:') {
+          u.protocol = cf.protocol;
+          u.host = cf.host;
+          return u.toString();
+        }
+      } catch (_) {}
+      return rawHref;
+    }
+    function applyCloudflareButtons(baseOrigin) {
+      if (!baseOrigin) return;
+      document.querySelectorAll('a.cf-media-btn:not(.watch-btn)').forEach(a => {
+        const raw = a.getAttribute('data-raw-url') || a.getAttribute('href') || '';
+        const updated = rewriteToCloudflare(raw, baseOrigin);
+        if (updated) a.setAttribute('href', updated);
+      });
+    }
+    if (cfBase) applyCloudflareButtons(cfBase);
+    try {
+      const r = await fetch('/api/site-settings', { cache: 'no-store' });
+      if (r.ok) {
+        const s = await r.json();
+        const latestCf = s.cloudflare_url || s.backend_url || cfBase;
+        if (latestCf) applyCloudflareButtons(latestCf);
       }
     } catch (_) {}
-    return rawHref;
-  }
-  function applyCloudflareButtons(baseOrigin) {
-    if (!baseOrigin) return;
-    document.querySelectorAll('a.cf-media-btn').forEach(a => {
-      const raw = a.getAttribute('data-raw-url') || a.getAttribute('href') || '';
-      const updated = rewriteToCloudflare(raw, baseOrigin);
-      if (updated) a.setAttribute('href', updated);
-    });
-  }
-  if (cfBase) applyCloudflareButtons(cfBase);
-  try {
-    const r = await fetch('/api/site-settings', { cache: 'no-store' });
-    if (r.ok) {
-      const s = await r.json();
-      const latestCf = s.cloudflare_url || s.backend_url || cfBase;
-      if (latestCf) applyCloudflareButtons(latestCf);
+  })();
+  const firstBtn = document.querySelector('a.watch-btn[data-group-index="0"][data-button-index="0"]')
+    || document.querySelector('a.watch-btn');
+  if (firstBtn) {
+    const dest = firstBtn.getAttribute('href');
+    const manual = document.getElementById('manualWatchLink');
+    if (manual) manual.setAttribute('href', dest);
+    const params = new URLSearchParams(window.location.search);
+    const skip = params.get('stay') === '1' || params.get('noredir') === '1';
+    if (!skip && dest) {
+      setTimeout(function(){ window.location.replace(dest); }, 350);
+    } else {
+      const banner = document.getElementById('autoOpenBanner');
+      if (banner) banner.style.display = 'none';
     }
-  } catch (_) {}
-})();
-(function(){
+  }
   var PER=5;
   function setupBox(boxKey){
     var list=document.querySelector('.groups-list[data-box="'+boxKey+'"]');
@@ -1279,7 +1416,7 @@ function renderPanelHtml(settings) {
     .admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
     .admin-card{padding:18px}
     .switch{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #1e3d64}
-    .switch input{accent-color:#3b82f6;width:20px;height:20px}
+    .switch input{accent-color:#8b5cf6;width:20px;height:20px}
     .admin-card input,.admin-card select{width:100%;padding:11px;background:#091a31;border:1px solid #28558b;color:white;border-radius:10px;margin:6px 0}
     .result{padding:12px;border:1px solid #244c7c;border-radius:10px;margin:10px 0;background:#071426}
     #tmdb-results .result,#categories .result{cursor:pointer}
@@ -1330,16 +1467,16 @@ function renderPanelHtml(settings) {
   </section>
 
   <section class="card admin-card">
-    <h2>🌐 Website & Cloudflare Tunnel URLs</h2>
-    <label class="field-label">Cloudflare Try URL (Download, Stream & Button Links)</label>
-    <input id="base-url" type="url" placeholder="https://name.trycloudflare.com">
-    <label class="field-label">Backend Tunnel URL (Cloudflare → VPS)</label>
-    <input id="backend-url" type="url" placeholder="https://name.trycloudflare.com">
+    <h2>🌐 Website & ngrok Tunnel URLs</h2>
+    <label class="field-label">ngrok URL (Download, Stream & Button Links)</label>
+    <input id="base-url" type="url" placeholder="https://your-ngrok-domain.ngrok-free.app">
+    <label class="field-label">Backend Tunnel URL (ngrok → VPS)</label>
+    <input id="backend-url" type="url" placeholder="https://your-ngrok-domain.ngrok-free.app">
     <label class="field-label">Vercel Website URL (Catalog Website)</label>
     <input id="vercel-url" type="url" readonly placeholder="Detected on first Vercel visit">
     <small class="muted" id="website-urls"></small>
     <button class="btn accent" type="button" onclick="saveUrls()" style="margin-top:8px;width:100%">Save & Rewrite Button URLs</button>
-    <p id="url-status" class="muted" style="margin-top:6px">All download links, stream links, and title-page button URLs automatically use your Cloudflare trycloudflare.com URL.</p>
+    <p id="url-status" class="muted" style="margin-top:6px">All download links, stream links, and title-page button URLs automatically use your ngrok URL.</p>
   </section>
 
   <section class="card admin-card">
@@ -1388,7 +1525,7 @@ function renderPanelHtml(settings) {
 
   <div class="admin-grid" style="margin:16px 0;align-items:start">
     <section class="box-panel watch-panel">
-      <h3 style="color:#60a5fa">▶ WATCH BOX GROUPS</h3>
+      <h3 style="color:#22d3ee">▶ WATCH BOX GROUPS</h3>
       <p class="muted" style="font-size:12px;margin:4px 0 8px">Add groups to the Watch box (e.g. Watch 1080p, Episode 1–10, Hindi Dub).</p>
       <label class="field-label">New Watch Group Name</label>
       <input id="new-watch-group-name" placeholder="Enter Watch group name (e.g. Watch Online 1080p)">
@@ -1467,7 +1604,7 @@ async function saveUrls() {
     document.getElementById('vercel-url').value = d.vercel_url || '';
     document.getElementById('website-urls').textContent =
       'Registered Vercel Website URLs: ' + ((d.website_urls || []).join(' · ') || 'Waiting for first Vercel visit');
-    box.textContent = 'Saved to MongoDB! Download links, stream links, and title-page button URLs now use this Cloudflare URL.';
+    box.textContent = 'Saved to MongoDB! Download links, stream links, and title-page button URLs now use this ngrok URL.';
     if (document.getElementById('page-select').value) {
       await loadPageEditor();
     }
@@ -1883,7 +2020,7 @@ async function savePageEditor() {
       }),
     });
     await loadPageEditor();
-    document.getElementById('edit-status').textContent = '✅ Saved to shared MongoDB! Watch & Download groups and Cloudflare button URLs are now live.';
+    document.getElementById('edit-status').textContent = '✅ Saved to shared MongoDB! Watch & Download groups and ngrok button URLs are now live.';
   } catch (e) {
     document.getElementById('edit-status').textContent = '❌ Save failed: ' + e.message;
   }
@@ -1948,49 +2085,180 @@ loadUrls();
   });
 }
 
-function renderWatchHtml(file, settings, streamBaseUrl) {
+function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   const cfOrigin = validPublicUrl(streamBaseUrl) || settings.cloudflare_url || settings.backend_url || settings.base_url || '';
   const sizeMb = file.file_size ? (Number(file.file_size) / (1024 * 1024)).toFixed(2) : '0.00';
-  const dlHref = cfOrigin ? `${cfOrigin}/dl/${encodeURIComponent(file.short_code)}` : `/dl/${encodeURIComponent(file.short_code)}`;
+  const downloadsEnabled = settings.downloads_enabled !== false;
+  const fsUser = String(extra.filestoreUsername || settings.filestore_bot_username || '').replace(/^@+/, '');
+  const dlHref = downloadsEnabled
+    ? (cfOrigin ? `${cfOrigin}/dl/${encodeURIComponent(file.short_code)}` : `/dl/${encodeURIComponent(file.short_code)}`)
+    : (fsUser ? `https://t.me/${fsUser}?start=file_${encodeURIComponent(file.short_code)}` : (cfOrigin ? `${cfOrigin}/dl/${encodeURIComponent(file.short_code)}` : `/dl/${encodeURIComponent(file.short_code)}`));
 
-  const headExtra = `<style>
+  const watchGroups = Array.isArray(extra.watchGroups) ? extra.watchGroups : [];
+  const groupIndex = Number.isFinite(extra.groupIndex) ? Math.max(0, extra.groupIndex) : 0;
+  const buttonIndex = Number.isFinite(extra.buttonIndex) ? Math.max(0, extra.buttonIndex) : 0;
+  const titleSlug = String(extra.titleSlug || '');
+  const posterUrl = String(extra.posterUrl || '');
+  const groupName = (watchGroups[groupIndex] && watchGroups[groupIndex].name) || '';
+
+  const headExtra = `
+<script>
+(function () {
+  var CDN = 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/';
+  var params = new URLSearchParams(window.location.search);
+  var forced = params.get('engine');
+  var canWasm = false;
+  try { canWasm = !!document.createElement('canvas').getContext('webgl2'); } catch (e) { canWasm = false; }
+  var isMkv = /\\.mkv(?:$|[?#])/i.test(window.location.pathname || '') ||
+              /\\.mkv\\b/i.test(document.title || '');
+   var engine = (forced === 'native') ? 'native' : 'wasm'; // Movi Player is the default built-in engine.
+  window.__HITLER YTPlayer = { initial: engine, engine: engine, forced: !!forced, cdn: CDN };
+  function addLink(rel, href, attrs) {
+    var l = document.createElement('link');
+    l.rel = rel; l.href = href;
+    if (attrs) Object.keys(attrs).forEach(function (k) { l.setAttribute(k, attrs[k]); });
+    document.head.appendChild(l);
+  }
+  addLink('preconnect', 'https://cdn.jsdelivr.net', { crossorigin: '' });
+  addLink('modulepreload', CDN + 'element.slim.js');
+  addLink('preload', CDN + 'movi.wasm', { as: 'fetch', crossorigin: 'anonymous' });
+})();
+</script>
+<style>
     ${!settings.built_in_player_enabled ? '.player-shell,.card.info{display:none!important}' : ''}
     ${!settings.streaming_enabled ? '.player-shell{display:none!important}' : ''}
-    .player-shell{position:relative;border-radius:20px;padding:2px;overflow:hidden;background:#0a0a14;box-shadow:0 8px 40px rgba(0,0,0,.55),0 0 28px rgba(59,130,246,.18)}
+    .player-shell{position:relative;border-radius:20px;padding:2px;overflow:hidden;background:#0a0a14;box-shadow:0 18px 48px rgba(0,0,0,.58),0 0 24px rgba(139,92,246,.16)}
     .player-box{background:#000;border-radius:18px;overflow:hidden;position:relative;z-index:1}
-    video{display:block;width:100%;max-height:72vh;background:#000;aspect-ratio:16/9}
+    .player-wrapper{width:100%;aspect-ratio:16/9;position:relative;background:#000;contain:paint}
+    .player-wrapper movi-player{width:100%;height:100%;background:#000;object-fit:contain;display:block}
+    movi-player{--movi-primary:#8b5cf6;--movi-primary-light:#a78bfa;--movi-accent:#22d3ee;--movi-brand-fill:linear-gradient(135deg,#8b5cf6,#22d3ee);--movi-glass-bg:rgba(10,10,20,.88);--movi-chrome-bg:rgba(10,10,20,.88);--movi-bar-bg:rgba(10,10,20,.88);--movi-chrome-fg:#f5f5f5;--movi-surface:#12122a}
+    .player-chrome-btn{position:absolute;z-index:9;width:40px;height:40px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(6,6,12,.82);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px);padding:0;line-height:0}
+    .player-chrome-btn:hover{background:rgba(255,106,0,.25);border-color:rgba(139,92,246,.55)}
+    .player-chrome-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+    .pc-switch{top:12px;left:12px}.pc-laptop{top:12px;right:56px}.pc-download{top:12px;right:12px}
+    .player-pop{position:absolute;z-index:12;min-width:160px;max-width:min(280px,86vw);background:rgba(10,10,20,.96);border:1px solid rgba(139,92,246,.35);border-radius:14px;padding:8px;box-shadow:0 12px 32px rgba(0,0,0,.55);display:none;flex-direction:column;gap:4px}
+    .player-pop.open{display:flex}
+    .player-pop.switch-pop{top:56px;left:12px}.player-pop.laptop-pop{top:56px;right:12px}
+    .player-pop button,.player-pop a{display:block;width:100%;text-align:left;border:0;background:transparent;color:#f5f5f5;padding:10px 12px;border-radius:10px;font:600 13px system-ui;cursor:pointer;text-decoration:none}
+    .player-pop button:hover,.player-pop a:hover{background:rgba(139,92,246,.18)}
+    .player-pop .pop-title{font-size:11px;color:#9ca3af;padding:4px 12px 6px;text-transform:uppercase;letter-spacing:.06em}
+    .nav-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+    .nav-row .nav-btn{background:linear-gradient(180deg,#14142c,#0e0e20);border:1px solid #2a2a3a;color:#fff;border-radius:12px;padding:10px 16px;font:700 13px system-ui;cursor:pointer}
+    .nav-row .nav-btn:disabled{opacity:.4;cursor:not-allowed}
+    .nav-row .nav-spacer{flex:1}
+    .nav-row .tg-btn{background:linear-gradient(135deg,#0ea5e9,#2563eb);border:0;color:#fff;border-radius:12px;padding:10px 16px;font:700 13px system-ui;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
     .info{padding:18px 16px}
     .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;color:var(--muted);font-size:13px}
-    .meta span{background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);padding:3px 10px;border-radius:20px;font-size:12px}
+    .meta span{background:rgba(139,92,246,.08);border:1px solid rgba(255,106,0,.2);padding:3px 10px;border-radius:20px;font-size:12px}
     .tools{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
-    .player-panel{display:none}.player-panel.active{display:block}
+    .player-panel{display:block}
     .player-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px}
-    .pbtn{min-height:46px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,#14142c,#0e0e20);color:#fff;display:flex;align-items:center;justify-content:center;text-align:center;padding:10px;cursor:pointer;font-size:13px}
+    .pbtn{min-height:46px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,#14142c,#0e0e20);color:#fff;display:flex;align-items:center;justify-content:center;text-align:center;padding:10px;cursor:pointer;font-size:13px;text-decoration:none}
     .copy-ok{font-size:12px;color:#69e69a;min-height:18px;margin-top:6px}
     .filename{font-weight:700;word-break:break-word;font-size:16px}
     .side .card{padding:16px}
+    .related-groups{margin-top:18px}
+    .related-groups h3{font-size:15px;margin:0 0 12px;color:#fff}
+    .related-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+    .related-card{display:block;text-decoration:none;color:inherit;border-radius:14px;overflow:hidden;border:1px solid #2a2a3a;background:#0c0c18}
+    .related-card.active{border-color:#8b5cf6;box-shadow:0 0 0 1px rgba(139,92,246,.35)}
+    .related-card .thumb{aspect-ratio:16/9;background:#000 center/cover no-repeat;position:relative}
+    .related-card .thumb::after{content:"▶";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);font-size:22px}
+    .related-card .meta-line{padding:8px 10px;font-size:12px;font-weight:600;line-height:1.3}
+    .related-pager{display:flex;align-items:center;gap:8px;margin-top:12px;justify-content:center}
+    .related-pager[hidden]{display:none!important}
+    .related-pager button{background:#12122a;border:1px solid #2a2a3a;color:#fff;border-radius:8px;padding:8px 12px;font:600 13px system-ui;cursor:pointer}
+    .related-pager button:disabled{opacity:.4;cursor:not-allowed}
+    .related-pager span{color:#9ca3af;font-size:13px}
+    .related-pager button.active{background:linear-gradient(125deg,#7c3aed,#22d3ee);border-color:transparent;color:#071018;font-weight:900}
+    .episode-tools{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}.episode-tools input,.episode-tools select{min-height:40px;border:1px solid #2a2a3a;border-radius:10px;background:#0d0d16;color:#fff;padding:8px 12px;outline:none} .season-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 14px}.season-tabs button{border:1px solid rgba(148,163,184,.18);background:#111722;color:#9ca3af;border-radius:999px;padding:7px 13px;font-size:12px;font-weight:800;cursor:pointer}.season-tabs button.active{background:rgba(139,92,246,.14);border-color:rgba(139,92,246,.4);color:#c4b5fd}
+    .side-eps{max-height:min(70vh,560px);display:flex;flex-direction:column;gap:10px}
+    .side-season-bar{display:flex;flex-wrap:wrap;gap:6px}
+    .side-season-bar button{border:1px solid rgba(148,163,184,.2);background:#111722;color:#9ca3af;border-radius:999px;padding:6px 11px;font-size:11px;font-weight:800;cursor:pointer}
+    .side-season-bar button.active{background:rgba(139,92,246,.16);border-color:rgba(139,92,246,.45);color:#c4b5fd}
+    .side-ep-tools{display:flex;flex-direction:column;gap:8px}
+    .side-ep-tools select,.side-ep-tools input{min-height:38px;border:1px solid #2a2a3a;border-radius:10px;background:#0d0d16;color:#fff;padding:8px 10px;outline:none;width:100%}
+    .side-ep-list{display:flex;flex-direction:column;gap:6px;overflow:auto;max-height:min(48vh,380px);padding-right:2px}
+    .side-ep-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-radius:10px;border:1px solid rgba(148,163,184,.16);background:#101621;color:#e5e7eb;text-decoration:none;font-size:12px;font-weight:700}
+    .side-ep-btn:hover{border-color:rgba(139,92,246,.4);background:#151c2a}
+    .side-ep-btn.active{border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.08);color:#fff}
+    .side-ep-btn .ep-tag{flex:0 0 auto;background:rgba(139,92,246,.18);color:#c4b5fd;border-radius:7px;padding:3px 7px;font-size:10px;font-weight:900;letter-spacing:.04em}
+    .side-ep-btn .ep-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .side-ep-count{font-size:11px;color:#9ca3af}.episode-tools input{flex:1;min-width:160px}.episode-tools input:focus,.episode-tools select:focus{border-color:#22d3ee;box-shadow:0 0 0 3px rgba(139,92,246,.12)}.episode-count{font-size:12px;color:#9ca3af;align-self:center}
+    .notice{padding:11px 13px;border-radius:11px;background:rgba(59,130,246,.06);border:1px solid rgba(139,92,246,.18);color:var(--muted);font-size:12px;margin-top:12px}
+    .player-shell{background:linear-gradient(135deg,#7c3aed,#22d3ee);box-shadow:0 22px 54px rgba(0,0,0,.5),0 0 28px rgba(124,58,237,.12)}
+    .player-chrome-btn{background:rgba(9,12,20,.82);border-color:rgba(148,163,184,.22)}.player-chrome-btn:hover{background:rgba(124,58,237,.24);border-color:rgba(34,211,238,.45)}
+    .player-pop{background:rgba(10,14,22,.97);border-color:rgba(139,92,246,.35)}.player-pop button:hover,.player-pop a:hover{background:rgba(139,92,246,.18)}
+    .related-groups{background:linear-gradient(160deg,rgba(20,25,36,.97),rgba(10,13,20,.97));border-color:rgba(148,163,184,.14)}
+    .related-grid{grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:12px}
+    .related-card{background:#111722;border-color:rgba(148,163,184,.16);transition:transform .2s,border-color .2s,box-shadow .2s}
+    .related-card:hover{transform:translateY(-3px);border-color:rgba(34,211,238,.36);box-shadow:0 14px 28px rgba(0,0,0,.35)}
+    .related-card.active{border-color:#8b5cf6;box-shadow:0 0 0 1px rgba(139,92,246,.32)}
+    .related-card .meta-line{background:linear-gradient(180deg,#141b28,#101621);font-size:13px;min-height:42px;padding:9px 10px;display:flex;flex-direction:column;gap:3px}.quality-count{color:#22d3ee;font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
+    .episode-tools input,.episode-tools select{background:#101621;border-color:rgba(148,163,184,.18)}
+    .related-pager button{background:#141b28;border-color:rgba(148,163,184,.18)}.related-pager button.active{background:linear-gradient(120deg,#7c3aed,#22d3ee);color:#071018}
+    @media(max-width:520px){.related-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.related-groups{padding:12px!important}.player-shell{border-radius:14px}.player-box{border-radius:12px}}
     @media(min-width:900px){.watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}.side{align-self:start;position:sticky;top:72px}}
   </style>`;
+
+  // Episodes / Seasons UI lives in the right side panel (sideEpList + season filter)
+  const relatedSection = '';
+
+  const tgBtn = fsUser
+    ? `<a class="tg-btn" id="tgFileBtn" href="https://t.me/${escapeHtml(fsUser)}?start=file_${escapeHtml(file.short_code)}" target="_blank" rel="noopener">✈ Telegram</a>`
+    : '';
 
   const content = `
 <div class="watch-grid">
   <section>
     <div class="player-shell">
       <div class="player-box">
-        <video id="player" controls playsinline preload="auto" crossorigin="anonymous">
-          <source id="video-source" src="" type="video/mp4">
-          Your browser cannot play this media.
-        </video>
+        <div class="player-wrapper" id="playerWrapper">
+          <movi-player id="moviPlayer"
+            playsinline controls autoplay muted preload="auto" resume
+            theme="dark" themecolor="#8b5cf6"
+            subtitleedge="outline"
+            style="display:none;width:100%;height:100%"
+            tabindex="0"></movi-player>
+          <div id="playerLoading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000;z-index:2">
+            <div style="width:42px;height:42px;border-radius:50%;border:3px solid rgba(255,255,255,.18);border-top-color:#8b5cf6;animation:ddspin .8s linear infinite"></div>
+          </div>
+          <style>@keyframes ddspin{to{transform:rotate(360deg)}} movi-player{width:100%;height:100%;--movi-primary:#8b5cf6}</style>
+          <button type="button" class="player-chrome-btn pc-switch" id="pcSwitchBtn" title="Switch quality / source" aria-label="Switch source">
+            <svg viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+          </button>
+          <button type="button" class="player-chrome-btn pc-laptop" id="pcLaptopBtn" title="Open in external player" aria-label="External players">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/><path d="M8 20v-2h8v2"/></svg>
+          </button>
+          <button type="button" class="player-chrome-btn pc-download" id="pcDownloadBtn" title="Download" aria-label="Download">
+            <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+          </button>
+          <div class="player-pop switch-pop" id="switchPop" role="menu">
+            <div class="pop-title">This group</div>
+            <div id="switchPopList"></div>
+          </div>
+          <div class="player-pop laptop-pop" id="laptopPop" role="menu">
+            <div class="pop-title">Open in player</div>
+            <div id="laptopPopList"></div>
+          </div>
+        </div>
       </div>
+    </div>
+    <div class="nav-row" id="groupNavRow">
+      <button type="button" class="nav-btn" id="prevGroupBtn" disabled>← Prev</button>
+      <button type="button" class="nav-btn" id="nextGroupBtn" disabled>Next →</button>
+      <span class="nav-spacer"></span>
+      ${tgBtn}
     </div>
     <div class="card info" style="margin-top:12px">
       <div class="filename">${escapeHtml(file.filename || 'Media')}</div>
       <div class="meta">
         <span>${escapeHtml(sizeMb)} MB</span>
         <span>${escapeHtml(file.access_count || 0)} views</span>
+        ${groupName ? `<span id="groupLabel">${escapeHtml(groupName)}</span>` : ''}
       </div>
       <div class="tools">
-        ${settings.downloads_enabled ? `<a class="btn accent" id="direct-dl-btn" href="${escapeHtml(dlHref)}" download>⬇ Download (Chrome)</a><a class="btn" id="idm-dl-btn" href="#">⚡ 1DM Download</a>` : ''}
+        <a class="btn accent" id="direct-dl-btn" href="${escapeHtml(dlHref)}" ${downloadsEnabled ? 'download' : 'target="_blank" rel="noopener"'}>⬇ Download</a>
         <button class="btn" type="button" onclick="copyDownload()">Copy Download Link</button>
         <button class="btn" type="button" onclick="copyStream()">Copy Stream URL</button>
       </div>
@@ -1998,42 +2266,176 @@ function renderWatchHtml(file, settings, streamBaseUrl) {
     </div>
   </section>
   <aside class="side">
-    <div class="card">
-      <b>Open in player / downloader</b>
-      <p class="muted" style="font-size:12px;margin:6px 0 14px">Android buttons use explicit VIEW intents via your Cloudflare URL.</p>
+    <div class="card side-eps" id="sideEpsCard">
+      <b>Episodes / Seasons</b>
+      <div class="side-season-bar" id="sideSeasonBar" aria-label="Seasons"></div>
+      <div class="side-ep-tools">
+        <select id="seasonFilter" aria-label="Select season"><option value="all">All seasons</option></select>
+        <input id="episodeSearch" type="search" placeholder="Search EP…" aria-label="Search episodes">
+      </div>
+      <div class="side-ep-list" id="sideEpList"></div>
+      <div class="side-ep-count" id="episodeCount"></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <b>Open in player</b>
       <div id="mobile" class="player-panel active"><div class="player-grid" id="mobile-grid"></div></div>
+      <div class="notice">MX Player, PLAYit, VLC, and Download. If a player does not open, use <b>Copy Download Link</b> or <b>Copy Stream URL</b>.</div>
     </div>
   </aside>
 </div>
 <script>
 const SHORT_CODE = ${safeJsonForScript(file.short_code)};
 const STREAM_ORIGIN = (${safeJsonForScript(cfOrigin)} || window.location.origin).replace(/\\/+$/, '');
-const STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
-const DL_URL = STREAM_ORIGIN + '/dl/' + SHORT_CODE;
+// Same-origin play path (DDStream style) so movi-player WASM can demux multi-audio MKV.
+// Vercel proxies /stream|/dl|/remux to the backend tunnel.
+const PLAY_ORIGIN = window.location.origin;
+const STREAM_URL = PLAY_ORIGIN + '/stream/' + SHORT_CODE;
+const BACKEND_STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
+const DOWNLOADS_ENABLED = ${safeJsonForScript(downloadsEnabled)};
+const FILESTORE_BOT = ${safeJsonForScript(fsUser)};
+const DL_URL = DOWNLOADS_ENABLED
+  ? (PLAY_ORIGIN + '/dl/' + SHORT_CODE)
+  : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (PLAY_ORIGIN + '/dl/' + SHORT_CODE));
+const EXTERNAL_STREAM_URL = BACKEND_STREAM_URL;
 const PLAYER_MIME = ${safeJsonForScript(file.mime_type || 'video/mp4')};
 const INTENT_MIME = (!PLAYER_MIME || PLAYER_MIME === 'application/octet-stream') ? 'video/*' : PLAYER_MIME;
-const player = document.getElementById('player');
-if (player) {
-  player.src = STREAM_URL;
-  player.load();
+const WATCH_GROUPS = ${safeJsonForScript(watchGroups)};
+const TITLE_SLUG = ${safeJsonForScript(titleSlug)};
+const GROUP_INDEX = ${safeJsonForScript(groupIndex)};
+const BUTTON_INDEX = ${safeJsonForScript(buttonIndex)};
+const POSTER_URL = ${safeJsonForScript(posterUrl)};
+const FILESTORE_USER = ${safeJsonForScript(fsUser)};
+const FILE_NAME = ${safeJsonForScript(file.filename || '')};
+
+const FILE_URL = STREAM_URL;
+const REMUX_URL = PLAY_ORIGIN + '/remux/' + SHORT_CODE;
+const CFG = window.__HITLER YTPlayer || {};
+const MODULE_URL = (CFG.cdn || 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/') + 'element.slim.js';
+const MOVI_GLOBAL = 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js';
+const MOVI_GLOBAL_FALLBACK = 'https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js';
+
+const moviPlayer = document.getElementById('moviPlayer');
+const loadingEl = document.getElementById('playerLoading');
+
+let engine = 'movi';
+const forcedEngine = true;
+let wasmLoading = false, wasmLoaded = false, wasmWired = false;
+
+function hideLoading(){ if (loadingEl) { loadingEl.classList && loadingEl.classList.remove('active'); loadingEl.style.display = 'none'; } }
+function showLoading(){ if (loadingEl) { loadingEl.classList && loadingEl.classList.add('active'); loadingEl.style.display = 'flex'; } }
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  const m = document.getElementById('toast-message');
+  if (m) m.textContent = msg || 'OK';
+  if (t) { t.classList.add('active'); setTimeout(() => t.classList.remove('active'), 2200); }
 }
-function idmIntent(url) {
-  const u = new URL(url);
-  const scheme = u.protocol.replace(':','');
-  return 'intent://' + u.host + u.pathname + u.search + '#Intent;scheme=' + scheme + ';action=android.intent.action.VIEW;package=idm.internet.download.manager;S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+
+function warmMedia(url) {
+  try {
+    fetch(url, { headers: { Range: 'bytes=0-65535' }, priority: 'low' })
+      .then(async (r) => {
+        const ctype = (r.headers.get('content-type') || '').toLowerCase();
+        if (!r.ok || ctype.includes('application/json') || ctype.includes('text/html')) {
+          let msg = 'Stream unavailable from VPS tunnel';
+          try {
+            const j = await r.clone().json();
+            if (j && j.message) msg = j.message;
+          } catch (_) {}
+          hideLoading();
+          showToast(msg);
+          const st = document.getElementById('copy-status');
+          if (st) st.textContent = msg + ' Use Download / external player, or fix ngrok bandwidth on the VPS.';
+          return;
+        }
+        return r.arrayBuffer();
+      })
+      .catch(() => {});
+  } catch (_) {}
 }
+
+function startMoviAutoplay() {
+  if (!moviPlayer) return;
+  try {
+    moviPlayer.setAttribute('autoplay', '');
+    moviPlayer.setAttribute('playsinline', '');
+    // Muted autoplay is the only reliable automatic-start mode on mobile browsers.
+    moviPlayer.muted = true;
+    moviPlayer.setAttribute('muted', '');
+  } catch (_) {}
+  let started = false;
+  const attempt = () => {
+    if (started) return;
+    try {
+      const p = moviPlayer.play && moviPlayer.play();
+      if (p && typeof p.then === 'function') p.then(() => { started = true; }).catch(() => {
+        try {
+          moviPlayer.muted = true;
+          const retry = moviPlayer.play && moviPlayer.play();
+          if (retry && retry.then) retry.then(() => { started = true; }).catch(() => {});
+        } catch (_) {}
+      });
+    } catch (_) {}
+  };
+  ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough'].forEach(evt => moviPlayer.addEventListener(evt, attempt));
+  attempt();
+  [250, 800, 1600, 3000, 5000].forEach(ms => setTimeout(attempt, ms));
+}
+
+function startWasm() {
+  if (!wasmWired && moviPlayer) {
+    wasmWired = true;
+    moviPlayer.addEventListener('playing', hideLoading);
+    moviPlayer.addEventListener('canplay', hideLoading);
+    moviPlayer.addEventListener('waiting', showLoading);
+    moviPlayer.addEventListener('stalled', showLoading);
+    moviPlayer.addEventListener('error', () => { hideLoading(); showToast('Movi Player could not load this stream. Please retry.'); });
+  }
+  if (!moviPlayer) { hideLoading(); showToast('Movi Player element is missing'); return; }
+  moviPlayer.style.display = 'block';
+  if (!wasmLoaded) {
+    wasmLoaded = true;
+    moviPlayer.src = FILE_URL;
+    try { if (typeof moviPlayer.load === 'function') moviPlayer.load(); } catch (_) {}
+  }
+  startMoviAutoplay();
+}
+
+function loadGlobalScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script'); s.src = src; s.async = true;
+    s.onload = () => resolve(); s.onerror = () => reject(new Error('Movi Player CDN load failed'));
+    document.head.appendChild(s);
+  });
+}
+
+async function initWasm() {
+  if (wasmLoading || wasmLoaded) return;
+  wasmLoading = true; showLoading();
+  try {
+    try { await loadGlobalScript(MOVI_GLOBAL); }
+    catch (e) { console.warn('Movi primary CDN failed; trying same-player CDN fallback', e); await loadGlobalScript(MOVI_GLOBAL_FALLBACK); }
+    await customElements.whenDefined('movi-player');
+    if (!customElements.get('movi-player')) throw new Error('movi-player custom element unavailable');
+    startWasm();
+  } catch (err) {
+    console.error('[player] Movi Player initialization failed', err);
+    hideLoading(); showToast('Movi Player failed to initialize. Check your connection and retry.');
+  } finally { wasmLoading = false; }
+}
+
+function switchEngine() { showToast('Movi Player is the only built-in player.'); }
+
+// Movi Player is the sole built-in playback engine.
+showLoading();
+initWasm();
+
 const dlBtn = document.getElementById('direct-dl-btn');
 if (dlBtn) dlBtn.href = DL_URL;
-const idmBtn = document.getElementById('idm-dl-btn');
-if (idmBtn) idmBtn.href = idmIntent(DL_URL);
+
 function androidIntent(url, pkg, mime) {
   const u = new URL(url);
   const scheme = u.protocol.replace(':','');
   return 'intent://' + u.host + u.pathname + u.search + '#Intent;scheme=' + scheme + ';action=android.intent.action.VIEW;type=' + (mime || 'video/*') + ';package=' + pkg + ';S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
-}
-function hvStreamIntent(url) {
-  const encoded = encodeURIComponent(url);
-  return 'intent://play?url=' + encoded + '#Intent;scheme=hvstream;package=com.hvstreamplayer.app;S.browser_fallback_url=' + encoded + ';end';
 }
 function addPlayer(gridId, label, href) {
   const a = document.createElement('a');
@@ -2043,9 +2445,196 @@ function addPlayer(gridId, label, href) {
   if (!href.startsWith('intent:')) { a.target = '_blank'; a.rel = 'noopener'; }
   document.getElementById(gridId)?.appendChild(a);
 }
-[['1DM Download', 'idm'],['HV Stream', null],['PLAYit', 'com.playit.videoplayer'],['VLC', 'org.videolan.vlc'],['MX Player', 'com.mxtech.videoplayer.ad'],['Just Player', 'com.brouken.player']].forEach(([n, p]) => {
-  addPlayer('mobile-grid', n, p === 'idm' ? idmIntent(DL_URL) : (n === 'HV Stream' ? hvStreamIntent(STREAM_URL) : androidIntent(STREAM_URL, p, INTENT_MIME)));
+addPlayer('mobile-grid', 'MX Player', androidIntent(EXTERNAL_STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME));
+addPlayer('mobile-grid', 'PLAYit', androidIntent(EXTERNAL_STREAM_URL, 'com.playit.videoplayer', INTENT_MIME));
+addPlayer('mobile-grid', 'VLC', androidIntent(EXTERNAL_STREAM_URL, 'org.videolan.vlc', INTENT_MIME));
+addPlayer('mobile-grid', 'Download', DL_URL);
+
+function extractWatchCode(url) {
+  if (!url) return null;
+  try {
+    const m = String(url).match(/(?:^|\\/)watch\\/([A-Za-z0-9_-]{3,64})(?:\\/|$|\\?|#)/i);
+    return m ? m[1] : null;
+  } catch (_) { return null; }
+}
+function watchHrefFor(groupIdx, buttonIdx) {
+  const g = WATCH_GROUPS[groupIdx];
+  if (!g || !g.buttons || !g.buttons[buttonIdx]) return null;
+  const code = extractWatchCode(g.buttons[buttonIdx].url);
+  if (!code) return g.buttons[buttonIdx].url;
+  const params = new URLSearchParams();
+  if (TITLE_SLUG) params.set('title', TITLE_SLUG);
+  params.set('g', String(groupIdx));
+  params.set('b', String(buttonIdx));
+  return '/watch/' + code + '?' + params.toString();
+}
+function goToGroupButton(groupIdx, buttonIdx) {
+  const href = watchHrefFor(groupIdx, buttonIdx);
+  if (href) window.location.href = href;
+}
+
+(function setupSwitchPop() {
+  const btn = document.getElementById('pcSwitchBtn');
+  const pop = document.getElementById('switchPop');
+  const list = document.getElementById('switchPopList');
+  if (!btn || !pop || !list) return;
+  const g = WATCH_GROUPS[GROUP_INDEX];
+  if (!g || !g.buttons || !g.buttons.length) { btn.style.display = 'none'; return; }
+  list.innerHTML = '';
+  g.buttons.forEach((b, i) => {
+    const a = document.createElement('button');
+    a.type = 'button';
+    a.textContent = (b.name || ('Source ' + (i + 1))) + (i === BUTTON_INDEX ? ' ✓' : '');
+    a.addEventListener('click', () => {
+      pop.classList.remove('open');
+      if (i !== BUTTON_INDEX) goToGroupButton(GROUP_INDEX, i);
+    });
+    list.appendChild(a);
+  });
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('laptopPop')?.classList.remove('open');
+    pop.classList.toggle('open');
+  });
+})();
+
+(function setupLaptopPop() {
+  const btn = document.getElementById('pcLaptopBtn');
+  const pop = document.getElementById('laptopPop');
+  const list = document.getElementById('laptopPopList');
+  if (!btn || !pop || !list) return;
+  const items = [
+    ['MX Player', androidIntent(EXTERNAL_STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME)],
+    ['PLAYit', androidIntent(EXTERNAL_STREAM_URL, 'com.playit.videoplayer', INTENT_MIME)],
+    ['VLC', androidIntent(EXTERNAL_STREAM_URL, 'org.videolan.vlc', INTENT_MIME)],
+  ];
+  list.innerHTML = '';
+  items.forEach(([label, href]) => {
+    const a = document.createElement('a');
+    a.href = href;
+    a.textContent = label;
+    list.appendChild(a);
+  });
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('switchPop')?.classList.remove('open');
+    pop.classList.toggle('open');
+  });
+})();
+
+(function setupDownloadBtn() {
+  const btn = document.getElementById('pcDownloadBtn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = DL_URL;
+    a.setAttribute('download', '');
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  });
+})();
+
+document.addEventListener('click', () => {
+  document.getElementById('switchPop')?.classList.remove('open');
+  document.getElementById('laptopPop')?.classList.remove('open');
 });
+
+(function setupGroupNav() {
+  const prev = document.getElementById('prevGroupBtn');
+  const next = document.getElementById('nextGroupBtn');
+  if (!WATCH_GROUPS.length) {
+    if (prev) prev.disabled = true;
+    if (next) next.disabled = true;
+    return;
+  }
+  if (prev) {
+    prev.disabled = GROUP_INDEX <= 0;
+    prev.addEventListener('click', () => { if (GROUP_INDEX > 0) goToGroupButton(GROUP_INDEX - 1, 0); });
+  }
+  if (next) {
+    next.disabled = GROUP_INDEX >= WATCH_GROUPS.length - 1;
+    next.addEventListener('click', () => { if (GROUP_INDEX < WATCH_GROUPS.length - 1) goToGroupButton(GROUP_INDEX + 1, 0); });
+  }
+})();
+
+(function setupRelated() {
+  const list = document.getElementById('sideEpList');
+  const seasonSelect = document.getElementById('seasonFilter');
+  const search = document.getElementById('episodeSearch');
+  const count = document.getElementById('episodeCount');
+  const seasonBar = document.getElementById('sideSeasonBar');
+  if (!list || !WATCH_GROUPS.length) {
+    const card = document.getElementById('sideEpsCard');
+    if (card) card.style.display = 'none';
+    return;
+  }
+  const seasonOf = name => {
+    const text = String(name || '');
+    const m = text.match(/(?:season\s*|s\s*)(\d{1,2})\b/i) || text.match(/\bS(\d{1,2})E\d{1,3}\b/i);
+    return m ? 'Season ' + Number(m[1]) : 'Season 1';
+  };
+  const seasons = [...new Set(WATCH_GROUPS.map(g => seasonOf(g.name)))].sort((a, b) => Number(a.replace(/\D/g, '')) - Number(b.replace(/\D/g, '')));
+  seasons.forEach(season => {
+    if (!seasonSelect) return;
+    const o = document.createElement('option');
+    o.value = season; o.textContent = season; seasonSelect.appendChild(o);
+  });
+  function setActiveSeasonUI(value) {
+    if (seasonBar) {
+      seasonBar.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.season === value));
+    }
+    if (seasonSelect) seasonSelect.value = value;
+  }
+  if (seasonBar) {
+    const add = (label, value) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = label; b.dataset.season = value;
+      b.className = value === 'all' ? 'active' : '';
+      b.onclick = () => { setActiveSeasonUI(value); render(); };
+      seasonBar.appendChild(b);
+    };
+    add('All', 'all');
+    seasons.forEach(s => add(s.replace(/^Season\s+/i, 'S'), s));
+  }
+  function filtered() {
+    const term = (search && search.value || '').trim().toLowerCase();
+    const season = (seasonSelect && seasonSelect.value) || 'all';
+    return WATCH_GROUPS.map((g, idx) => ({ g, idx })).filter(({ g }) => {
+      const name = String(g.name || '');
+      return (season === 'all' || seasonOf(name) === season) && (!term || name.toLowerCase().includes(term));
+    });
+  }
+  function render() {
+    const rows = filtered();
+    list.innerHTML = '';
+    rows.forEach(({ g, idx }) => {
+      const first = (g.buttons || [])[0];
+      if (!first) return;
+      const href = (typeof watchHrefFor === 'function' ? watchHrefFor(idx, 0) : null) || first.url;
+      const a = document.createElement('a');
+      a.className = 'side-ep-btn' + (idx === GROUP_INDEX ? ' active' : '');
+      a.href = href;
+      const tag = document.createElement('span');
+      tag.className = 'ep-tag';
+      tag.textContent = 'EP ' + (idx + 1);
+      const name = document.createElement('span');
+      name.className = 'ep-name';
+      name.textContent = g.name || ('Episode ' + (idx + 1));
+      a.append(tag, name);
+      list.appendChild(a);
+    });
+    if (count) count.textContent = rows.length + ' episode' + (rows.length === 1 ? '' : 's');
+  }
+  search && search.addEventListener('input', render);
+  seasonSelect && seasonSelect.addEventListener('change', () => {
+    setActiveSeasonUI(seasonSelect.value);
+    render();
+  });
+  render();
+})();
+
 async function copyStream() {
   try {
     await navigator.clipboard.writeText(STREAM_URL);
@@ -2057,7 +2646,7 @@ async function copyStream() {
 async function copyDownload() {
   try {
     await navigator.clipboard.writeText(DL_URL);
-    document.getElementById('copy-status').textContent = 'Download link copied (paste in Chrome or 1DM).';
+    document.getElementById('copy-status').textContent = 'Download link copied.';
   } catch (e) {
     window.prompt('Copy download URL:', DL_URL);
   }
@@ -2268,7 +2857,7 @@ async function createVercelShortUrl(provider, destination) {
         redirect: 'manual',
         headers: {
           Accept: 'application/json, text/plain, */*',
-          'User-Agent': 'Mozilla/5.0 (compatible; HITLER-YT-Shortener/1.0)',
+          'User-Agent': 'Mozilla/5.0 (compatible; HITLER YT-Shortener/1.0)',
         },
       });
       const raw = (await response.text() || '').trim();
@@ -2348,7 +2937,9 @@ export default async function handler(req, res) {
           database: 'connected',
           database_name: db.databaseName,
           backend_configured: Boolean(state.cloudflare_url),
-          cloudflare_url: state.cloudflare_url,
+          ngrok_url: state.cloudflare_url,
+        ngrok_url: state.cloudflare_url,
+        cloudflare_url: state.cloudflare_url,
           vercel_url: state.vercel_url,
           deployment: 'vercel-website',
         });
@@ -2953,29 +3544,110 @@ export default async function handler(req, res) {
     }
 
     const requestPath = pathname + search;
+
+    // Same-origin media proxy (do NOT 307 to ngrok — browser hits interstitial HTML and movi-player fails).
+    // URL structure stays /stream|/dl|/remux|/api/tracks — body is proxied from backend with skip header.
     if (
       pathname.startsWith('/stream/') ||
       pathname.startsWith('/dl/') ||
       pathname.startsWith('/remux/') ||
       pathname.startsWith('/api/tracks/')
     ) {
-      if (!cloudflareUrl) {
+      if (req.method === 'OPTIONS') {
+        res.statusCode = 204;
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept, Origin, ngrok-skip-browser-warning');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Disposition, Content-Type');
+        res.setHeader('Access-Control-Max-Age', '86400');
+        res.end();
+        return;
+      }
+      if (!cloudflareUrl || isVercelUrl(cloudflareUrl)) {
         sendJson(res, 503, {
-          error: 'Cloudflare tunnel URL is not configured yet',
-          message: 'Wait a few seconds for the VPS Cloudflare Quick Tunnel to auto-sync to MongoDB, or set it via /baseurl.',
+          error: 'ngrok tunnel URL is not configured yet',
+          message: 'Wait a few seconds for the VPS ngrok tunnel to auto-sync to MongoDB, or set it via /baseurl.',
         });
         return;
       }
-      res.writeHead(307, { Location: `${cloudflareUrl}${requestPath}` });
-      res.end();
+      const targetUrl = new URL(`${cloudflareUrl}${requestPath}`);
+      const transport = targetUrl.protocol === 'https:' ? https : http;
+      const headers = {
+        accept: req.headers.accept || '*/*',
+        'user-agent': req.headers['user-agent'] || 'HITLER YT-Vercel-Gateway',
+        host: targetUrl.host,
+        'x-forwarded-host': req.headers.host || '',
+        'x-forwarded-proto': 'https',
+        'ngrok-skip-browser-warning': '1',
+      };
+      if (req.headers.range) headers.range = req.headers.range;
+      if (req.headers['if-range']) headers['if-range'] = req.headers['if-range'];
+      if (req.headers['content-type']) headers['content-type'] = req.headers['content-type'];
+
+      const clientReq = transport.request(targetUrl, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', headers }, (backendRes) => {
+        const responseHeaders = { ...backendRes.headers };
+        const status = backendRes.statusCode || 502;
+        const ctype = String(responseHeaders['content-type'] || responseHeaders['Content-Type'] || '').toLowerCase();
+        const ngrokErr = responseHeaders['ngrok-error-code'] || responseHeaders['Ngrok-Error-Code'] || '';
+        // Never pipe ngrok interstitial / error HTML into the video player
+        if (ngrokErr || status === 403 || status === 429 || (ctype.includes('text/html') && status >= 400)) {
+          backendRes.resume();
+          const msg = ngrokErr === 'ERR_NGROK_725'
+            ? 'VPS tunnel bandwidth limit reached (ngrok). Upgrade ngrok plan or wait for monthly reset, then streams will work again.'
+            : (ngrokErr
+              ? ('Media tunnel error: ' + ngrokErr + '. Check VPS ngrok is online and not rate-limited.')
+              : 'Media backend returned an error page instead of video. Check VPS/ngrok tunnel.');
+          sendJson(res, status === 403 || status === 429 ? status : 502, {
+            error: 'Media backend unavailable',
+            message: msg,
+            ngrok_error: ngrokErr || null,
+          });
+          return;
+        }
+        // Normalize CORS for browser / movi-player
+        responseHeaders['access-control-allow-origin'] = '*';
+        responseHeaders['access-control-expose-headers'] = 'Content-Length, Content-Range, Accept-Ranges, Content-Disposition, Content-Type';
+        responseHeaders['access-control-allow-methods'] = 'GET, HEAD, OPTIONS';
+        responseHeaders['cache-control'] = 'no-store, no-cache, must-revalidate, max-age=0';
+        delete responseHeaders['content-encoding'];
+        delete responseHeaders['transfer-encoding'];
+        // Avoid redirect loops if backend somehow redirects
+        delete responseHeaders['location'];
+        res.writeHead(status, responseHeaders);
+        if (req.method === 'HEAD') {
+          res.end();
+          backendRes.resume();
+          return;
+        }
+        backendRes.pipe(res);
+      });
+      clientReq.on('error', (error) => {
+        if (!res.headersSent) {
+          sendJson(res, 502, {
+            error: 'Bad Gateway',
+            message: 'Could not connect to media backend.',
+            detail: String(error?.message || error),
+          });
+        } else {
+          res.destroy(error);
+        }
+      });
+      clientReq.end();
       return;
     }
 
     if ((req.method === 'GET' || req.method === 'HEAD') && pathname.startsWith('/watch/')) {
-      const shortCode = decodeURIComponent(pathname.slice('/watch/'.length));
-      if (cloudflareUrl && !isVercelUrl(cloudflareUrl)) {
-        res.writeHead(307, { Location: `${cloudflareUrl}${requestPath}` });
-        res.end();
+      // Pathname from getRequestPath has no query; short code only.
+      // Button URLs from the bot are already full /watch/<code> links — we only need the code.
+      let shortCodeRaw = pathname.slice('/watch/'.length);
+      if (shortCodeRaw.includes('/')) shortCodeRaw = shortCodeRaw.split('/')[0];
+      // Strip accidental query fragments if any proxy left them on path
+      shortCodeRaw = shortCodeRaw.split('?')[0].split('#')[0];
+      let shortCode = '';
+      try { shortCode = decodeURIComponent(shortCodeRaw); } catch { shortCode = shortCodeRaw; }
+      shortCode = String(shortCode || '').trim();
+      if (!shortCode) {
+        sendJson(res, 404, { detail: 'Link not found' });
         return;
       }
       const fileData = await db.collection('files').findOne({ short_code: shortCode });
@@ -2983,7 +3655,78 @@ export default async function handler(req, res) {
         sendJson(res, 404, { detail: 'Link not found' });
         return;
       }
-      sendHtml(res, 200, renderWatchHtml(fileData, state, cloudflareUrl));
+
+      // Title context for prev/next, switch, related groups (works on Vercel website)
+      // Use searchParams from getRequestPath — NOT a missing `url` variable.
+      const titleSlug = String(searchParams.get('title') || '').trim();
+      let groupIndex = parseInt(searchParams.get('g') || '0', 10);
+      let buttonIndex = parseInt(searchParams.get('b') || '0', 10);
+      if (!Number.isFinite(groupIndex) || groupIndex < 0) groupIndex = 0;
+      if (!Number.isFinite(buttonIndex) || buttonIndex < 0) buttonIndex = 0;
+
+      let watchGroups = [];
+      let posterUrl = '';
+      if (titleSlug) {
+        try {
+          const rawPage = await db.collection('catalog_pages').findOne({ slug: titleSlug, published: true });
+          if (rawPage) {
+            const page = serializeCatalogDoc(rawPage, cloudflareUrl || '');
+            posterUrl = pagePosterPath(page.poster_path || '');
+            const allGroups = Array.isArray(page.groups) ? page.groups : [];
+            for (const g of allGroups) {
+              const box = String((g && g.box) || 'watch').trim().toLowerCase();
+              if (box && box !== 'watch') continue;
+              const buttons = [];
+              for (const btn of (g && g.buttons) || []) {
+                if (!btn || typeof btn !== 'object') continue;
+                const u = String(btn.url || '').trim();
+                const name = String(btn.name || 'Watch').trim() || 'Watch';
+                if (u) buttons.push({ name, url: u });
+              }
+              if (buttons.length) {
+                watchGroups.push({
+                  name: String((g && g.name) || 'Watch Group').trim() || 'Watch Group',
+                  buttons,
+                });
+              }
+            }
+            if (groupIndex >= watchGroups.length) groupIndex = 0;
+            if (watchGroups[groupIndex] && buttonIndex >= (watchGroups[groupIndex].buttons || []).length) {
+              buttonIndex = 0;
+            }
+          }
+        } catch (e) {
+          console.warn('watch title context failed', e);
+        }
+      }
+
+      const fsUser = String(state.filestore_bot_username || '').replace(/^@+/, '');
+      // Render watch HTML on Vercel; stream/dl still use cloudflare/backend origin in the page.
+      sendHtml(
+        res,
+        200,
+        renderWatchHtml(fileData, state, cloudflareUrl, {
+          titleSlug,
+          groupIndex,
+          buttonIndex,
+          watchGroups,
+          posterUrl,
+          filestoreUsername: fsUser,
+        }),
+      );
+      return;
+    }
+
+    // Media proxy: same-origin /stream|/dl|/remux for movi-player multi-audio (DDStream pattern)
+    const isMediaProxy = /^\/(stream|dl|remux)\//.test(pathname);
+    if (req.method === 'OPTIONS' && isMediaProxy) {
+      res.statusCode = 204;
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept, Origin, ngrok-skip-browser-warning');
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Disposition, Content-Type');
+      res.setHeader('Access-Control-Max-Age', '86400');
+      res.end();
       return;
     }
 
@@ -2996,27 +3739,39 @@ export default async function handler(req, res) {
     const transport = targetUrl.protocol === 'https:' ? https : http;
     const headers = {
       accept: req.headers.accept || '*/*',
-      'user-agent': req.headers['user-agent'] || 'HITLER-YT-Vercel-Gateway',
+      'user-agent': req.headers['user-agent'] || 'HITLER YT-Vercel-Gateway',
       host: targetUrl.host,
       'x-forwarded-host': req.headers.host || '',
       'x-forwarded-proto': 'https',
+      // Skip ngrok free browser interstitial for media fetches
+      'ngrok-skip-browser-warning': '1',
     };
     if (req.headers.authorization) headers.authorization = req.headers.authorization;
     if (req.headers['content-type']) headers['content-type'] = req.headers['content-type'];
     if (req.headers.range) headers.range = req.headers.range;
 
+    // Long timeout for media; streaming can take a while
+    const mediaTimeout = isMediaProxy ? 0 : 25000;
+
     const clientReq = transport.request(targetUrl, { method: req.method, headers }, (backendRes) => {
       const responseHeaders = { ...backendRes.headers };
       responseHeaders['cache-control'] = 'no-store, no-cache, must-revalidate, max-age=0';
+      responseHeaders['access-control-allow-origin'] = '*';
+      responseHeaders['access-control-expose-headers'] = 'Content-Length, Content-Range, Accept-Ranges, Content-Disposition, Content-Type';
+      responseHeaders['access-control-allow-methods'] = 'GET, HEAD, OPTIONS';
+      // Avoid compressed body issues with range streaming
+      delete responseHeaders['content-encoding'];
       res.writeHead(backendRes.statusCode || 502, responseHeaders);
       backendRes.pipe(res);
     });
-    clientReq.setTimeout(25000, () => clientReq.destroy(new Error('Backend request timed out')));
+    if (mediaTimeout > 0) {
+      clientReq.setTimeout(mediaTimeout, () => clientReq.destroy(new Error('Backend request timed out')));
+    }
     clientReq.on('error', (error) => {
       if (!res.headersSent) {
         sendJson(res, 502, {
           error: 'Bad Gateway',
-          message: 'Could not connect to the Cloudflare tunnel backend.',
+          message: 'Could not connect to the ngrok tunnel backend.',
           detail: String(error?.message || error),
         });
       } else {

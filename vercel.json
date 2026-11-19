@@ -5,19 +5,42 @@
     {
       "source": "/static/images/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=86400, stale-while-revalidate=604800" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=86400, stale-while-revalidate=604800"
+        }
       ]
     },
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" }
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        }
       ]
     }
   ],
   "rewrites": [
-    { "source": "/", "destination": "/api/index?__path=/" },
-    { "source": "/api/(.*)", "destination": "/api/index?__path=/api/$1" },
-    { "source": "/((?!api/|static/).*)", "destination": "/api/index?__path=/$1" }
-  ]
+    {
+      "source": "/",
+      "destination": "/api/index?__path=/"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index?__path=/api/$1"
+    },
+    {
+      "source": "/((?!api/|static/).*)",
+      "destination": "/api/index?__path=/$1"
+    }
+  ],
+  "functions": {
+    "api/[...path].js": {
+      "maxDuration": 300
+    },
+    "api/index.js": {
+      "maxDuration": 300
+    }
+  }
 }

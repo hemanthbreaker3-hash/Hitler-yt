@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Robust File2link VPS deployment. Run from the repository root.
+# Robust AniMoviesZoneflix VPS deployment. Run from the repository root.
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-APP_NAME="File2link"
+APP_NAME="AniMoviesZoneflix"
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 info(){ printf "${GREEN}[%s]${NC} %s\n" "$APP_NAME" "$*"; }
 warn(){ printf "${YELLOW}[WARN]${NC} %s\n" "$*"; }
@@ -12,7 +12,7 @@ run_root(){ if [ "$(id -u)" -eq 0 ]; then "$@"; elif command -v sudo >/dev/null 
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-[[ -f docker-compose.yml && -f Dockerfile && -f requirements.txt ]] || die "Run from the File2link project root; docker-compose.yml, Dockerfile and requirements.txt must exist."
+[[ -f docker-compose.yml && -f Dockerfile && -f requirements.txt ]] || die "Run from the AniMoviesZoneflix project root; docker-compose.yml, Dockerfile and requirements.txt must exist."
 command -v python3 >/dev/null 2>&1 || die "Python 3 is required to validate and write the environment file."
 
 # Host prerequisites.
@@ -29,9 +29,9 @@ fi
 
 if ! command -v docker >/dev/null 2>&1; then
   info "Installing Docker Engine and Compose plugin..."
-  curl -fsSL https://get.docker.com -o /tmp/file2link-get-docker.sh || die "Could not download Docker installer. Check VPS DNS/network access."
-  run_root sh /tmp/file2link-get-docker.sh
-  rm -f /tmp/file2link-get-docker.sh
+  curl -fsSL https://get.docker.com -o /tmp/animovieszoneflix-get-docker.sh || die "Could not download Docker installer. Check VPS DNS/network access."
+  run_root sh /tmp/animovieszoneflix-get-docker.sh
+  rm -f /tmp/animovieszoneflix-get-docker.sh
 fi
 run_root systemctl enable --now docker || die "Docker service could not be started. Check: sudo systemctl status docker --no-pager"
 
@@ -63,6 +63,7 @@ else
 fi
 
 # Build .env without sourcing/evaluating user-controlled shell text.
+# Pass the ngrok token with: export NGROK_AUTHTOKEN=YOUR_NGROK_AUTH_TOKEN
 if [[ ! -f .env ]]; then
   [[ -f .env.example ]] || die ".env.example is missing."
   cp .env.example .env
@@ -97,7 +98,7 @@ aliases = {'APP_ID':'API_ID', 'DATABASE_URI':'MONGODB_URI', 'DATABASE_URL':'MONG
 for alias, canonical in aliases.items():
     if os.environ.get(alias) and not os.environ.get(canonical):
         os.environ[canonical] = os.environ[alias]
-keys = ('API_ID','API_HASH','BOT_TOKEN','OWNER_ID','ADMINS','CHANNEL_ID','FORCE_SUB_CHANNELS','MONGODB_URI','DATABASE_NAME','REDIS_URL','BASE_URL','BACKEND_URL','WEBSITE_URL','PORT','DEBUG','DEFAULT_EXPIRY','SESSIONS','ADMIN_PANEL_TOKEN','TMDB_API_KEY','STREAM_CHUNK_SIZE')
+keys = ('API_ID','API_HASH','BOT_TOKEN','OWNER_ID','ADMINS','CHANNEL_ID','FORCE_SUB_CHANNELS','MONGODB_URI','DATABASE_NAME','REDIS_URL','BASE_URL','BACKEND_URL','WEBSITE_URL','PORT','DEBUG','DEFAULT_EXPIRY','SESSIONS','ADMIN_PANEL_TOKEN','TMDB_API_KEY','BRANDING','LOGO_URL','STREAM_CHUNK_SIZE','NGROK_AUTHTOKEN','TUNNEL_PROVIDER','CLOUDFLARE_URL','NGROK_URL')
 for key in keys:
     if key in os.environ: values[key] = os.environ[key]
 # Also accept legacy alias values from .env/config.env.
@@ -146,7 +147,7 @@ PY
 
 info "Validating Docker Compose configuration..."
 "${COMPOSE[@]}" config --quiet || die "Compose configuration is invalid. Check .env and docker-compose.yml."
-info "Building and starting File2link..."
+info "Building and starting AniMoviesZoneflix..."
 "${COMPOSE[@]}" up -d --build --remove-orphans
 
 PORT_VALUE="$(python3 - <<'PY'
@@ -168,73 +169,34 @@ for _ in $(seq 1 90); do
     info "Admin dashboard: /panel (username: admin; password stored in .env as ADMIN_PANEL_TOKEN)."
     "${COMPOSE[@]}" ps
 
-    # Install Cloudflare Quick Tunnel and manage it with systemd. The helper
-    # automatically captures the trycloudflare URL, stores BASE_URL in .env
-    # and MongoDB, then recreates the web service to apply it.
-    info "Installing/verifying Cloudflare Tunnel..."
-    if [[ ! -x /usr/local/bin/cloudflared ]]; then
-      ARCH="$(uname -m)"
-      case "$ARCH" in
-        x86_64) CF_ARCH=amd64 ;;
-        aarch64|arm64) CF_ARCH=arm64 ;;
-        *) die "Unsupported CPU architecture for cloudflared: $ARCH" ;;
-      esac
-      curl --fail --location --show-error --retry 3 --retry-delay 2 \
-        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}" \
-        --output /tmp/file2link-cloudflared || die "Could not download cloudflared. Check GitHub access/DNS."
-      MAGIC="$(od -An -tx1 -N4 /tmp/file2link-cloudflared | tr -d ' \n')"
-      [[ "$MAGIC" == "7f454c46" ]] || die "cloudflared download is not a valid Linux ELF executable."
-      run_root install -m 0755 /tmp/file2link-cloudflared /usr/local/bin/cloudflared
-      rm -f /tmp/file2link-cloudflared
-    fi
-    /usr/local/bin/cloudflared --version || die "cloudflared installation verification failed."
-
-    run_root install -m 0755 "$SCRIPT_DIR/cloudflare-quick-tunnel.sh" /usr/local/sbin/file2link-cloudflare-quick-tunnel
-    UNIT_TMP="$(mktemp)"
-    cat > "$UNIT_TMP" <<UNIT
-[Unit]
-Description=File2link Cloudflare Quick Tunnel (automatic URL synchronization)
-Wants=network-online.target
-After=network-online.target docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-WorkingDirectory=$SCRIPT_DIR
-Environment=PORT=$PORT_VALUE
-ExecStart=/usr/local/sbin/file2link-cloudflare-quick-tunnel
-Restart=always
-RestartSec=10
-TimeoutStartSec=0
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-    run_root install -m 0644 "$UNIT_TMP" /etc/systemd/system/file2link-cloudflared.service
-    rm -f "$UNIT_TMP"
-    run_root systemctl daemon-reload
-    run_root systemctl enable file2link-cloudflared.service >/dev/null
-    run_root systemctl restart file2link-cloudflared.service || die "Could not start the Cloudflare Quick Tunnel service. Check: sudo journalctl -u file2link-cloudflared -n 100 --no-pager"
-
-    info "Waiting for Cloudflare to generate and synchronize your HTTPS URL..."
-    TUNNEL_LOG="$SCRIPT_DIR/cloudflared-quick-tunnel.log"
-    TUNNEL_URL=""
-    for _ in $(seq 1 120); do
-      if [[ -f "$TUNNEL_LOG" ]]; then
-        TUNNEL_URL="$(grep -Eo 'https://[[:alnum:]-]+\.trycloudflare\.com' "$TUNNEL_LOG" | tail -n 1 || true)"
+    # Public tunnel is started inside the web container based on TUNNEL_PROVIDER.
+    #   export TUNNEL_PROVIDER=cloudflare  → Cloudflare quick tunnel (*.trycloudflare.com), synced to MongoDB
+    #   export TUNNEL_PROVIDER=ngrok        → pyngrok (needs NGROK_AUTHTOKEN)
+    run_root systemctl disable --now file2link-cloudflared.service animovieszoneflix-ngrok.service >/dev/null 2>&1 || true
+    PROVIDER="$(python3 - <<'PY2'
+import json, pathlib
+v={}
+for line in pathlib.Path('.env').read_text().splitlines():
+    if not line or line.lstrip().startswith('#') or '=' not in line: continue
+    k, raw = line.split('=',1); raw=raw.strip()
+    try: val=json.loads(raw) if raw.startswith('"') else raw
+    except Exception: val=raw.strip('"')
+    v[k.strip()]=str(val)
+print((v.get('TUNNEL_PROVIDER') or 'cloudflare').strip().lower())
+PY2
+)"
+    info "TUNNEL_PROVIDER=${PROVIDER}"
+    if [ "$PROVIDER" = "ngrok" ]; then
+      if grep -Eq '^NGROK_AUTHTOKEN=.+' .env && ! grep -Eq '^NGROK_AUTHTOKEN=("|\"")?\s*$' .env; then
+        info "ngrok selected. App will create an HTTPS ngrok URL on startup and sync it to MongoDB."
+      else
+        warn "TUNNEL_PROVIDER=ngrok but NGROK_AUTHTOKEN is empty. Add token or switch: export TUNNEL_PROVIDER=cloudflare"
       fi
-      if [[ -n "$TUNNEL_URL" ]] && curl -fsS "http://127.0.0.1:${PORT_VALUE}/health" >/dev/null 2>&1; then break; fi
-      sleep 2
-    done
-    if [[ -z "$TUNNEL_URL" ]]; then
-      warn "Cloudflare did not produce a URL within 240 seconds. Deployment is running, but public links are not configured yet."
-      warn "Inspect: sudo journalctl -u file2link-cloudflared -n 100 --no-pager"
-      warn "You can retry with: sudo systemctl restart file2link-cloudflared"
     else
-      info "Cloudflare Quick Tunnel URL: $TUNNEL_URL"
-      info "BASE_URL and BACKEND_URL have been synchronized to .env and MongoDB; new Telegram links use Cloudflare as the primary website domain."
-      info "Tunnel service is enabled at boot and will resynchronize the URL after a VPS reboot."
+      info "Cloudflare quick tunnel selected. App will generate https://*.trycloudflare.com and sync backend/stream URLs."
+      info "No Cloudflare account token is required for quick tunnels."
     fi
+    info "Follow tunnel startup and URL synchronization with: docker compose logs -f web"
     info "Deployment command completed."
     exit 0
   fi

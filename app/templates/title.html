@@ -10,13 +10,13 @@
   .eyebrow{color:var(--accent);font-weight:800;font-size:11px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px;font-family:var(--font-display)}
   .tools{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
   .tools .btn-yellow{font-size:13px;padding:10px 16px;border-radius:999px}
-  .link-box{background:linear-gradient(155deg,rgba(18,21,31,.98),rgba(10,12,18,.98));border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:18px;box-shadow:0 12px 40px rgba(0,0,0,.25);transition:border-color .2s,box-shadow .2s}
+  .link-box{background:linear-gradient(155deg,rgba(20,25,36,.98),rgba(10,13,20,.98));border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:18px;box-shadow:0 12px 40px rgba(0,0,0,.25);transition:border-color .2s,box-shadow .2s}
   .link-box:hover{border-color:var(--line-strong)}
   .link-box h2{font-size:1.05rem;margin:0 0 12px;display:flex;align-items:center;gap:10px}
   .link-box.watch h2{color:#7dd3fc}.link-box.download h2{color:#6ee7b7}.link-box.telegram h2{color:#5eead4}
   .link-box.telegram{border-color:rgba(61,214,198,.22);background:linear-gradient(155deg,#0c1924,#0a121c)}
   .link-box .box-hint{color:var(--muted);font-size:12px;margin:-4px 0 12px;line-height:1.4}
-  .group-block{background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:10px}
+  .group-block{background:rgba(9,12,18,.55);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:10px}
   .group-block h3{font-size:14px;margin:0 0 10px;color:var(--text);font-weight:700}
   .tools a[href*="t.me/"]{background:linear-gradient(135deg,#0ea5e9,#2563eb)!important;color:#fff;border:0}
   .groups-pager{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
@@ -27,38 +27,108 @@
   .groups-pager .pg-jump label{color:var(--muted);font-size:12px}
   .groups-pager .pg-jump input{width:64px;background:var(--bg);border:1px solid var(--line);color:#fff;border-radius:8px;padding:8px 10px;font:600 13px var(--font);text-align:center}
   .groups-pager .pg-jump button{background:var(--accent);border:0;color:#0b0c10;border-radius:8px;padding:8px 12px;font:700 13px var(--font);cursor:pointer}
-  @media(max-width:650px){.detail{grid-template-columns:1fr}.detail img{max-width:220px}.groups-pager .pg-jump{margin-left:0;width:100%}}
+  .auto-open-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 16px;margin:12px 0 0;border-radius:14px;background:linear-gradient(135deg,rgba(139,92,246,.12),rgba(37,99,235,.1));border:1px solid rgba(139,92,246,.28);color:var(--text)}
+  .auto-open-banner .spinner{width:22px;height:22px;border-radius:50%;border:2px solid rgba(255,255,255,.2);border-top-color:#8b5cf6;animation:title-spin .7s linear infinite}
+  @keyframes title-spin{to{transform:rotate(360deg)}}
+  .auto-open-banner a{color:#22d3ee;font-weight:700}
+  .hero-poster{width:100%;border-radius:16px;border:1px solid var(--line-strong);box-shadow:var(--shadow)}
+  .hero-eyebrow{color:var(--accent-2);font-weight:800;font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:10px;font-family:var(--font-display)}
+  .hero-h1{font-size:clamp(1.6rem,4.6vw,2.9rem);line-height:1.08;margin:0 0 12px;background:linear-gradient(100deg,#fff 15%,#c4b5fd 55%,var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero-detail{display:grid;grid-template-columns:minmax(140px,190px) 1fr;gap:24px;align-items:end}
+  @media(max-width:650px){.detail{grid-template-columns:1fr}.detail img{max-width:220px}.groups-pager .pg-jump{margin-left:0;width:100%}.hero-detail{grid-template-columns:1fr}.hero-detail .hero-poster{max-width:150px}}
+
+  .link-box{background:rgba(255,255,255,.72)!important;border:1px solid rgba(37,99,235,.16)!important;backdrop-filter:blur(18px);box-shadow:0 14px 36px rgba(31,78,140,.08)}
+  .link-box.telegram{background:rgba(255,255,255,.78)!important;border-color:rgba(22,163,74,.2)!important}
+  .group-block{background:rgba(255,255,255,.55)!important;border-color:rgba(37,99,235,.14)!important}
+  .link-box h2{color:#2563eb!important}.link-box.watch h2{color:#2563eb!important}.link-box.download h2{color:#16a34a!important}.link-box.telegram h2{color:#16a34a!important}
+  .pg-btn,.pg-jump button{background:linear-gradient(135deg,#2563eb,#38bdf8)!important;color:#fff!important;border:0!important}
+  .season-selector{display:flex;flex-wrap:wrap;gap:9px;margin:0 0 14px;padding:10px;border:1px solid rgba(37,99,235,.18);border-radius:16px;background:rgba(255,255,255,.6);backdrop-filter:blur(16px)}
+  .season-selector button{border:1px solid rgba(37,99,235,.22);background:rgba(255,255,255,.8);color:#2563eb;border-radius:999px;padding:9px 15px;font-weight:750;cursor:pointer;transition:all .18s ease}
+  .season-selector button.active{background:linear-gradient(135deg,#2563eb,#38bdf8);color:white;border-color:transparent;box-shadow:0 5px 16px rgba(37,99,235,.2)}
+  .season-selector .season-count{font-size:11px;opacity:.8;margin-left:5px}
+  /* Cinematic dark title detail */
+  .link-box{background:linear-gradient(145deg,rgba(20,21,28,.96),rgba(10,11,15,.96))!important;border:1px solid rgba(255,255,255,.09)!important;box-shadow:0 18px 50px rgba(0,0,0,.25)!important}
+  .link-box.telegram{background:linear-gradient(145deg,rgba(15,28,33,.96),rgba(10,16,20,.96))!important}
+  .group-block{background:rgba(255,255,255,.025)!important;border-color:rgba(255,255,255,.08)!important}
+  .link-box h2,.link-box.watch h2{color:#e6d9ff!important}.link-box.download h2{color:#d8c08e!important}.link-box.telegram h2{color:#82d8c9!important}
+  .season-selector{background:rgba(8,9,13,.75)!important;border-color:rgba(255,255,255,.1)!important}
+  .season-selector button{background:#171820!important;color:#c8c6d1!important;border-color:rgba(255,255,255,.1)!important}
+  .season-selector button.active{background:linear-gradient(120deg,#e8d9ff,#d8b77e)!important;color:#17151b!important;border:0!important}
+  .hero-h1{background:linear-gradient(100deg,#fff 10%,#e6d9ff 60%,#e4bd82)!important;-webkit-background-clip:text!important;background-clip:text!important}
 </style>
 {% endblock %}
 {% block content %}
-<article class="detail">
-  <img src="{% if page.poster_path and page.poster_path.startswith('http') %}{{ page.poster_path }}{% elif page.poster_path %}https://image.tmdb.org/t/p/w500{{ page.poster_path }}{% else %}/static/images/poster.jpg{% endif %}" alt="{{ page.title }} poster">
-  <div>
-    <div class="eyebrow">HITLER YT · {{ (page.media_type or 'movie')|upper }}</div>
-    <h1>{{ page.title }}</h1>
-    <div class="meta">
-      <span>{{ page.release_date or 'Release date unavailable' }}</span>
-      <span>★ {{ page.rating or 'N/A' }}</span>
+{% set all_groups = page.groups or [] %}
+{% set watch_box_groups = all_groups|selectattr('box', 'equalto', 'watch')|list %}
+{% set watch_box_groups = watch_box_groups + (all_groups|rejectattr('box', 'defined')|list) %}
+{% set first_watch_url = '' %}
+{% set first_watch_code = '' %}
+{% if watch_box_groups and watch_box_groups[0].buttons and watch_box_groups[0].buttons[0].url %}
+  {% set first_watch_url = watch_box_groups[0].buttons[0].url %}
+{% endif %}
+
+{% set _backdrop = '' %}
+{% if page.backdrop_path %}
+  {% set _backdrop = page.backdrop_path if page.backdrop_path.startswith('http') else 'https://image.tmdb.org/t/p/w1280' + page.backdrop_path %}
+{% endif %}
+{% set _poster = page.poster_path if page.poster_path and page.poster_path.startswith('http') else ('https://image.tmdb.org/t/p/w500' + page.poster_path if page.poster_path else '/static/images/poster.jpg') %}
+
+<section class="backdrop-hero" {% if _backdrop %}style="min-height:clamp(260px,46vw,460px)"{% endif %}>
+  {% if _backdrop %}<div class="backdrop-img" style="background-image:url('{{ _backdrop }}')"></div>{% endif %}
+  <div class="backdrop-scrim"></div>
+  <div class="backdrop-content">
+    <div class="hero-detail">
+      <img class="hero-poster" src="{{ _poster }}" alt="{{ page.title }} poster">
+      <div>
+        <div class="hero-eyebrow">{{ BRANDING }} · {{ (page.media_type or 'movie')|upper }}</div>
+        <h1 class="hero-h1">{{ page.title }}</h1>
+        <div class="meta">
+          <span>{{ page.release_date or 'Release date unavailable' }}</span>
+          <span>★ {{ page.rating or 'N/A' }}</span>
+          <span>▶ {{ (page.view_count or 0)|int }} verified views</span>
+          {% if page.genres %}{% for genre in page.genres %}<span>{{ genre }}</span>{% endfor %}{% endif %}
+        </div>
+        <p class="muted" style="margin:10px 0 0;line-height:1.55;max-width:70ch">{{ page.overview }}</p>
+        {% if page.imdb_id %}<p class="muted" style="margin-top:8px">IMDb: {{ page.imdb_id }}</p>{% endif %}
+        {% if page.tagline %}<p style="margin-top:8px"><em>{{ page.tagline }}</em></p>{% endif %}
+      </div>
     </div>
-    <p class="muted" style="margin:10px 0 14px;line-height:1.55">{{ page.overview }}</p>
-    {% if page.genres %}
-    <div class="meta">{% for genre in page.genres %}<span>{{ genre }}</span>{% endfor %}</div>
+  </div>
+</section>
+
+<article class="detail" style="display:block">
+  <div>
+    {% if first_watch_url %}
+    <div class="auto-open-banner" id="autoOpenBanner">
+      <div class="spinner" aria-hidden="true"></div>
+      <div>
+        <strong>Opening built-in player…</strong>
+        <div class="muted" style="font-size:12px;margin-top:2px">First Watch group · first quality</div>
+      </div>
+      <a href="#" id="manualWatchLink">Open manually</a>
+    </div>
     {% endif %}
-    {% if page.imdb_id %}<p class="muted" style="margin-top:8px">IMDb: {{ page.imdb_id }}</p>{% endif %}
-    {% if page.tagline %}<p style="margin-top:8px"><em>{{ page.tagline }}</em></p>{% endif %}
-    {% set all_groups = page.groups or [] %}
+
     {% for box_key, box_title, box_icon in [('watch', 'Watch', '▶'), ('download', 'Download', '⬇')] %}
     <section class="link-box {{ box_key }}" aria-label="{{ box_title }} links" data-box="{{ box_key }}">
       <h2><span aria-hidden="true">{{ box_icon }}</span>{{ box_title }}</h2>
       {% set box_groups = all_groups|selectattr('box', 'equalto', box_key)|list %}
       {% if box_key == 'watch' %}{% set box_groups = box_groups + (all_groups|rejectattr('box', 'defined')|list) %}{% endif %}
+      {% if box_key == 'watch' %}<div class="season-selector" id="seasonSelector" hidden aria-label="Available seasons"></div>{% endif %}
       <div class="groups-list" data-box="{{ box_key }}">
       {% for group in box_groups %}
-      <div class="group-block" data-group-index="{{ loop.index0 }}">
+      {% set g_idx = loop.index0 %}
+      <div class="group-block" data-group-index="{{ g_idx }}" data-group-name="{{ group.name|e }}">
         <h3>{{ group.name }}</h3>
         <div class="tools">
           {% for button in group.buttons or [] %}
-          <a class="btn btn-yellow cf-media-btn" href="{{ button.url }}" data-raw-url="{{ button.url }}" rel="noopener" target="_blank">{{ button.name }}</a>
+          <a class="btn btn-yellow cf-media-btn {% if box_key == 'watch' %}watch-btn{% endif %}"
+             href="{{ button.url }}"
+             data-raw-url="{{ button.url }}"
+             data-group-index="{{ g_idx }}"
+             data-button-index="{{ loop.index0 }}"
+             rel="noopener"
+             {% if box_key != 'watch' %}target="_blank"{% endif %}>{{ button.name }}</a>
           {% endfor %}
         </div>
       </div>
@@ -114,49 +184,168 @@
   </div>
 </article>
 <script>
-(async () => {
-  let cfBase = {{ (cloudflare_url if cloudflare_url is defined else '')|tojson }};
-  function rewriteToCloudflare(rawHref, baseOrigin) {
-    if (!rawHref || !baseOrigin) return rawHref;
-    const cleanBase = String(baseOrigin).trim().replace(/\/+$/, '');
-    if (!cleanBase.startsWith('http://') && !cleanBase.startsWith('https://')) return rawHref;
-    if (rawHref.startsWith('/')) return cleanBase + rawHref;
+(function(){
+  const TITLE_SLUG = {{ page.slug|tojson }};
+  function extractWatchCode(url) {
+    if (!url) return null;
     try {
-      const u = new URL(rawHref, window.location.origin);
-      const cf = new URL(cleanBase);
-      if (u.protocol === 'http:' || u.protocol === 'https:') {
-        u.protocol = cf.protocol;
-        u.host = cf.host;
-        return u.toString();
+      const m = String(url).match(/(?:^|\/)watch\/([A-Za-z0-9_-]{3,64})(?:\/|$|\?|#)/i);
+      return m ? m[1] : null;
+    } catch (_) { return null; }
+  }
+  function buildWatchHref(rawUrl, groupIndex, buttonIndex) {
+    const code = extractWatchCode(rawUrl);
+    if (!code) return rawUrl;
+    const params = new URLSearchParams();
+    if (TITLE_SLUG) params.set('title', TITLE_SLUG);
+    params.set('g', String(groupIndex || 0));
+    params.set('b', String(buttonIndex || 0));
+    return '/watch/' + code + '?' + params.toString();
+  }
+
+  // Rewrite watch buttons to open in-site player with title context
+  document.querySelectorAll('a.watch-btn').forEach(a => {
+    const raw = a.getAttribute('data-raw-url') || a.getAttribute('href') || '';
+    const gi = parseInt(a.getAttribute('data-group-index') || '0', 10) || 0;
+    const bi = parseInt(a.getAttribute('data-button-index') || '0', 10) || 0;
+    const href = buildWatchHref(raw, gi, bi);
+    a.setAttribute('href', href);
+    a.removeAttribute('target');
+  });
+
+  // Cloudflare rewrite for non-watch media buttons
+  (async () => {
+    let cfBase = {{ (cloudflare_url if cloudflare_url is defined else '')|tojson }};
+    function rewriteToCloudflare(rawHref, baseOrigin) {
+      if (!rawHref || !baseOrigin) return rawHref;
+      const cleanBase = String(baseOrigin).trim().replace(/\/+$/, '');
+      if (!cleanBase.startsWith('http://') && !cleanBase.startsWith('https://')) return rawHref;
+      if (rawHref.startsWith('/')) return cleanBase + rawHref;
+      try {
+        const u = new URL(rawHref, window.location.origin);
+        const cf = new URL(cleanBase);
+        if (u.protocol === 'http:' || u.protocol === 'https:') {
+          u.protocol = cf.protocol;
+          u.host = cf.host;
+          return u.toString();
+        }
+      } catch (_) {}
+      return rawHref;
+    }
+    function applyCloudflareButtons(baseOrigin) {
+      if (!baseOrigin) return;
+      document.querySelectorAll('a.cf-media-btn:not(.watch-btn)').forEach(a => {
+        const raw = a.getAttribute('data-raw-url') || a.getAttribute('href') || '';
+        const updated = rewriteToCloudflare(raw, baseOrigin);
+        if (updated) a.setAttribute('href', updated);
+      });
+    }
+    if (cfBase) applyCloudflareButtons(cfBase);
+    try {
+      const r = await fetch('/api/site-settings', { cache: 'no-store' });
+      if (r.ok) {
+        const s = await r.json();
+        const latestCf = s.cloudflare_url || s.backend_url || cfBase;
+        if (latestCf) applyCloudflareButtons(latestCf);
       }
     } catch (_) {}
-    return rawHref;
-  }
-  function applyCloudflareButtons(baseOrigin) {
-    if (!baseOrigin) return;
-    document.querySelectorAll('a.cf-media-btn').forEach(a => {
-      const raw = a.getAttribute('data-raw-url') || a.getAttribute('href') || '';
-      const updated = rewriteToCloudflare(raw, baseOrigin);
-      if (updated) a.setAttribute('href', updated);
-    });
-  }
-  if (cfBase) applyCloudflareButtons(cfBase);
-  try {
-    const r = await fetch('/api/site-settings', { cache: 'no-store' });
-    if (r.ok) {
-      const s = await r.json();
-      const latestCf = s.cloudflare_url || s.backend_url || cfBase;
-      if (latestCf) applyCloudflareButtons(latestCf);
+  })();
+
+  // Auto-open first watch group / first button into built-in watch page
+  const firstBtn = document.querySelector('a.watch-btn[data-group-index="0"][data-button-index="0"]')
+    || document.querySelector('a.watch-btn');
+  if (firstBtn) {
+    const dest = firstBtn.getAttribute('href');
+    const manual = document.getElementById('manualWatchLink');
+    if (manual) manual.setAttribute('href', dest);
+    // Skip auto-redirect if user already chose a quality (?stay=1) or came from back
+    const params = new URLSearchParams(window.location.search);
+    const skip = params.get('stay') === '1' || params.get('noredir') === '1';
+    if (!skip && dest) {
+      window.location.replace(dest);
+    } else {
+      const banner = document.getElementById('autoOpenBanner');
+      if (banner) banner.style.display = 'none';
     }
-  } catch (_) {}
-})();
-(function(){
+  }
+
+  // Automatically arrange configured episode groups by season and episode.
+  // Quality labels are ignored for season/episode organization.
+  // Never invent missing seasons/episodes. Duplicate episode groups are merged.
+  (function setupSeasonNavigation(){
+    var list=document.querySelector('.groups-list[data-box="watch"]');
+    var selector=document.getElementById('seasonSelector');
+    if(!list||!selector) return;
+    var blocks=Array.prototype.slice.call(list.querySelectorAll('.group-block'));
+    var parsed=[];
+    var nonEpisode=[];
+    function parseEpisode(name){
+      name=String(name||'').trim();
+      var m=name.match(/\bS(?:eason\s*)?0*(\d{1,3})\s*[-_. ]*E(?:pisode\s*)?0*(\d{1,4})\b/i)
+        || name.match(/\bSeason\s*0*(\d{1,3})\s*(?:[-_. ]*)?(?:Episode|Ep)\s*0*(\d{1,4})\b/i)
+        || name.match(/\b0*(\d{1,3})\s*[xX]\s*0*(\d{1,4})\b/i)
+        || name.match(/\bSeason\s*0*(\d{1,3})\b.*?\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i);
+      if(!m) return null;
+      return {season:Number(m[1]),episode:Number(m[2])};
+    }
+    blocks.forEach(function(block){
+      var name=block.getAttribute('data-group-name')||block.querySelector('h3')?.textContent||'';
+      var ep=parseEpisode(name);
+      if(ep && Number.isFinite(ep.season) && Number.isFinite(ep.episode)){
+        block.dataset.season=String(ep.season); block.dataset.episode=String(ep.episode);
+        parsed.push({block:block,season:ep.season,episode:ep.episode,name:name});
+      } else nonEpisode.push(block);
+    });
+    if(!parsed.length) return;
+    parsed.sort(function(a,b){return a.season-b.season || a.episode-b.episode;});
+    // Combine duplicate season/episode groups into one episode card, retaining all unique links.
+    var merged=[];
+    parsed.forEach(function(item){
+      var key=item.season+'-'+item.episode;
+      var existing=merged.find(function(x){return x.key===key;});
+      if(!existing){existing={key:key,season:item.season,episode:item.episode,block:item.block};merged.push(existing);return;}
+      var target=existing.block.querySelector('.tools');
+      var source=item.block.querySelector('.tools');
+      if(target&&source){
+        Array.prototype.slice.call(source.querySelectorAll('a')).forEach(function(a){
+          var raw=a.getAttribute('data-raw-url')||a.getAttribute('href')||'';
+          var duplicate=Array.prototype.some.call(target.querySelectorAll('a'),function(old){return (old.getAttribute('data-raw-url')||old.getAttribute('href')||'')===raw;});
+          if(!duplicate) target.appendChild(a);
+        });
+      }
+      item.block.remove();
+    });
+    // Preserve all links in their original order; do not detect or infer quality.
+    var seasonNumbers=Array.from(new Set(merged.map(function(x){return x.season;}))).sort(function(a,b){return a-b;});
+    selector.hidden=false;
+    var watchPager=document.querySelector('.groups-pager[data-box="watch"]');
+    if(watchPager) watchPager.style.display='none';
+    var selected=seasonNumbers[0];
+    seasonNumbers.forEach(function(season){
+      var count=merged.filter(function(x){return x.season===season;}).length;
+      var button=document.createElement('button'); button.type='button'; button.dataset.season=String(season);
+      button.innerHTML='Season '+season+' <span class="season-count">('+count+' episodes)</span>';
+      button.addEventListener('click',function(){selected=season;render();});
+      selector.appendChild(button);
+    });
+    function render(){
+      selector.querySelectorAll('button').forEach(function(b){b.classList.toggle('active',Number(b.dataset.season)===selected);});
+      nonEpisode.forEach(function(block){block.style.display='';});
+      merged.forEach(function(item){item.block.style.display=item.season===selected?'':'none';});
+      // DOM order is always season/episode ascending, independent of admin input order.
+      merged.forEach(function(item){list.appendChild(item.block);});
+    }
+    render();
+  })();
+
+  // Groups pagination
   var PER=5;
   function setupBox(boxKey){
     var list=document.querySelector('.groups-list[data-box="'+boxKey+'"]');
     var pager=document.querySelector('.groups-pager[data-box="'+boxKey+'"]');
     if(!list) return;
     var blocks=Array.prototype.slice.call(list.querySelectorAll('.group-block'));
+    if(boxKey==='watch' && document.getElementById('seasonSelector') && !document.getElementById('seasonSelector').hidden){ if(pager) pager.style.display='none'; return; }
     if(blocks.length<=PER){ if(pager) pager.style.display='none'; return; }
     if(pager){ pager.style.display='flex'; pager.hidden=false; }
     var page=1;
@@ -167,24 +356,26 @@
     var nextBtn=pager&&pager.querySelector('.pg-next');
     var input=pager&&pager.querySelector('.pg-input');
     var goBtn=pager&&pager.querySelector('.pg-go');
-    if(maxEl) maxEl.textContent=String(max);
-    if(input){ input.max=String(max); input.min='1'; }
     function render(){
-      page=Math.min(Math.max(1,page),max);
-      var start=(page-1)*PER, end=start+PER;
-      blocks.forEach(function(el,i){ el.style.display=(i>=start&&i<end)?'':'none'; });
+      blocks.forEach(function(b,i){
+        var show=i>=(page-1)*PER && i<page*PER;
+        b.style.display=show?'':'none';
+      });
       if(curEl) curEl.textContent=String(page);
+      if(maxEl) maxEl.textContent=String(max);
       if(prevBtn) prevBtn.disabled=page<=1;
       if(nextBtn) nextBtn.disabled=page>=max;
     }
-    if(prevBtn) prevBtn.onclick=function(){ page--; render(); };
-    if(nextBtn) nextBtn.onclick=function(){ page++; render(); };
-    if(goBtn) goBtn.onclick=function(){ page=parseInt(input&&input.value,10)||1; render(); };
+    if(prevBtn) prevBtn.addEventListener('click',function(){ if(page>1){ page--; render(); }});
+    if(nextBtn) nextBtn.addEventListener('click',function(){ if(page<max){ page++; render(); }});
+    if(goBtn&&input) goBtn.addEventListener('click',function(){
+      var n=parseInt(input.value,10);
+      if(!isNaN(n)&&n>=1&&n<=max){ page=n; render(); }
+    });
+    if(maxEl) maxEl.textContent=String(max);
     render();
   }
-  setupBox('watch');
-  setupBox('download');
-  setupBox('telegram');
+  setupBox('watch'); setupBox('download'); setupBox('telegram');
 })();
 </script>
 {% endblock %}

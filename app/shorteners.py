@@ -26,7 +26,7 @@ _KEY_PAGE_STYLE = '''
 '''
 
 PROTECTED_TITLE_PREFIX = "/title/"
-PROTECTED_TITLE_HOST = "hitler-yt.vercel.app"
+PROTECTED_TITLE_HOST = "HITLER YT-yt.vercel.app"
 
 def _is_vercel_title_host(hostname: str | None) -> bool:
     """Match the production Vercel host and configured Vercel aliases."""
@@ -282,7 +282,7 @@ async def create_shortlink(base_url: str, api_key: str, destination: str):
     async with httpx.AsyncClient(
         timeout=20,
         follow_redirects=False,
-        headers={"Accept": "application/json, text/plain, */*", "User-Agent": "Mozilla/5.0 (compatible; HITLER-YT-Shortener/1.0)"},
+        headers={"Accept": "application/json, text/plain, */*", "User-Agent": "Mozilla/5.0 (compatible; HITLER YT-YT-Shortener/1.0)"},
     ) as client:
         for api_url in endpoints:
             try:

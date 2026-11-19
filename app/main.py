@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -23,7 +24,7 @@ from app.shorteners import (
     gate_request, verify_key, config as shortener_config, create_shortlink,
     get_key_page, is_protected_title_target,
 )
-from app.utils.cloudflare_tunnel import (
+from app.utils.ngrok_tunnel import (
     apply_auto_cloudflare_url,
     start_cloudflare_auto_tunnel,
     stop_cloudflare_auto_tunnel,
@@ -78,7 +79,7 @@ async def lifespan(app: FastAPI):
             logger.warning("Could not restore FileStore secondary bot: %s", e)
         if getattr(settings, "BASE_URL", None):
             os.environ["BASE_URL"] = str(settings.BASE_URL).rstrip("/")
-        logger.info("HITLER service started (wzgram)")
+        logger.info("HITLER YT service started (wzgram)")
         yield
     finally:
         try:
@@ -89,18 +90,18 @@ async def lifespan(app: FastAPI):
         await stop_cloudflare_auto_tunnel()
         await session_manager.stop()
         mongo_client.close()
-        logger.info("HITLER service stopped")
+        logger.info("HITLER YT service stopped")
 
 
-app = FastAPI(title="HITLER Media Link Service", lifespan=lifespan)
+app = FastAPI(title="HITLER YT Media & Anime Service", lifespan=lifespan)
 
 
 @app.middleware("http")
 async def auto_cloudflare_and_vercel_routing_middleware(request: Request, call_next):
     """
-    1. Automatically detect any incoming *.trycloudflare.com Host header, save it to MongoDB,
-       and replace all catalog button URL domains with that Cloudflare try URL.
-    2. If a user accesses website-only catalog pages (/, /search, /title/*) on a trycloudflare.com
+    1. Automatically detect any incoming *.ngrok-free.app Host header, save it to MongoDB,
+       and replace all catalog button URL domains with that ngrok public URL.
+    2. If a user accesses website-only catalog pages (/, /search, /title/*) on a ngrok-free.app
        hostname and a Vercel website URL is registered, redirect them to the Vercel website.
     """
     raw_host = (
@@ -148,6 +149,8 @@ app.add_middleware(
 APP_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+templates.env.globals["BRANDING"] = settings.BRANDING
+templates.env.globals["LOGO_URL"] = settings.LOGO_URL
 
 
 @app.post("/verify-key")
@@ -213,7 +216,7 @@ async def health():
     vercel_url = await get_active_vercel_website_url()
     return {
         "status": "ok" if mongo_status == "ok" else "degraded",
-        "service": "HITLER",
+        "service": "HITLER YT",
         "database": mongo_status,
         "telegram_sessions": sessions,
         "download_ready": mongo_status == "ok" and sessions > 0,
@@ -257,6 +260,57 @@ async def watch_page(request: Request, short_code: str):
         raise HTTPException(status_code=404, detail="Link not found")
 
     cf_base = (await get_active_cloudflare_url()) or settings.BASE_URL.rstrip("/")
+    player_settings = await get_settings()
+
+    # Optional catalog title context: ?title=<slug>&g=<group>&b=<button>
+    title_slug = (request.query_params.get("title") or "").strip()
+    try:
+        group_index = max(0, int(request.query_params.get("g") or 0))
+    except (TypeError, ValueError):
+        group_index = 0
+    try:
+        button_index = max(0, int(request.query_params.get("b") or 0))
+    except (TypeError, ValueError):
+        button_index = 0
+
+    watch_groups = []
+    title_page = None
+    if title_slug:
+        try:
+            raw_page = await db.catalog_pages.find_one(
+                {"slug": title_slug, "published": True}, {"_id": 0}
+            )
+            if raw_page:
+                title_page = serialize_catalog_doc(raw_page, cf_base)
+                all_groups = title_page.get("groups") or []
+                for g in all_groups:
+                    box = str((g or {}).get("box") or "watch").strip().lower()
+                    if box not in ("watch", ""):
+                        continue
+                    buttons = []
+                    for btn in (g.get("buttons") or []):
+                        if not isinstance(btn, dict):
+                            continue
+                        url = (btn.get("url") or "").strip()
+                        name = (btn.get("name") or "Watch").strip() or "Watch"
+                        if url:
+                            buttons.append({"name": name, "url": url})
+                    if buttons:
+                        watch_groups.append({
+                            "name": (g.get("name") or "Watch Group").strip() or "Watch Group",
+                            "buttons": buttons,
+                        })
+                if group_index >= len(watch_groups):
+                    group_index = 0
+                if watch_groups:
+                    btns = watch_groups[group_index].get("buttons") or []
+                    if button_index >= len(btns):
+                        button_index = 0
+        except Exception as exc:
+            logger.warning("watch title context load failed: %s", exc)
+
+    fs_user = (player_settings.get("filestore_bot_username") or "").strip().lstrip("@")
+
     return templates.TemplateResponse(
         request=request,
         name="watch.html",
@@ -265,9 +319,39 @@ async def watch_page(request: Request, short_code: str):
             "file": file_data,
             "base_url": cf_base,
             "stream_base_url": cf_base,
-            "player_settings": await get_settings(),
+            "player_settings": player_settings,
+            "title_slug": title_slug or "",
+            "title_page": title_page,
+            "watch_groups": watch_groups,
+            "group_index": group_index,
+            "button_index": button_index,
+            "filestore_bot_username": fs_user,
         },
     )
+
+
+@app.post("/api/views/{short_code}")
+async def register_view(short_code: str, request: Request):
+    """Count one playback view per browser token per file; retries are idempotent."""
+    payload = await request.json()
+    token = str(payload.get("visitor_token") or "").strip()
+    if len(token) < 20 or len(token) > 128:
+        raise HTTPException(status_code=400, detail="Invalid visitor token")
+    file_data = await files_col.find_one({"short_code": short_code}, {"_id": 1, "access_count": 1})
+    if not file_data:
+        raise HTTPException(status_code=404, detail="File not found")
+    views_col = db.playback_views
+    try:
+        await views_col.create_index([("short_code", 1), ("visitor_token", 1)], unique=True)
+        await views_col.insert_one({"short_code": short_code, "visitor_token": token, "created_at": datetime.utcnow()})
+        await files_col.update_one({"short_code": short_code}, {"$inc": {"access_count": 1}})
+    except Exception as exc:
+        # Duplicate token means this browser already counted this file. Other DB errors
+        # are logged but do not interrupt playback.
+        if exc.__class__.__name__ not in ("DuplicateKeyError",):
+            logger.warning("View registration failed for %s: %s", short_code, exc)
+    latest = await files_col.find_one({"short_code": short_code}, {"access_count": 1})
+    return {"views": int((latest or {}).get("access_count") or 0)}
 
 
 @app.api_route("/dl/{short_code}", methods=["GET", "HEAD"])
@@ -296,13 +380,8 @@ async def stream_file(request: Request, short_code: str, extra_name: str = ""):
     if not file_data:
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Download managers issue many parallel byte-range requests for one file. Count only
-    # the initial full GET, not every Range/HEAD request, to avoid a MongoDB write per chunk.
-    if request.method.upper() == "GET" and not request.headers.get("range"):
-        try:
-            await files_col.update_one({"short_code": short_code}, {"$inc": {"access_count": 1}})
-        except Exception:
-            logger.debug("Could not update access counter for %s", short_code)
+    # Views are counted only when playback starts via /api/views/{short_code}.
+    # Stream, HEAD and byte-range requests are intentionally not counted.
 
     all_clients = session_manager.get_all_clients()
     if not all_clients and session_manager.bot_client is None:
@@ -346,17 +425,18 @@ async def get_tracks(short_code: str):
         raise HTTPException(status_code=503, detail="Telegram session unavailable")
 
     try:
-        chat_id = file_data.get("storage_chat_id") or file_data.get("chat_id")
-        msg_id = file_data.get("storage_message_id") or file_data.get("message_id")
+        # Prefer original source message; storage channel is optional
+        chat_id = file_data.get("chat_id") or file_data.get("storage_chat_id")
+        msg_id = file_data.get("message_id") or file_data.get("storage_message_id")
         msg = await client.get_messages(chat_id, msg_id)
         if isinstance(msg, list):
             msg = msg[0] if msg else None
-        if not msg and file_data.get("chat_id") != chat_id:
-            msg = await client.get_messages(file_data["chat_id"], file_data["message_id"])
+        if (not msg or getattr(msg, "empty", False)) and file_data.get("storage_chat_id") and file_data.get("storage_chat_id") != chat_id:
+            msg = await client.get_messages(file_data["storage_chat_id"], file_data.get("storage_message_id"))
             if isinstance(msg, list):
                 msg = msg[0] if msg else None
-        if not msg:
-            raise HTTPException(status_code=404, detail="Media no longer available")
+        if not msg or getattr(msg, "empty", False):
+            raise HTTPException(status_code=404, detail="Media no longer available (bot needs access to the source chat)")
 
         if msg.photo and not (msg.document or msg.video or msg.audio):
             return JSONResponse({

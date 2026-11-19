@@ -1,10 +1,10 @@
-FILE2LINK — SINGLE VPS DEPLOYMENT
+HITLER YT — SINGLE VPS DEPLOYMENT
 
 1) Copy/paste the contents of deploy-one-command.sh into your VPS terminal,
    OR run it from the cloned project directory after obtaining the ZIP.
 2) It asks for API_ID, API_HASH, OWNER_ID, optional admin/channel IDs,
    optional TMDB_API_KEY, BOT_TOKEN and MONGODB_URI. Secret inputs are hidden.
-3) It clones to ~/file2link, generates a strong ADMIN_PANEL_TOKEN if needed,
+3) It clones to ~/animovieszoneflix, generates a strong ADMIN_PANEL_TOKEN if needed,
    writes a private .env file, and runs deploy.vps.
 
 The admin dashboard is available at /panel. For first login, use username `admin`
@@ -19,10 +19,18 @@ No script can guarantee 100% success: GitHub access, VPS DNS/network, Atlas IP
 allowlist, credentials, Telegram bot permissions and public BASE_URL are external
 requirements. The script performs preflight validation and prints logs on failure.
 
-After deployment, deploy.vps automatically installs and starts a Cloudflare Quick Tunnel. It prints the generated trycloudflare.com URL and synchronizes BASE_URL into .env and MongoDB. The systemd service `file2link-cloudflared` repeats this synchronization after VPS reboot. Check it with:
+For the automatic public tunnel, export your ngrok auth token before running the deployment script:
 
-  sudo systemctl status file2link-cloudflared --no-pager
-  sudo journalctl -u file2link-cloudflared -n 100 --no-pager
+   export NGROK_AUTHTOKEN=YOUR_NGROK_AUTH_TOKEN
+   ./deploy.vps
+
+The deployment script persists this value into .env for the Docker application. You can also set NGROK_AUTHTOKEN in .env directly.
+The web app starts ngrok internally and saves its generated HTTPS URL in MongoDB and .env.
+Watch startup and URL synchronization with:
+
+  docker compose logs -f web
+
+The tunnel is managed by the web application and restarts with the container.
 
 # High-speed multi-session download (optional)
 export SESSIONS=session1,session2,session3,session4

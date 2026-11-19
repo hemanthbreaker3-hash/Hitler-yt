@@ -40,5 +40,5 @@ async def verify_panel_credentials(credentials: HTTPBasicCredentials | None) -> 
 
 async def require_panel_admin(credentials: HTTPBasicCredentials | None = Depends(security)):
     if not await verify_panel_credentials(credentials):
-        raise HTTPException(401, "Invalid panel username or password", headers={"WWW-Authenticate": "Basic realm=HITLER-YT-Panel"})
+        raise HTTPException(401, "Invalid panel username or password", headers={"WWW-Authenticate": "Basic realm=HITLER YT-YT-Panel"})
     return True
