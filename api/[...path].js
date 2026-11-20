@@ -3,7 +3,9 @@ import http from 'node:http';
 import https from 'node:https';
 import { MongoClient } from 'mongodb';
 
-export const config = { api: { bodyParser: false }, maxDuration: 300 };
+// Disable request parsing so range requests and streamed media bodies pass through untouched.
+// Disable the platform response-size warning for streamed video responses.
+export const config = { api: { bodyParser: false, responseLimit: false }, maxDuration: 300 };
 
 const API_SUBPATHS = new Set([
   'catalog',

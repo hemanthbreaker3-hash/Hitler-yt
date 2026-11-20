@@ -99,8 +99,12 @@
     display:none;flex-direction:column;gap:4px;backdrop-filter:blur(12px);
   }
   .player-pop.open{display:flex}
-  #switchPopList,#laptopPopList{max-height:min(52vh,420px);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scrollbar-width:thin}
-  #switchPopList button,#laptopPopList a{flex:0 0 auto}
+  #switchPopList,#laptopPopList{display:flex;flex:1 1 auto;flex-direction:column;min-height:0;max-height:none;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scrollbar-width:thin;scrollbar-color:rgba(168,85,247,.9) rgba(255,255,255,.08);padding:0 3px 2px 0}
+  #switchPopList button,#laptopPopList a{display:block;flex:0 0 auto;min-height:40px}
+  #switchPop{display:none;max-height:calc(100dvh - 84px);overflow:hidden}#switchPop.open{display:flex}#switchPop .pop-title{flex:0 0 auto}#switchPopList{max-height:calc(100dvh - 132px)}
+  #switchPopList::-webkit-scrollbar,#laptopPopList::-webkit-scrollbar{width:7px}
+  #switchPopList::-webkit-scrollbar-thumb,#laptopPopList::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#a855f7,#ef4444,#3b82f6);border-radius:999px}
+  #switchPopList::-webkit-scrollbar-track,#laptopPopList::-webkit-scrollbar-track{background:rgba(255,255,255,.06);border-radius:999px}
   .player-pop.switch-pop{top:56px;left:12px}
   .player-pop.laptop-pop{top:56px;right:12px}
   .player-pop button,.player-pop a{
@@ -329,36 +333,64 @@
   }
 })();
 
-/* Keep custom player symbols and the built-in seek bar on the same idle rhythm.
-   Movi's native chrome auto-hides after ~3s; these host buttons hide at 2.6s. */
+/* Built-in player chrome: tap/click toggles all top and bottom controls.
+   A single click shows controls, the next click on the video hides them;
+   after three seconds of inactivity they auto-hide. Menus remain usable. */
 (function syncPlayerChromeIdle() {
   const wrapper = document.getElementById('playerWrapper');
   const player = document.getElementById('moviPlayer');
   if (!wrapper || !player) return;
   let timer = 0;
-  const idleMs = 2600;
-  const menuOpen = () => !!wrapper.querySelector('.player-pop.open');
-  const reveal = () => {
-    wrapper.classList.remove('chrome-idle');
+  let visible = false;
+  const idleMs = 3000;
+  const menuOpen = () => !!document.querySelector('#switchPop.open, #laptopPop.open');
+  const inChrome = (event) => {
+    const path = event.composedPath ? event.composedPath() : [];
+    return path.some(node => node && node.nodeType === 1 && node.matches &&
+      node.matches('.player-chrome-btn, .player-pop, button, a, input, select, textarea'));
+  };
+  const setVisible = (show) => {
+    visible = !!show;
+    wrapper.classList.toggle('chrome-idle', !visible);
+    player.classList.toggle('chrome-idle', !visible);
+  };
+  const scheduleHide = () => {
     window.clearTimeout(timer);
     if (menuOpen()) return;
     timer = window.setTimeout(() => {
-      if (!menuOpen()) wrapper.classList.add('chrome-idle');
+      if (!menuOpen()) setVisible(false);
     }, idleMs);
   };
-  ['pointermove', 'pointerdown', 'mousemove', 'touchstart', 'keydown'].forEach(type => {
-    wrapper.addEventListener(type, reveal, { passive: type !== 'keydown' });
+  const reveal = () => { setVisible(true); scheduleHide(); };
+  const toggleVideo = (event) => {
+    if (inChrome(event)) { if (visible) scheduleHide(); return; }
+    const path = event.composedPath ? event.composedPath() : [];
+    if (!path.includes(player) && event.target !== player) return;
+    if (visible) {
+      window.clearTimeout(timer);
+      if (!menuOpen()) setVisible(false);
+    } else reveal();
+  };
+  wrapper.addEventListener('click', toggleVideo, true);
+  // Activity while controls are visible resets the idle clock, but does not
+  // unexpectedly reveal them when hidden: users explicitly tap/click to show.
+  ['pointerdown', 'touchstart', 'keydown'].forEach(type => {
+    wrapper.addEventListener(type, event => {
+      if (visible && !inChrome(event)) scheduleHide();
+    }, {passive:true});
   });
-  wrapper.addEventListener('focusin', reveal);
-  wrapper.addEventListener('click', reveal);
-  wrapper.querySelectorAll('.player-chrome-btn').forEach(btn => {
-    btn.addEventListener('click', reveal);
+  player.addEventListener('keydown', reveal);
+  document.addEventListener('fullscreenchange', () => { if (visible) scheduleHide(); });
+  document.addEventListener('webkitfullscreenchange', () => { if (visible) scheduleHide(); });
+  const observer = new MutationObserver(() => {
+    if (menuOpen()) { window.clearTimeout(timer); setVisible(true); }
+    else if (visible) scheduleHide();
   });
-  document.addEventListener('fullscreenchange', reveal);
-  document.addEventListener('webkitfullscreenchange', reveal);
-  const observer = new MutationObserver(reveal);
-  wrapper.querySelectorAll('.player-pop').forEach(pop => observer.observe(pop, { attributes: true, attributeFilter: ['class'] }));
-  reveal();
+  ['switchPop', 'laptopPop'].forEach(id => {
+    const pop = document.getElementById(id);
+    if (pop) observer.observe(pop, { attributes: true, attributeFilter: ['class'] });
+  });
+  setVisible(false);
 })();
 
 </script>
@@ -781,8 +813,14 @@ function goToGroupButton(groupIdx, buttonIdx) {
     return;
   }
   list.innerHTML = '';
-  list.style.maxHeight = 'min(52vh, 420px)';
+  list.style.display = 'flex';
+  list.style.flexDirection = 'column';
+  list.style.minHeight = '0';
+  list.style.maxHeight = 'calc(100dvh - 132px)';
   list.style.overflowY = 'auto';
+  list.style.overflowX = 'hidden';
+  list.style.webkitOverflowScrolling = 'touch';
+  list.style.touchAction = 'pan-y';
   list.style.overscrollBehavior = 'contain';
   g.buttons.forEach((b, i) => {
     const a = document.createElement('button');
@@ -813,7 +851,7 @@ function goToGroupButton(groupIdx, buttonIdx) {
     ['VLC', androidIntent(STREAM_URL, 'org.videolan.vlc', INTENT_MIME)],
   ];
   list.innerHTML = '';
-  list.style.maxHeight = 'min(52vh, 420px)';
+  list.style.maxHeight = 'calc(100dvh - 132px)';
   list.style.overflowY = 'auto';
   list.style.overscrollBehavior = 'contain';
   items.forEach(([label, href]) => {
@@ -1293,7 +1331,21 @@ movi-player::part(progress-handle) {
   box-shadow: 0 0 0 2px rgba(239,68,68,.35), 0 0 10px rgba(59,130,246,.65);
 }
 /* Page-owned laptop/source/download buttons follow the player's 2.6s idle rule. */
-#playerWrapper.chrome-idle .player-chrome-btn {
+#playerWrapper.chrome-idle .player-chrome-btn,
+#playerWrapper.chrome-idle .player-pop:not(.open),
+#playerWrapper:fullscreen.chrome-idle .player-chrome-btn,
+#playerWrapper:fullscreen.chrome-idle .player-pop:not(.open),
+movi-player.chrome-idle .player-chrome-btn,
+movi-player.chrome-idle .player-pop:not(.open) {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-4px);
+}
+/* Fullscreen overlay controls are re-parented into movi-player; mirror idle state there. */
+movi-player.chrome-idle .player-chrome-btn,
+#playerWrapper.chrome-idle .player-pop:not(.open),
+movi-player.chrome-idle .player-pop:not(.open) {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -1303,6 +1355,21 @@ movi-player::part(progress-handle) {
   transition: opacity .18s ease, visibility .18s ease, transform .18s ease,
              background .2s, border-color .2s;
 }
+/* Keep player-owned bottom chrome in sync with the same explicit toggle. */
+movi-player.chrome-idle::part(chrome),
+movi-player.chrome-idle::part(controls),
+movi-player.chrome-idle::part(bottom-controls),
+movi-player.chrome-idle::part(progress-container) {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+#playerWrapper:not(.chrome-idle) movi-player::part(chrome),
+#playerWrapper:not(.chrome-idle) movi-player::part(controls) {
+  opacity: 1;
+  visibility: visible;
+}
+
 #playerWrapper.chrome-idle .player-pop:not(.open) {
   opacity: 0;
   visibility: hidden;

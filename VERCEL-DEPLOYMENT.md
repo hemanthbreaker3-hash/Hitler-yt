@@ -17,3 +17,12 @@ DATABASE_NAME=tg_media_bot
 ```
 
 *(Note: If `DATABASE_NAME` is omitted, the Vercel gateway automatically detects the populated database between `tg_media_bot` and `animovieszoneflix`.)*
+
+## Updated Vercel routing and streaming configuration
+
+- `vercel.json` routes the homepage, API endpoints, and application pages through the shared Node.js API handler while leaving `/static/*` assets available as static files.
+- The API handler disables automatic body parsing so request bodies and byte-range media requests are not consumed before proxying.
+- The handler opts out of the response-size warning for streamed media responses and retains the configured 300-second function duration. Actual maximum duration is still subject to the Vercel plan and project limits.
+- Static assets use short-lived browser caching with stale-while-revalidate. Basic security response headers are applied without a restrictive Content-Security-Policy that could break embedded players.
+
+Set `MONGODB_URI` (or `DATABASE_URL` / `DATABASE_URI`) and, where needed, `DATABASE_NAME` in the Vercel project Environment Variables. Redeploy after changing environment variables. Verify `/api/health` after deployment.
