@@ -2330,58 +2330,28 @@ const MOVI_GLOBAL_FALLBACK = 'https://cdn.jsdelivr.net/npm/movi-player/dist/elem
 const moviPlayer = document.getElementById('moviPlayer');
 const loadingEl = document.getElementById('playerLoading');
 
-// Player chrome: tap to toggle, then auto-hide after inactivity.
+// Player chrome: manual toggle only. No automatic hiding in any playback mode.
 (function setupPlayerChrome(){
   const wrapper = document.getElementById('playerWrapper');
   if (!wrapper || !moviPlayer) return;
   let visible = true;
-  let hideTimer = null;
-  const show = () => {
-    visible = true; wrapper.classList.remove('controls-hidden');
-    moviPlayer.setAttribute('controls', '');
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(hide, 3200);
-  };
-  const hide = () => {
-    visible = false; wrapper.classList.add('controls-hidden');
-    moviPlayer.removeAttribute('controls');
-    document.getElementById('switchPop')?.classList.remove('open');
-    document.getElementById('laptopPop')?.classList.remove('open');
-  };
+  const show = () => { visible = true; wrapper.classList.remove('controls-hidden'); moviPlayer.setAttribute('controls', ''); };
+  const hide = () => { visible = false; wrapper.classList.add('controls-hidden'); moviPlayer.setAttribute('controls', ''); document.getElementById('switchPop')?.classList.remove('open'); document.getElementById('laptopPop')?.classList.remove('open'); };
   wrapper.addEventListener('click', (event) => {
     if (event.target.closest('.player-chrome-btn,.player-pop')) { show(); return; }
     if (visible) hide(); else show();
   });
-  wrapper.addEventListener('pointermove', () => { if (visible) show(); });
   wrapper.addEventListener('keydown', (event) => { if (event.key === ' ' || event.key === 'Enter') show(); });
   document.addEventListener('fullscreenchange', () => {
     const isFull = document.fullscreenElement === wrapper;
     const b = document.getElementById('pcFullscreenBtn');
     if (b) b.textContent = isFull ? '⤢' : '⛶';
-    show();
   });
   const fit = document.getElementById('pcFitBtn');
   let fitMode = 'contain';
-  if (fit) fit.addEventListener('click', (event) => {
-    event.stopPropagation(); fitMode = fitMode === 'contain' ? 'cover' : 'contain';
-    moviPlayer.style.objectFit = fitMode; fit.textContent = fitMode === 'contain' ? 'FIT' : 'FILL';
-    show();
-  });
-  const full = document.getElementById('pcFullscreenBtn');
-  if (full) full.addEventListener('click', async (event) => {
-    event.stopPropagation();
-    try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else if (wrapper.requestFullscreen) await wrapper.requestFullscreen();
-      else if (moviPlayer.webkitEnterFullscreen) moviPlayer.webkitEnterFullscreen();
-    } catch (error) { showToast('Fullscreen is not available in this browser.'); }
-    show();
-  });
-  // Auto-optimise safe playback defaults without forcing an unsupported codec or quality.
-  moviPlayer.setAttribute('preload', 'auto');
-  moviPlayer.setAttribute('playsinline', '');
-  moviPlayer.style.objectFit = 'contain';
-  show();
+  if (fit) fit.addEventListener('click', () => { fitMode = fitMode === 'contain' ? 'cover' : 'contain'; moviPlayer.style.objectFit = fitMode; fit.textContent = fitMode === 'contain' ? 'FIT' : 'FILL'; });
+  const fs = document.getElementById('pcFullscreenBtn');
+  if (fs) fs.addEventListener('click', () => { if (!document.fullscreenElement) wrapper.requestFullscreen?.(); else document.exitFullscreen?.(); });
 })();
 
 let engine = 'movi';
