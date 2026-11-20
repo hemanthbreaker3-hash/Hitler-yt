@@ -92,6 +92,14 @@
   .pc-switch{top:12px;left:12px}
   .pc-laptop{top:12px;right:56px}
   .pc-download{top:12px;right:12px}
+  .player-shortcut-hint{position:absolute;z-index:3;left:12px;bottom:10px;max-width:calc(100% - 24px);padding:5px 8px;border-radius:8px;background:rgba(0,0,0,.58);color:rgba(255,255,255,.72);font:10px/1.3 system-ui;pointer-events:none;opacity:0;transition:opacity .2s}
+  #playerWrapper:not(.chrome-idle) .player-shortcut-hint{opacity:1}
+  .pc-fit{top:60px;right:12px}
+  .pc-retry{top:60px;right:60px}
+  @media(max-width:700px){.pc-fit{top:56px;right:10px}.pc-retry{top:56px;right:54px}}
+  movi-player.player-fit-cover::part(video){object-fit:cover!important}
+  movi-player.player-fit-contain::part(video){object-fit:contain!important}
+  .player-chrome-btn:focus-visible{outline:2px solid #a78bfa;outline-offset:3px}
   .player-pop{
     position:absolute;z-index:12;min-width:160px;max-width:min(280px,86vw);
     background:rgba(10,10,20,.96);border:1px solid rgba(139,92,246,.35);
@@ -333,66 +341,97 @@
   }
 })();
 
-/* Built-in player chrome: tap/click toggles all top and bottom controls.
-   A single click shows controls, the next click on the video hides them;
-   after three seconds of inactivity they auto-hide. Menus remain usable. */
+/* User-friendly player chrome controller.
+   - Video-surface tap toggles controls; control taps never toggle the overlay.
+   - A longer idle window avoids hiding controls during seeking/touch gestures.
+   - Menus, keyboard focus and active pointer gestures keep controls available. */
 (function syncPlayerChromeIdle() {
   const wrapper = document.getElementById('playerWrapper');
   const player = document.getElementById('moviPlayer');
   if (!wrapper || !player) return;
   let timer = 0;
-  let visible = false;
-  const idleMs = 3000;
+  let visible = true;
+  let pointerActive = false;
+  let focusedInside = false;
+  const idleMs = 5000;
   const menuOpen = () => !!document.querySelector('#switchPop.open, #laptopPop.open');
-  const inChrome = (event) => {
-    const path = event.composedPath ? event.composedPath() : [];
-    return path.some(node => node && node.nodeType === 1 && node.matches &&
-      node.matches('.player-chrome-btn, .player-pop, button, a, input, select, textarea'));
-  };
-  const setVisible = (show) => {
+  const eventPath = event => event.composedPath ? event.composedPath() : [event.target];
+  const isOverlayControl = event => eventPath(event).some(node => node && node.nodeType === 1 &&
+    node.matches && node.matches('.player-chrome-btn, .player-pop, button, a, input, select, textarea, [role="slider"], [role="button"]'));
+  const setVisible = show => {
     visible = !!show;
     wrapper.classList.toggle('chrome-idle', !visible);
     player.classList.toggle('chrome-idle', !visible);
+    wrapper.setAttribute('data-controls-visible', String(visible));
   };
+  const clearHide = () => window.clearTimeout(timer);
   const scheduleHide = () => {
-    window.clearTimeout(timer);
-    if (menuOpen()) return;
+    clearHide();
+    if (!visible || menuOpen() || pointerActive || focusedInside) return;
     timer = window.setTimeout(() => {
-      if (!menuOpen()) setVisible(false);
+      if (!menuOpen() && !pointerActive && !focusedInside) setVisible(false);
     }, idleMs);
   };
   const reveal = () => { setVisible(true); scheduleHide(); };
-  const toggleVideo = (event) => {
-    if (inChrome(event)) { if (visible) scheduleHide(); return; }
-    const path = event.composedPath ? event.composedPath() : [];
-    if (!path.includes(player) && event.target !== player) return;
-    if (visible) {
-      window.clearTimeout(timer);
-      if (!menuOpen()) setVisible(false);
-    } else reveal();
+
+  // Toggle only when the user taps the actual player surface, not its controls.
+  wrapper.addEventListener('click', event => {
+    if (isOverlayControl(event)) { if (visible) scheduleHide(); return; }
+    const path = eventPath(event);
+    const clickedPlayerSurface = path.includes(player) &&
+      (event.target === player || event.target === wrapper || path.some(node => node === player));
+    if (!clickedPlayerSurface) return;
+    if (visible) { clearHide(); setVisible(false); }
+    else reveal();
+  }, true);
+
+  // Keep controls visible throughout scrubbing, pressing, and touch gestures.
+  wrapper.addEventListener('pointerdown', event => {
+    if (!visible) return;
+    pointerActive = true;
+    clearHide();
+  }, true);
+  const finishPointer = () => {
+    if (!pointerActive) return;
+    pointerActive = false;
+    scheduleHide();
   };
-  wrapper.addEventListener('click', toggleVideo, true);
-  // Activity while controls are visible resets the idle clock, but does not
-  // unexpectedly reveal them when hidden: users explicitly tap/click to show.
-  ['pointerdown', 'touchstart', 'keydown'].forEach(type => {
-    wrapper.addEventListener(type, event => {
-      if (visible && !inChrome(event)) scheduleHide();
-    }, {passive:true});
-  });
+  window.addEventListener('pointerup', finishPointer, true);
+  window.addEventListener('pointercancel', finishPointer, true);
+  wrapper.addEventListener('focusin', () => { focusedInside = true; clearHide(); }, true);
+  wrapper.addEventListener('focusout', () => {
+    window.setTimeout(() => {
+      focusedInside = wrapper.contains(document.activeElement);
+      if (!focusedInside) scheduleHide();
+    }, 0);
+  }, true);
+
+  // Pointer movement reveals controls only when the user is already interacting
+  // with the player; it does not force controls back on during page scrolling.
+  wrapper.addEventListener('pointermove', event => {
+    if (event.pointerType === 'mouse' && !visible && wrapper.matches(':hover')) reveal();
+    else if (visible && !isOverlayControl(event)) scheduleHide();
+  }, {passive:true});
+  player.addEventListener('playing', () => { if (!menuOpen()) scheduleHide(); });
+  player.addEventListener('pause', () => { clearHide(); setVisible(true); });
+  player.addEventListener('ended', () => { clearHide(); setVisible(true); });
   player.addEventListener('keydown', reveal);
   document.addEventListener('fullscreenchange', () => { if (visible) scheduleHide(); });
   document.addEventListener('webkitfullscreenchange', () => { if (visible) scheduleHide(); });
+
   const observer = new MutationObserver(() => {
-    if (menuOpen()) { window.clearTimeout(timer); setVisible(true); }
+    if (menuOpen()) { clearHide(); setVisible(true); }
     else if (visible) scheduleHide();
   });
   ['switchPop', 'laptopPop'].forEach(id => {
     const pop = document.getElementById(id);
-    if (pop) observer.observe(pop, { attributes: true, attributeFilter: ['class'] });
+    if (pop) observer.observe(pop, {attributes:true, attributeFilter:['class']});
   });
-  setVisible(false);
+  // Start visible so first-time users can discover the controls; auto-hide only
+  // after playback is underway, and keep controls visible while paused.
+  setVisible(true);
+  scheduleHide();
 })();
-
 </script>
 {% endblock %}
 
@@ -450,6 +489,7 @@
       <div class="player-box">
         <div class="player-wrapper" id="playerWrapper">
           <div class="player-brand-float" id="playerBrandFloat">{{ BRANDING }}</div>
+          <div class="player-shortcut-hint" aria-label="Keyboard shortcuts">Space: play/pause · ←/→: seek 10s · M: mute · F: fullscreen</div>
           <movi-player id="moviPlayer"
             playsinline controls autoplay muted preload="metadata" resume
             theme="dark" themecolor="#8b5cf6"
@@ -470,6 +510,13 @@
           <!-- Download -->
           <button type="button" class="player-chrome-btn pc-download" id="pcDownloadBtn" title="Download" aria-label="Download">
             <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+          </button>
+          <!-- Quick display and recovery actions -->
+          <button type="button" class="player-chrome-btn pc-fit" id="pcFitBtn" title="Toggle fit / fill" aria-label="Toggle video fit" aria-pressed="false">
+            <svg viewBox="0 0 24 24"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><path d="M8 8h8v8H8z"/></svg>
+          </button>
+          <button type="button" class="player-chrome-btn pc-retry" id="pcRetryBtn" title="Retry playback" aria-label="Retry playback">
+            <svg viewBox="0 0 24 24"><path d="M20 7v5h-5"/><path d="M4.8 9a8 8 0 0 1 13.4-2L20 12M4 17v-5h5"/><path d="M19.2 15a8 8 0 0 1-13.4 2L4 12"/></svg>
           </button>
 
           <div class="player-pop switch-pop" id="switchPop" role="menu">
@@ -746,7 +793,7 @@ buildPlayerGrids();
       Object.defineProperty(Element.prototype,'__moviWrapperFullscreenPatched',{value:true,configurable:true});
     }catch(_){/* retain native fullscreen if the browser locks the prototype */}
   }
-  const ids=['pcSwitchBtn','pcLaptopBtn','pcDownloadBtn','switchPop','laptopPop'];
+  const ids=['pcSwitchBtn','pcLaptopBtn','pcDownloadBtn','pcFitBtn','pcRetryBtn','switchPop','laptopPop'];
   const homes=new Map(ids.map(id=>[document.getElementById(id),wrapper]));
   function sync(){
     const fs=document.fullscreenElement||document.webkitFullscreenElement;
@@ -784,6 +831,14 @@ function extractWatchCode(url) {
     const m = String(url).match(/(?:^|\/)watch\/([A-Za-z0-9_-]{3,64})(?:\/|$|\?|#)/i);
     return m ? m[1] : null;
   } catch (_) { return null; }
+}
+// Keep the user's selected source slot when moving between episode groups.
+// If a destination group has fewer sources, fall back safely to its first source.
+function preferredButtonForGroup(groupIdx) {
+  const group = WATCH_GROUPS[groupIdx];
+  const buttons = group && Array.isArray(group.buttons) ? group.buttons : [];
+  if (!buttons.length) return -1;
+  return BUTTON_INDEX < buttons.length ? BUTTON_INDEX : 0;
 }
 function watchHrefFor(groupIdx, buttonIdx) {
   const g = WATCH_GROUPS[groupIdx];
@@ -889,7 +944,7 @@ document.addEventListener('click', () => {
   document.getElementById('laptopPop')?.classList.remove('open');
 });
 
-/* Prev / Next = previous/next group, first button */
+/* Prev / Next = previous/next episode group, same selected source slot */
 (function setupGroupNav() {
   const prev = document.getElementById('prevGroupBtn');
   const next = document.getElementById('nextGroupBtn');
@@ -901,19 +956,48 @@ document.addEventListener('click', () => {
   if (prev) {
     prev.disabled = GROUP_INDEX <= 0;
     prev.addEventListener('click', () => {
-      if (GROUP_INDEX > 0) goToGroupButton(GROUP_INDEX - 1, 0);
+      if (GROUP_INDEX > 0) goToGroupButton(GROUP_INDEX - 1, preferredButtonForGroup(GROUP_INDEX - 1));
     });
   }
   if (next) {
     next.disabled = GROUP_INDEX >= WATCH_GROUPS.length - 1;
     next.addEventListener('click', () => {
-      if (GROUP_INDEX < WATCH_GROUPS.length - 1) goToGroupButton(GROUP_INDEX + 1, 0);
+      if (GROUP_INDEX < WATCH_GROUPS.length - 1) goToGroupButton(GROUP_INDEX + 1, preferredButtonForGroup(GROUP_INDEX + 1));
     });
   }
   const tg = document.getElementById('tgFileBtn');
   if (tg && FILESTORE_USER) {
     tg.href = 'https://t.me/' + FILESTORE_USER + '?start=file_' + SHORT_CODE;
   }
+})();
+
+/* Auto-next: move to the next episode group while preserving the selected
+   source position (for example, source button 2 -> source button 2). */
+(function setupAutoNextEpisode() {
+  if (!moviPlayer || !Array.isArray(WATCH_GROUPS) || !WATCH_GROUPS.length) return;
+  let advanced = false;
+  function nextTarget() {
+    for (let gi = GROUP_INDEX + 1; gi < WATCH_GROUPS.length; gi += 1) {
+      const group = WATCH_GROUPS[gi];
+      if (group && Array.isArray(group.buttons) && group.buttons.length) {
+        const sourceIndex = preferredButtonForGroup(gi);
+        if (sourceIndex >= 0) return { group: gi, button: sourceIndex };
+      }
+    }
+    return null;
+  }
+  moviPlayer.addEventListener('ended', () => {
+    if (advanced) return;
+    const target = nextTarget();
+    if (!target) return;
+    advanced = true;
+    clearStallWatch();
+    clearRecoveryWatch();
+    savePosition();
+    showToast('Playing next episode with your selected source…');
+    const href = watchHrefFor(target.group, target.button);
+    if (href) window.location.assign(href);
+  }, { once: true });
 })();
 
 /* Episode / Seasons: only render seasons actually present; each season is strictly isolated. */
@@ -1013,7 +1097,9 @@ document.addEventListener('click', () => {
     filtered.forEach(({g, idx, parsed}) => {
       const first = (g.buttons || [])[0];
       if (!first || !first.url) return;
-      const href = (typeof watchHrefFor === 'function' ? watchHrefFor(idx, 0) : null) || first.url;
+      const preferred = preferredButtonForGroup(idx);
+      const chosen = (g.buttons || [])[preferred] || first;
+      const href = (typeof watchHrefFor === 'function' ? watchHrefFor(idx, preferred) : null) || chosen.url;
       const link = document.createElement('a');
       link.className = 'side-ep-btn' + (idx === Number(GROUP_INDEX) ? ' active' : '');
       link.href = href;
@@ -1045,7 +1131,16 @@ let recoveryCooldownUntil = 0;
 let stablePlaybackSince = 0;
 let recoveryWatchTimer = null;
 const MAX_STALL_RECOVERIES = 2;
-const STALL_TIMEOUT_MS = 20000;
+const STALL_TIMEOUT_MS = (() => {
+  // Browser Network Information API is optional; never depend on carrier names.
+  // Give slower 2G/3G or data-saver connections a longer buffering grace period.
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  const type = String(connection && connection.effectiveType || '').toLowerCase();
+  if (connection && connection.saveData) return 40000;
+  if (type === 'slow-2g' || type === '2g') return 45000;
+  if (type === '3g') return 30000;
+  return 20000;
+})();
 const RECOVERY_COOLDOWN_MS = 30000;
 
 function clearStallWatch() {
@@ -1150,6 +1245,63 @@ function recoverMoviAfterStall() {
     showToast('Could not reconnect this stream. Try another source.');
   }
 }
+// Quick actions are deliberately separate from the provider's native controls.
+(function wirePlayerQuickActions(){
+  const fitBtn=document.getElementById('pcFitBtn');
+  const retryBtn=document.getElementById('pcRetryBtn');
+  if(fitBtn){
+    fitBtn.addEventListener('click',()=>{
+      const cover=moviPlayer.classList.toggle('player-fit-cover');
+      moviPlayer.classList.toggle('player-fit-contain',!cover);
+      fitBtn.setAttribute('aria-pressed',String(cover));
+      fitBtn.title=cover?'Video fit: Fill (tap to contain)':'Video fit: Contain (tap to fill)';
+      showToast(cover?'Video fill enabled':'Video fit enabled');
+    });
+  }
+  if(retryBtn){
+    retryBtn.addEventListener('click',()=>{
+      if(!moviPlayer)return;
+      stallRetries=0;
+      recoveryCooldownUntil=0;
+      recoveryInFlight=false;
+      clearStallWatch();
+      clearRecoveryWatch();
+      recoverMoviAfterStall();
+    });
+  }
+})();
+
+// Keyboard shortcuts: ignore typing fields and preserve browser/system shortcuts.
+(function wirePlayerKeyboardShortcuts(){
+  document.addEventListener('keydown',event=>{
+    if(!playerWrapper || !moviPlayer || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    const target=event.target;
+    if(target && (target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(target.tagName))) return;
+    if(!playerWrapper.contains(target) && !playerWrapper.matches(':fullscreen')) return;
+    const key=event.key.toLowerCase();
+    if(key===' ' || key==='k'){
+      event.preventDefault();
+      if(moviPlayer.paused){const play=moviPlayer.play();if(play&&play.catch)play.catch(()=>showToast('Tap Play to start playback'));}
+      else moviPlayer.pause();
+    }else if(key==='arrowleft' || key==='arrowright'){
+      event.preventDefault();
+      const duration=Number(moviPlayer.duration)||0;
+      const next=Math.max(0,Math.min(duration||Infinity,(Number(moviPlayer.currentTime)||0)+(key==='arrowleft'?-10:10)));
+      try{moviPlayer.currentTime=next;}catch(_){}
+      playerWrapper.classList.remove('chrome-idle');
+      moviPlayer.classList.remove('chrome-idle');
+    }else if(key==='m'){
+      moviPlayer.muted=!moviPlayer.muted;
+      showToast(moviPlayer.muted?'Muted':'Sound on');
+    }else if(key==='f'){
+      event.preventDefault();
+      const fs=document.fullscreenElement||document.webkitFullscreenElement;
+      if(!fs){const req=playerWrapper.requestFullscreen||playerWrapper.webkitRequestFullscreen;if(req)req.call(playerWrapper);}
+      else{const exit=document.exitFullscreen||document.webkitExitFullscreen;if(exit)exit.call(document);}
+    }
+  });
+})();
+
 function scheduleStallRecovery() {
   clearStallWatch();
   if (!moviPlayer || moviPlayer.paused || moviPlayer.ended || recoveryInFlight) return;

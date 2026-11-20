@@ -15,6 +15,7 @@ const API_SUBPATHS = new Set([
   'health',
   'admin',
   'tracks',
+  'views', // Playback view registration endpoint on the Python backend.
 ]);
 
 let mongoClientPromise = null;
