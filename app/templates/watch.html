@@ -308,11 +308,9 @@
   #playerWrapper.controls-hidden .player-shortcut-hint {
     opacity:0!important; visibility:hidden!important; pointer-events:none!important;
   }
-  #playerWrapper .controls-toggle {position:absolute;z-index:2147483002;right:12px;top:12px;opacity:0;
-    pointer-events:auto;border:0;border-radius:999px;padding:8px 12px;background:transparent;color:transparent;
-    font:600 13px sans-serif;cursor:pointer;width:150px;height:44px}
-  #playerWrapper.controls-hidden .controls-toggle{opacity:0!important;visibility:visible!important;pointer-events:auto!important}
-  #playerWrapper:not(.controls-hidden) .controls-toggle{opacity:0!important;color:transparent!important;background:transparent!important;border-color:transparent!important}
+  #playerWrapper .controls-toggle {position:absolute;z-index:2147483002;right:12px;top:12px;
+    border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:8px 12px;
+    background:rgba(0,0,0,.65);color:white;font:600 13px sans-serif;cursor:pointer}
 
 </style>
 
@@ -372,7 +370,7 @@
   let hidden=false;
   const setHidden=(value)=>{hidden=!!value;wrapper.classList.toggle('controls-hidden',hidden);
     wrapper.setAttribute('data-controls-visible',hidden?'false':'true');
-    toggle.textContent='{{ BRANDING }}';
+    toggle.textContent=hidden?'Show controls':'Hide controls';
     toggle.setAttribute('aria-label',hidden?'Show all player controls':'Hide all player controls');};
   toggle.addEventListener('click',(e)=>{e.stopPropagation();setHidden(!hidden);});
   // Do not auto-reveal or auto-hide on playback, taps, pause, or fullscreen changes.
@@ -438,7 +436,7 @@
       <div class="neon-ribbon" aria-hidden="true"></div>
       <div class="player-box">
         <div class="player-wrapper" id="playerWrapper">
-<button type="button" class="controls-toggle" id="controlsToggle" aria-label="Toggle all player controls">{{ BRANDING }}</button>
+<button type="button" class="controls-toggle" id="controlsToggle" aria-label="Hide all player controls">Hide controls</button>
 
           <div class="player-brand-float" id="playerBrandFloat">{{ BRANDING }}</div>
           <div class="player-shortcut-hint" aria-label="Keyboard shortcuts">Space: play/pause · ←/→: seek 10s · M: mute · F: fullscreen</div>

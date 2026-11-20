@@ -2143,7 +2143,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .pc-fullscreen{top:108px;right:12px;font-size:22px}
     .player-wrapper.controls-hidden .player-chrome-btn{opacity:0;pointer-events:none;transition:opacity .18s ease}
     .player-wrapper.controls-hidden movi-player::part(chrome),.player-wrapper.controls-hidden movi-player::part(controls),.player-wrapper.controls-hidden movi-player::part(bottom-controls),.player-wrapper.controls-hidden movi-player::part(progress-container),.player-wrapper.controls-hidden movi-player::part(progress),.player-wrapper.controls-hidden movi-player::part(seek),.player-wrapper.controls-hidden movi-player::part(control-bar),.player-wrapper.controls-hidden movi-player::part(bottom-bar){opacity:0!important;visibility:hidden!important;pointer-events:none!important}
-    .player-wrapper .controls-toggle{position:absolute;z-index:2147483002;top:12px;right:12px;opacity:0!important;pointer-events:auto!important;visibility:visible!important;width:150px;height:44px;padding:8px 12px;border:0;background:transparent;color:transparent;font:600 13px system-ui;cursor:pointer}
+    .player-wrapper .controls-toggle{position:absolute;z-index:2147483002;top:12px;right:12px;border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:8px 12px;background:rgba(0,0,0,.65);color:white;font:600 13px system-ui;cursor:pointer}
     .player-wrapper.controls-hidden .player-pop{display:none!important}
     .player-wrapper .player-chrome-btn{transition:opacity .18s ease}
     .player-wrapper:fullscreen{width:100vw;height:100vh;aspect-ratio:auto;border-radius:0}
@@ -2338,10 +2338,11 @@ const loadingEl = document.getElementById('playerLoading');
   const wrapper = document.getElementById('playerWrapper');
   if (!wrapper || !moviPlayer) return;
   let visible = true;
-  const toggle = document.getElementById('controlsToggle');
-  const setVisible = (value) => { visible = !!value; wrapper.classList.toggle('controls-hidden', !visible); moviPlayer.setAttribute('controls', ''); if(toggle){ toggle.textContent = BRANDING; toggle.setAttribute('aria-label', visible ? 'Hide all player controls' : 'Show all player controls'); } if(!visible){document.getElementById('switchPop')?.classList.remove('open'); document.getElementById('laptopPop')?.classList.remove('open');} };
+  const show = () => { visible = true; wrapper.classList.remove('controls-hidden'); moviPlayer.setAttribute('controls', ''); };
+  const hide = () => { visible = false; wrapper.classList.add('controls-hidden'); moviPlayer.setAttribute('controls', ''); document.getElementById('switchPop')?.classList.remove('open'); document.getElementById('laptopPop')?.classList.remove('open'); };
   // Visibility is explicit: tapping video/player chrome does not toggle it.
-  if (toggle) { toggle.textContent = BRANDING; toggle.addEventListener('click', (event) => { event.stopPropagation(); setVisible(!visible); }); }
+  const toggle = document.getElementById('controlsToggle');
+  if (toggle) toggle.addEventListener('click', (event) => { event.stopPropagation(); if (visible) hide(); else show(); });
   document.addEventListener('fullscreenchange', () => {
     const isFull = document.fullscreenElement === wrapper;
     const b = document.getElementById('pcFullscreenBtn');
