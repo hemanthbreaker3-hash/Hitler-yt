@@ -341,96 +341,36 @@
   }
 })();
 
-/* User-friendly player chrome controller.
-   - Video-surface tap toggles controls; control taps never toggle the overlay.
-   - A longer idle window avoids hiding controls during seeking/touch gestures.
-   - Menus, keyboard focus and active pointer gestures keep controls available. */
+/* Persistent, touch-friendly player controls.
+   Keep the native bottom controls and seek bar visible in portrait, landscape,
+   and fullscreen. A tap anywhere on the player reveals page-owned controls too. */
 (function syncPlayerChromeIdle() {
   const wrapper = document.getElementById('playerWrapper');
   const player = document.getElementById('moviPlayer');
   if (!wrapper || !player) return;
   let timer = 0;
-  let visible = true;
-  let pointerActive = false;
-  let focusedInside = false;
-  const idleMs = 5000;
-  const menuOpen = () => !!document.querySelector('#switchPop.open, #laptopPop.open');
-  const eventPath = event => event.composedPath ? event.composedPath() : [event.target];
-  const isOverlayControl = event => eventPath(event).some(node => node && node.nodeType === 1 &&
-    node.matches && node.matches('.player-chrome-btn, .player-pop, button, a, input, select, textarea, [role="slider"], [role="button"]'));
-  const setVisible = show => {
-    visible = !!show;
-    wrapper.classList.toggle('chrome-idle', !visible);
-    player.classList.toggle('chrome-idle', !visible);
-    wrapper.setAttribute('data-controls-visible', String(visible));
+  const keepVisible = () => {
+    window.clearTimeout(timer);
+    wrapper.classList.remove('chrome-idle');
+    player.classList.remove('chrome-idle');
+    wrapper.setAttribute('data-controls-visible', 'true');
+    // Some custom-element builds apply inline styles while changing orientation.
+    ['controls','bottom-controls','progress-container','chrome'].forEach(part => {
+      try { player.style.removeProperty('--movi-controls-hidden'); } catch (_) {}
+    });
   };
-  const clearHide = () => window.clearTimeout(timer);
-  const scheduleHide = () => {
-    clearHide();
-    if (!visible || menuOpen() || pointerActive || focusedInside) return;
-    timer = window.setTimeout(() => {
-      if (!menuOpen() && !pointerActive && !focusedInside) setVisible(false);
-    }, idleMs);
-  };
-  const reveal = () => { setVisible(true); scheduleHide(); };
-
-  // Toggle only when the user taps the actual player surface, not its controls.
-  wrapper.addEventListener('click', event => {
-    if (isOverlayControl(event)) { if (visible) scheduleHide(); return; }
-    const path = eventPath(event);
-    const clickedPlayerSurface = path.includes(player) &&
-      (event.target === player || event.target === wrapper || path.some(node => node === player));
-    if (!clickedPlayerSurface) return;
-    if (visible) { clearHide(); setVisible(false); }
-    else reveal();
-  }, true);
-
-  // Keep controls visible throughout scrubbing, pressing, and touch gestures.
-  wrapper.addEventListener('pointerdown', event => {
-    if (!visible) return;
-    pointerActive = true;
-    clearHide();
-  }, true);
-  const finishPointer = () => {
-    if (!pointerActive) return;
-    pointerActive = false;
-    scheduleHide();
-  };
-  window.addEventListener('pointerup', finishPointer, true);
-  window.addEventListener('pointercancel', finishPointer, true);
-  wrapper.addEventListener('focusin', () => { focusedInside = true; clearHide(); }, true);
-  wrapper.addEventListener('focusout', () => {
-    window.setTimeout(() => {
-      focusedInside = wrapper.contains(document.activeElement);
-      if (!focusedInside) scheduleHide();
-    }, 0);
-  }, true);
-
-  // Pointer movement reveals controls only when the user is already interacting
-  // with the player; it does not force controls back on during page scrolling.
-  wrapper.addEventListener('pointermove', event => {
-    if (event.pointerType === 'mouse' && !visible && wrapper.matches(':hover')) reveal();
-    else if (visible && !isOverlayControl(event)) scheduleHide();
-  }, {passive:true});
-  player.addEventListener('playing', () => { if (!menuOpen()) scheduleHide(); });
-  player.addEventListener('pause', () => { clearHide(); setVisible(true); });
-  player.addEventListener('ended', () => { clearHide(); setVisible(true); });
-  player.addEventListener('keydown', reveal);
-  document.addEventListener('fullscreenchange', () => { if (visible) scheduleHide(); });
-  document.addEventListener('webkitfullscreenchange', () => { if (visible) scheduleHide(); });
-
-  const observer = new MutationObserver(() => {
-    if (menuOpen()) { clearHide(); setVisible(true); }
-    else if (visible) scheduleHide();
-  });
-  ['switchPop', 'laptopPop'].forEach(id => {
-    const pop = document.getElementById(id);
-    if (pop) observer.observe(pop, {attributes:true, attributeFilter:['class']});
-  });
-  // Start visible so first-time users can discover the controls; auto-hide only
-  // after playback is underway, and keep controls visible while paused.
-  setVisible(true);
-  scheduleHide();
+  const reveal = () => keepVisible();
+  ['pointerdown','pointerup','touchstart','touchend','click','focusin','keydown']
+    .forEach(type => wrapper.addEventListener(type, reveal, {capture:true, passive:type==='touchstart'||type==='touchend'}));
+  player.addEventListener('playing', reveal);
+  player.addEventListener('play', reveal);
+  player.addEventListener('pause', reveal);
+  player.addEventListener('ended', reveal);
+  document.addEventListener('fullscreenchange', reveal);
+  document.addEventListener('webkitfullscreenchange', reveal);
+  window.addEventListener('orientationchange', () => window.setTimeout(reveal, 120));
+  window.addEventListener('resize', reveal, {passive:true});
+  keepVisible();
 })();
 </script>
 {% endblock %}
@@ -1423,6 +1363,83 @@ initWasm();
 })();
 {% endif %}
 </script>
+
+<style id="persistent-player-controls-fix">
+  /* Keep the full player surface usable in both orientations. */
+  #playerWrapper {
+    position: relative !important;
+    overflow: visible !important;
+    touch-action: manipulation;
+    isolation: isolate;
+  }
+  #playerWrapper:fullscreen,
+  #playerWrapper:-webkit-full-screen {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    max-width: none !important;
+    max-height: none !important;
+    aspect-ratio: auto !important;
+    overflow: visible !important;
+    background: #000 !important;
+    z-index: 2147482000 !important;
+  }
+  #playerWrapper:fullscreen movi-player,
+  #playerWrapper:-webkit-full-screen movi-player {
+    display: block !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+  }
+  /* Do not let the page's idle class hide the native seek bar/bottom row. */
+  #playerWrapper.chrome-idle .player-chrome-btn,
+  #playerWrapper.chrome-idle .player-pop:not(.open),
+  movi-player.chrome-idle .player-chrome-btn,
+  movi-player.chrome-idle .player-pop:not(.open) {
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+    transform: none !important;
+  }
+  movi-player.chrome-idle::part(chrome),
+  movi-player.chrome-idle::part(controls),
+  movi-player.chrome-idle::part(bottom-controls),
+  movi-player.chrome-idle::part(progress-container),
+  movi-player::part(chrome),
+  movi-player::part(controls),
+  movi-player::part(bottom-controls),
+  movi-player::part(progress-container),
+  movi-player::part(progress) {
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+  }
+  #playerWrapper .player-chrome-btn,
+  #playerWrapper .player-pop:not(.open) {
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+    transform: none !important;
+  }
+  #playerWrapper .player-chrome-btn { z-index: 2147483000 !important; }
+  #playerWrapper .player-pop { z-index: 2147483001 !important; }
+  @media (orientation: landscape) and (max-height: 600px) {
+    #playerWrapper:fullscreen .player-chrome-btn,
+    #playerWrapper:-webkit-full-screen .player-chrome-btn {
+      width: 36px !important;
+      height: 36px !important;
+    }
+    #playerWrapper:fullscreen .pc-switch,
+    #playerWrapper:-webkit-full-screen .pc-switch { top: 8px !important; left: 8px !important; }
+    #playerWrapper:fullscreen .pc-laptop,
+    #playerWrapper:-webkit-full-screen .pc-laptop { top: 8px !important; right: 50px !important; }
+    #playerWrapper:fullscreen .pc-download,
+    #playerWrapper:-webkit-full-screen .pc-download { top: 8px !important; right: 8px !important; }
+  }
+</style>
+
 {% endblock %}
 
 
