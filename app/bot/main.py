@@ -1921,9 +1921,14 @@ def register_handlers(bot):
         })
         await db.cms_pending.delete_one({"_id": pending_id})
         web_base = (await get_active_website_url()) or settings.BASE_URL.rstrip("/")
+        page_url = f"{web_base.rstrip('/')}/title/{slug}"
+        page_title = html.escape(str(pending.get("title") or slug))
+        safe_page_url = html.escape(page_url, quote=True)
         await callback.message.edit_text(
-            f"✅ Page created: {web_base.rstrip('/')}/title/{slug}\n"
-            "Use /edit while replying with this link, or open /panel to manage page groups and buttons."
+            f'✅ Page created: <a href="{safe_page_url}">{page_title}</a>\n'
+            "Use /edit while replying to this message, or open /panel to manage page groups and buttons.",
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
         )
         await callback.answer("Published")
 

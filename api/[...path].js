@@ -2138,6 +2138,14 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .player-chrome-btn:hover{background:rgba(255,106,0,.25);border-color:rgba(139,92,246,.55)}
     .player-chrome-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
     .pc-switch{top:12px;left:12px}.pc-laptop{top:12px;right:56px}.pc-download{top:12px;right:12px}
+    .pc-fit{top:60px;right:12px;font:800 10px system-ui;letter-spacing:.04em}
+    .pc-fullscreen{top:108px;right:12px;font-size:22px}
+    .player-wrapper.controls-hidden .player-chrome-btn{opacity:0;pointer-events:none;transition:opacity .18s ease}
+    .player-wrapper.controls-hidden .player-pop{display:none!important}
+    .player-wrapper .player-chrome-btn{transition:opacity .18s ease}
+    .player-wrapper:fullscreen{width:100vw;height:100vh;aspect-ratio:auto;border-radius:0}
+    .player-wrapper:fullscreen movi-player{width:100%;height:100%;object-fit:contain}
+    @media(max-width:520px){.pc-fit{top:58px}.pc-fullscreen{top:104px}}
     .player-pop{position:absolute;z-index:12;min-width:160px;max-width:min(280px,86vw);background:rgba(10,10,20,.96);border:1px solid rgba(139,92,246,.35);border-radius:14px;padding:8px;box-shadow:0 12px 32px rgba(0,0,0,.55);display:none;flex-direction:column;gap:4px}
     .player-pop.open{display:flex}
     .player-pop.switch-pop{top:56px;left:12px}.player-pop.laptop-pop{top:56px;right:12px}
@@ -2235,6 +2243,8 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
           <button type="button" class="player-chrome-btn pc-download" id="pcDownloadBtn" title="Download" aria-label="Download">
             <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
           </button>
+          <button type="button" class="player-chrome-btn pc-fit" id="pcFitBtn" title="Fit video" aria-label="Fit video">FIT</button>
+          <button type="button" class="player-chrome-btn pc-fullscreen" id="pcFullscreenBtn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
           <div class="player-pop switch-pop" id="switchPop" role="menu">
             <div class="pop-title">This group</div>
             <div id="switchPopList"></div>
@@ -2318,6 +2328,60 @@ const MOVI_GLOBAL_FALLBACK = 'https://cdn.jsdelivr.net/npm/movi-player/dist/elem
 
 const moviPlayer = document.getElementById('moviPlayer');
 const loadingEl = document.getElementById('playerLoading');
+
+// Player chrome: tap to toggle, then auto-hide after inactivity.
+(function setupPlayerChrome(){
+  const wrapper = document.getElementById('playerWrapper');
+  if (!wrapper || !moviPlayer) return;
+  let visible = true;
+  let hideTimer = null;
+  const show = () => {
+    visible = true; wrapper.classList.remove('controls-hidden');
+    moviPlayer.setAttribute('controls', '');
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(hide, 3200);
+  };
+  const hide = () => {
+    visible = false; wrapper.classList.add('controls-hidden');
+    moviPlayer.removeAttribute('controls');
+    document.getElementById('switchPop')?.classList.remove('open');
+    document.getElementById('laptopPop')?.classList.remove('open');
+  };
+  wrapper.addEventListener('click', (event) => {
+    if (event.target.closest('.player-chrome-btn,.player-pop')) { show(); return; }
+    if (visible) hide(); else show();
+  });
+  wrapper.addEventListener('pointermove', () => { if (visible) show(); });
+  wrapper.addEventListener('keydown', (event) => { if (event.key === ' ' || event.key === 'Enter') show(); });
+  document.addEventListener('fullscreenchange', () => {
+    const isFull = document.fullscreenElement === wrapper;
+    const b = document.getElementById('pcFullscreenBtn');
+    if (b) b.textContent = isFull ? '⤢' : '⛶';
+    show();
+  });
+  const fit = document.getElementById('pcFitBtn');
+  let fitMode = 'contain';
+  if (fit) fit.addEventListener('click', (event) => {
+    event.stopPropagation(); fitMode = fitMode === 'contain' ? 'cover' : 'contain';
+    moviPlayer.style.objectFit = fitMode; fit.textContent = fitMode === 'contain' ? 'FIT' : 'FILL';
+    show();
+  });
+  const full = document.getElementById('pcFullscreenBtn');
+  if (full) full.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else if (wrapper.requestFullscreen) await wrapper.requestFullscreen();
+      else if (moviPlayer.webkitEnterFullscreen) moviPlayer.webkitEnterFullscreen();
+    } catch (error) { showToast('Fullscreen is not available in this browser.'); }
+    show();
+  });
+  // Auto-optimise safe playback defaults without forcing an unsupported codec or quality.
+  moviPlayer.setAttribute('preload', 'auto');
+  moviPlayer.setAttribute('playsinline', '');
+  moviPlayer.style.objectFit = 'contain';
+  show();
+})();
 
 let engine = 'movi';
 const forcedEngine = true;
