@@ -2142,6 +2142,8 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .pc-fit{top:60px;right:12px;font:800 10px system-ui;letter-spacing:.04em}
     .pc-fullscreen{top:108px;right:12px;font-size:22px}
     .player-wrapper.controls-hidden .player-chrome-btn{opacity:0;pointer-events:none;transition:opacity .18s ease}
+    .player-wrapper.controls-hidden movi-player::part(chrome),.player-wrapper.controls-hidden movi-player::part(controls),.player-wrapper.controls-hidden movi-player::part(bottom-controls),.player-wrapper.controls-hidden movi-player::part(progress-container),.player-wrapper.controls-hidden movi-player::part(progress),.player-wrapper.controls-hidden movi-player::part(seek),.player-wrapper.controls-hidden movi-player::part(control-bar),.player-wrapper.controls-hidden movi-player::part(bottom-bar){opacity:0!important;visibility:hidden!important;pointer-events:none!important}
+    .player-wrapper .controls-toggle{position:absolute;z-index:2147483002;top:12px;right:12px;border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:8px 12px;background:rgba(0,0,0,.65);color:white;font:600 13px system-ui;cursor:pointer}
     .player-wrapper.controls-hidden .player-pop{display:none!important}
     .player-wrapper .player-chrome-btn{transition:opacity .18s ease}
     .player-wrapper:fullscreen{width:100vw;height:100vh;aspect-ratio:auto;border-radius:0}
@@ -2225,6 +2227,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     <div class="player-shell">
       <div class="player-box">
         <div class="player-wrapper" id="playerWrapper">
+          <button type="button" class="controls-toggle" id="controlsToggle">Hide controls</button>
           <movi-player id="moviPlayer"
             playsinline controls autoplay muted preload="auto" resume
             theme="dark" themecolor="#8b5cf6"
@@ -2337,11 +2340,9 @@ const loadingEl = document.getElementById('playerLoading');
   let visible = true;
   const show = () => { visible = true; wrapper.classList.remove('controls-hidden'); moviPlayer.setAttribute('controls', ''); };
   const hide = () => { visible = false; wrapper.classList.add('controls-hidden'); moviPlayer.setAttribute('controls', ''); document.getElementById('switchPop')?.classList.remove('open'); document.getElementById('laptopPop')?.classList.remove('open'); };
-  wrapper.addEventListener('click', (event) => {
-    if (event.target.closest('.player-chrome-btn,.player-pop')) { show(); return; }
-    if (visible) hide(); else show();
-  });
-  wrapper.addEventListener('keydown', (event) => { if (event.key === ' ' || event.key === 'Enter') show(); });
+  // Visibility is explicit: tapping video/player chrome does not toggle it.
+  const toggle = document.getElementById('controlsToggle');
+  if (toggle) toggle.addEventListener('click', (event) => { event.stopPropagation(); if (visible) hide(); else show(); });
   document.addEventListener('fullscreenchange', () => {
     const isFull = document.fullscreenElement === wrapper;
     const b = document.getElementById('pcFullscreenBtn');
