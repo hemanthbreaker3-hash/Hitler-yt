@@ -115,28 +115,37 @@ async def get_filestore_auto_delete_seconds() -> int:
         return _DEFAULT_FILESTORE_AUTO_DELETE_SECONDS
 
 
-async def get_runtime_fsub_ids() -> list[int]:
+def _normalize_fsub_ref(value):
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    raw = raw.split('?', 1)[0].rstrip('/')
+    if 't.me/' in raw:
+        raw = raw.split('t.me/', 1)[1].split('/', 1)[0]
+    if raw.startswith('@'):
+        return raw
+    try:
+        return int(raw)
+    except ValueError:
+        return '@' + raw if re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{4,31}', raw) else None
+
+
+async def get_runtime_fsub_ids() -> list[int | str]:
     """Env force-sub channels + runtime fsub list from MongoDB."""
     ids: list[int] = []
     seen = set()
     for cid in settings.fsub_list:
-        try:
-            i = int(cid)
-            if i not in seen:
-                ids.append(i)
-                seen.add(i)
-        except Exception:
-            pass
+        ref = _normalize_fsub_ref(cid)
+        if ref is not None and str(ref) not in seen:
+            ids.append(ref)
+            seen.add(str(ref))
     try:
         runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
         for cid in runtime.get("runtime_fsub") or []:
-            try:
-                i = int(cid)
-                if i not in seen:
-                    ids.append(i)
-                    seen.add(i)
-            except Exception:
-                pass
+            ref = _normalize_fsub_ref(cid)
+            if ref is not None and str(ref) not in seen:
+                ids.append(ref)
+                seen.add(str(ref))
     except Exception:
         pass
     return ids
@@ -2451,9 +2460,9 @@ def register_handlers(bot):
             "addadmin": ("Send the **user ID** to add as admin (numbers only).", "addadmin"),
             "deladmin": ("Send the **user ID** to remove from admins.", "deladmin"),
             "setadmins": ("Send admin user IDs separated by comma or space (replaces runtime list).\nOwner is always kept.", "setadmins"),
-            "addfsub": ("Send the **channel/group ID** to add for force-subscribe\n(e.g. `-1001234567890`). Bot must be admin there.", "addfsub"),
+            "addfsub": ("Send a channel/group ID, @username, or t.me link for force-subscribe. Bot must be admin there.", "addfsub"),
             "delfsub": ("Send the **channel/group ID** to remove from FSub.", "delfsub"),
-            "setfsub": ("Send channel/group IDs separated by comma or space (replaces runtime FSub list).", "setfsub"),
+            "setfsub": ("Send channel/group IDs, @usernames, or t.me links separated by comma or space (replaces runtime FSub list).", "setfsub"),
             "autodel": ("Send auto-delete time for FileStore deliveries:\n`5m` · `10m` · `1h` · `300` (seconds) · `off`", "autodel"),
         }
         if data not in prompts:
@@ -2497,12 +2506,16 @@ def register_handlers(bot):
             out = []
             for part in re.split(r"[\s,;]+", s.strip()):
                 part = part.strip()
-                if not part:
-                    continue
-                try:
+                if part and re.fullmatch(r"-?\d+", part):
                     out.append(int(part))
-                except ValueError:
-                    continue
+            return out
+
+        def parse_fsub_refs(s: str):
+            out = []
+            for part in re.split(r"[\s,;]+", s.strip()):
+                ref = _normalize_fsub_ref(part)
+                if ref is not None:
+                    out.append(ref)
             return out
 
         if state == "addadmin":
@@ -2556,27 +2569,51 @@ def register_handlers(bot):
             return await message.reply(f"✅ Runtime admins replaced ({len(cleaned)} + owner).")
 
         if state == "addfsub":
-            ids = parse_ids(raw)
+            ids = list(dict.fromkeys(parse_fsub_refs(raw)))
             if not ids:
-                return await message.reply("❌ Send a valid channel/group ID (e.g. `-1001234567890`).")
-            cur = list(runtime.get("runtime_fsub") or [])
-            for i in ids:
-                if i not in cur:
-                    cur.append(i)
+                return await message.reply("❌ Invalid chat reference. Send -100… ID, @username, or t.me link.")
+            verified = []
+            failures = []
+            me = await client.get_me()
+            for chat_ref in ids:
+                try:
+                    chat = await client.get_chat(chat_ref)
+                    member = await client.get_chat_member(chat.id, me.id)
+                    status = str(getattr(member.status, 'value', member.status)).lower()
+                    if status not in ('administrator', 'owner', 'creator', 'chatmemberstatus.administrator', 'chatmemberstatus.owner'):
+                        failures.append(f"{chat_ref}: bot is not an administrator")
+                        continue
+                    verified.append(int(chat.id))
+                except Exception as exc:
+                    failures.append(f"{chat_ref}: {type(exc).__name__} — check the ID and bot access")
+            if not verified:
+                return await message.reply("❌ No FSub chats were saved.\n" + "\n".join(failures[:8]))
+            cur = [int(x) for x in (runtime.get("runtime_fsub") or []) if str(x).lstrip('-').isdigit()]
+            for chat_id in verified:
+                if chat_id not in cur:
+                    cur.append(chat_id)
             await db.site_settings.update_one(
                 {"_id": "runtime"},
                 {"$set": {"runtime_fsub": cur, "updated_at": now}},
                 upsert=True,
             )
-            return await message.reply(
-                f"✅ FSub added: {', '.join(str(i) for i in ids)}\n"
-                "Make sure the bot is **admin** in those chats and can invite users."
-            )
+            msg = f"✅ FSub saved and verified: {', '.join(str(i) for i in verified)}"
+            if failures:
+                msg += "\n\n⚠️ Not added:\n" + "\n".join(failures[:8])
+            return await message.reply(msg)
 
         if state == "delfsub":
-            ids = set(parse_ids(raw))
+            refs = list(dict.fromkeys(parse_fsub_refs(raw)))
+            ids = set()
+            for ref in refs:
+                try:
+                    chat = await client.get_chat(ref)
+                    ids.add(int(chat.id))
+                except Exception:
+                    try: ids.add(int(ref))
+                    except Exception: pass
             if not ids:
-                return await message.reply("❌ Send a valid channel/group ID.")
+                return await message.reply("❌ Could not resolve that chat. Send its ID, @username, or t.me link.")
             cur = [i for i in (runtime.get("runtime_fsub") or []) if int(i) not in ids]
             await db.site_settings.update_one(
                 {"_id": "runtime"},
@@ -2586,19 +2623,32 @@ def register_handlers(bot):
             return await message.reply(f"✅ FSub removed: {', '.join(str(i) for i in ids)}")
 
         if state == "setfsub":
-            ids = parse_ids(raw)
+            ids = list(dict.fromkeys(parse_fsub_refs(raw)))
+            if not ids and raw.strip().lower() not in ("clear", "none", "off", "disable"):
+                return await message.reply("❌ No valid channel references found. Send IDs, @usernames, or t.me links; use `clear` to remove all.")
             cleaned = []
-            seen = set()
-            for i in ids:
-                if i not in seen:
-                    cleaned.append(i)
-                    seen.add(i)
+            failures = []
+            me = await client.get_me() if ids else None
+            for chat_ref in ids:
+                try:
+                    chat = await client.get_chat(chat_ref)
+                    member = await client.get_chat_member(chat.id, me.id)
+                    status = str(getattr(member.status, 'value', member.status)).lower()
+                    if status not in ('administrator', 'owner', 'creator', 'chatmemberstatus.administrator', 'chatmemberstatus.owner'):
+                        failures.append(f"{chat_ref}: bot is not an administrator")
+                        continue
+                    cleaned.append(int(chat.id))
+                except Exception as exc:
+                    failures.append(f"{chat_ref}: {type(exc).__name__} — check ID and bot access")
             await db.site_settings.update_one(
                 {"_id": "runtime"},
-                {"$set": {"runtime_fsub": cleaned, "updated_at": now}},
+                {"$set": {"runtime_fsub": list(dict.fromkeys(cleaned)), "updated_at": now}},
                 upsert=True,
             )
-            return await message.reply(f"✅ FSub list replaced ({len(cleaned)} chats).")
+            msg = f"✅ FSub list replaced ({len(set(cleaned))} verified chats)."
+            if failures:
+                msg += "\n\n⚠️ Skipped:\n" + "\n".join(failures[:8])
+            return await message.reply(msg)
 
         if state == "autodel":
             v = raw.lower().strip()

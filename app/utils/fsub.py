@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from wzgram.enums import ChatMemberStatus
@@ -15,8 +16,25 @@ ACTIVE = {
     ChatMemberStatus.MEMBER,
     ChatMemberStatus.ADMINISTRATOR,
     ChatMemberStatus.OWNER,
-    ChatMemberStatus.RESTRICTED,
 }
+
+
+def _chat_ref(value):
+    """Normalize a numeric chat ID, @username, or t.me chat URL."""
+    if isinstance(value, int):
+        return value
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    raw = raw.split('?', 1)[0].rstrip('/')
+    if 't.me/' in raw:
+        raw = raw.split('t.me/', 1)[1].split('/', 1)[0]
+    if raw.startswith('@'):
+        return raw
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return '@' + raw if re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{4,31}', raw) else None
 
 
 async def get_all_fsub_channel_ids() -> list[int]:
@@ -24,23 +42,17 @@ async def get_all_fsub_channel_ids() -> list[int]:
     ids: list[int] = []
     seen = set()
     for channel_id in settings.fsub_list:
-        try:
-            i = int(channel_id)
-            if i not in seen:
-                ids.append(i)
-                seen.add(i)
-        except Exception:
-            pass
+        ref = _chat_ref(channel_id)
+        if ref is not None and str(ref) not in seen:
+            ids.append(ref)
+            seen.add(str(ref))
     try:
         runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
         for channel_id in runtime.get("runtime_fsub") or []:
-            try:
-                i = int(channel_id)
-                if i not in seen:
-                    ids.append(i)
-                    seen.add(i)
-            except Exception:
-                pass
+            ref = _chat_ref(channel_id)
+            if ref is not None and str(ref) not in seen:
+                ids.append(ref)
+                seen.add(str(ref))
     except Exception as e:
         logger.debug("runtime fsub read failed: %s", e)
     return ids
@@ -54,7 +66,9 @@ async def is_user_fsubbed(client, user_id: int) -> bool:
         try:
             member = await client.get_chat_member(channel_id, user_id)
             if member.status not in ACTIVE:
-                return False
+                # Telegram's RESTRICTED status is a member only when is_member=True.
+                if str(getattr(member.status, 'value', member.status)).lower() not in ('restricted', 'chatmemberstatus.restricted') or not bool(getattr(member, 'is_member', False)):
+                    return False
         except UserNotParticipant:
             return False
         except (ChatAdminRequired, ChannelPrivate) as e:
@@ -76,7 +90,12 @@ async def get_missing_fsub_channels(client, user_id: int) -> list[int]:
         try:
             member = await client.get_chat_member(channel_id, user_id)
             if member.status not in ACTIVE:
-                missing.append(channel_id)
+                restricted_member = (
+                    str(getattr(member.status, 'value', member.status)).lower() in ('restricted', 'chatmemberstatus.restricted')
+                    and bool(getattr(member, 'is_member', False))
+                )
+                if not restricted_member:
+                    missing.append(channel_id)
         except UserNotParticipant:
             missing.append(channel_id)
         except Exception as e:

@@ -47,7 +47,7 @@
     aspect-ratio:16/9;
     position:relative;
     background:#000;
-    contain:paint;
+    contain:layout style;
   }
   .player-wrapper movi-player{
     width:100%;height:100%;background:#000;object-fit:contain;display:block;
@@ -99,6 +99,8 @@
     display:none;flex-direction:column;gap:4px;backdrop-filter:blur(12px);
   }
   .player-pop.open{display:flex}
+  #switchPopList,#laptopPopList{max-height:min(52vh,420px);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scrollbar-width:thin}
+  #switchPopList button,#laptopPopList a{flex:0 0 auto}
   .player-pop.switch-pop{top:56px;left:12px}
   .player-pop.laptop-pop{top:56px;right:12px}
   .player-pop button,.player-pop a{
@@ -143,13 +145,13 @@
     background:rgba(0,0,0,.35);font-size:22px;opacity:.9;
   }
   .related-card .meta-line{padding:9px 10px;font-size:13px;font-weight:700;line-height:1.3;display:flex;flex-direction:column;gap:3px}.quality-count{color:#22d3ee;font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}.season-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 14px}.season-tabs button{border:1px solid rgba(148,163,184,.18);background:#111722;color:#9ca3af;border-radius:999px;padding:7px 13px;font-size:12px;font-weight:800;cursor:pointer}.season-tabs button.active{background:rgba(139,92,246,.14);border-color:rgba(139,92,246,.4);color:#c4b5fd}
-  .side-eps{max-height:min(70vh,560px);display:flex;flex-direction:column;gap:10px}
+  .side-eps{max-height:min(70vh,560px);min-height:220px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
   .side-season-bar{display:flex;flex-wrap:wrap;gap:6px}
   .side-season-bar button{border:1px solid rgba(148,163,184,.2);background:#111722;color:#9ca3af;border-radius:999px;padding:6px 11px;font-size:11px;font-weight:800;cursor:pointer}
   .side-season-bar button.active{background:linear-gradient(120deg,#e8d5a8,#c79a4d);border-color:transparent;color:#17130b}
   .side-ep-tools{display:flex;flex-direction:column;gap:8px}
   .side-ep-tools select,.side-ep-tools input{min-height:38px;border:1px solid var(--line2,#2a2a3a);border-radius:10px;background:#0d0d16;color:#fff;padding:8px 10px;outline:none;width:100%}
-  .side-ep-list{display:flex;flex-direction:column;gap:6px;overflow:auto;max-height:min(48vh,380px);padding-right:2px}
+  .side-ep-list{display:flex;flex:1 1 auto;flex-direction:column;gap:6px;overflow-y:auto;overflow-x:hidden;min-height:0;max-height:min(48vh,380px);padding:0 4px 4px 0;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scrollbar-width:thin}
   .side-ep-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-radius:10px;border:1px solid rgba(148,163,184,.16);background:#101621;color:#e5e7eb;text-decoration:none;font-size:12px;font-weight:700}
   .side-ep-btn:hover{border-color:rgba(139,92,246,.4);background:#151c2a}
   .side-ep-btn.active{border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.08);color:#fff}
@@ -157,6 +159,14 @@
   .side-ep-btn .ep-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .side-ep-count{font-size:11px;color:#9ca3af}
 
+
+  #playerWrapper:fullscreen{width:100vw;height:100vh;aspect-ratio:auto;display:flex;align-items:center;justify-content:center;background:#000;contain:none}
+  #playerWrapper:fullscreen movi-player{width:100%;height:100%;max-height:100vh}
+  #playerWrapper:fullscreen .player-chrome-btn{z-index:2147483000;position:absolute}
+  #playerWrapper:fullscreen .player-pop{z-index:2147483001}
+  movi-player:fullscreen{position:relative!important;width:100vw!important;height:100vh!important;background:#000!important}
+  movi-player:fullscreen .player-chrome-btn{z-index:2147483000}
+  @media(max-width:700px){.player-chrome-btn{width:38px;height:38px}.pc-laptop{right:52px}.player-pop{max-width:min(280px,88vw)}}
   .player-brand-float{left:12px!important;top:12px!important;max-width:70%;font-family:var(--font-display);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#f0e8ff;background:rgba(5,6,10,.58);border-color:rgba(228,189,130,.28);text-shadow:none}
   .player-shell{background:#101116;box-shadow:0 20px 60px rgba(0,0,0,.48),0 0 0 1px rgba(255,255,255,.06)}
   .player-shell .neon-ribbon{background:conic-gradient(from 0deg,#b7a0ff,#e4bd82,#b7a0ff);opacity:.72}
@@ -193,7 +203,8 @@
     transition:border-color .2s,box-shadow .2s;
   }
   .select:focus{border-color:var(--blue);box-shadow:var(--neon-blue)}
-  .player-panel{display:none}.player-panel.active{display:block}\n  .player-brand-float{position:absolute;z-index:12;top:12px;left:12px;max-width:65%;padding:6px 11px;border-radius:9px;background:rgba(3,10,24,.55);border:1px solid rgba(96,165,250,.32);color:#60a5fa;font-weight:900;font-size:clamp(11px,2.5vw,16px);letter-spacing:.04em;text-shadow:0 0 14px rgba(59,130,246,.65);pointer-events:none;opacity:.9;transition:top .5s,left .5s,opacity .5s;backdrop-filter:blur(8px)}
+  .player-panel{display:none}.player-panel.active{display:block}
+  .player-brand-float{position:absolute;z-index:12;top:12px;left:12px;max-width:65%;padding:6px 11px;border-radius:9px;background:rgba(3,10,24,.55);border:1px solid rgba(96,165,250,.32);color:#60a5fa;font-weight:900;font-size:clamp(11px,2.5vw,16px);letter-spacing:.04em;text-shadow:0 0 14px rgba(59,130,246,.65);pointer-events:none;opacity:.9;transition:top .5s,left .5s,opacity .5s;backdrop-filter:blur(8px)}
   .player-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px}
   .pbtn{
     min-height:46px;border:1px solid var(--line);border-radius:12px;
@@ -317,6 +328,39 @@
     addLink('preload', CDN + 'element.global.js', { as: 'script' });
   }
 })();
+
+/* Keep custom player symbols and the built-in seek bar on the same idle rhythm.
+   Movi's native chrome auto-hides after ~3s; these host buttons hide at 2.6s. */
+(function syncPlayerChromeIdle() {
+  const wrapper = document.getElementById('playerWrapper');
+  const player = document.getElementById('moviPlayer');
+  if (!wrapper || !player) return;
+  let timer = 0;
+  const idleMs = 2600;
+  const menuOpen = () => !!wrapper.querySelector('.player-pop.open');
+  const reveal = () => {
+    wrapper.classList.remove('chrome-idle');
+    window.clearTimeout(timer);
+    if (menuOpen()) return;
+    timer = window.setTimeout(() => {
+      if (!menuOpen()) wrapper.classList.add('chrome-idle');
+    }, idleMs);
+  };
+  ['pointermove', 'pointerdown', 'mousemove', 'touchstart', 'keydown'].forEach(type => {
+    wrapper.addEventListener(type, reveal, { passive: type !== 'keydown' });
+  });
+  wrapper.addEventListener('focusin', reveal);
+  wrapper.addEventListener('click', reveal);
+  wrapper.querySelectorAll('.player-chrome-btn').forEach(btn => {
+    btn.addEventListener('click', reveal);
+  });
+  document.addEventListener('fullscreenchange', reveal);
+  document.addEventListener('webkitfullscreenchange', reveal);
+  const observer = new MutationObserver(reveal);
+  wrapper.querySelectorAll('.player-pop').forEach(pop => observer.observe(pop, { attributes: true, attributeFilter: ['class'] }));
+  reveal();
+})();
+
 </script>
 {% endblock %}
 
@@ -372,7 +416,8 @@
     <div class="player-shell">
       <div class="neon-ribbon" aria-hidden="true"></div>
       <div class="player-box">
-        <div class="player-wrapper" id="playerWrapper">\n          <div class="player-brand-float" id="playerBrandFloat">{{ BRANDING }}</div>
+        <div class="player-wrapper" id="playerWrapper">
+          <div class="player-brand-float" id="playerBrandFloat">{{ BRANDING }}</div>
           <movi-player id="moviPlayer"
             playsinline controls autoplay muted preload="metadata" resume
             theme="dark" themecolor="#8b5cf6"
@@ -637,7 +682,59 @@ function buildPlayerGrids() {
   addPlayer('mobile-grid', 'VLC', androidIntent((typeof EXTERNAL_STREAM_URL!=='undefined'?EXTERNAL_STREAM_URL:STREAM_URL), 'org.videolan.vlc', INTENT_MIME));
   addPlayer('mobile-grid', 'Download', DL_URL);
 }
-buildPlayerGrids();\n(function keepPlayerBrandStable(){\n const badge=document.getElementById('playerBrandFloat');\n if(!badge)return;\n badge.style.left='12px';badge.style.top='12px';\n})();
+buildPlayerGrids();
+(function keepPlayerBrandStable(){
+ const badge=document.getElementById('playerBrandFloat');
+ if(!badge)return;
+ badge.style.left='12px';badge.style.top='12px';
+})();
+
+/* Keep custom source/laptop/download controls visible in browser fullscreen.
+   When the player element itself becomes fullscreen, move the overlay controls
+   into that fullscreen element; restore them to the wrapper on exit. */
+(function keepChromeInFullscreen(){
+  const wrapper=document.getElementById('playerWrapper');
+  const player=document.getElementById('moviPlayer');
+  if(!wrapper||!player)return;
+  // Redirect fullscreen requests originating from Movi's internal video/shadow
+  // tree to the outer wrapper, so our laptop/source/download overlays stay visible.
+  const nativeRequestFullscreen=Element.prototype.requestFullscreen;
+  if(nativeRequestFullscreen && !Element.prototype.__moviWrapperFullscreenPatched){
+    const patched=function(options){
+      let node=this;
+      while(node){
+        if(node===player) return nativeRequestFullscreen.call(wrapper,options);
+        const root=node.getRootNode && node.getRootNode();
+        node=(root && root.host) ? root.host : null;
+      }
+      return nativeRequestFullscreen.call(this,options);
+    };
+    try{
+      Object.defineProperty(Element.prototype,'requestFullscreen',{value:patched,writable:true,configurable:true});
+      Object.defineProperty(Element.prototype,'__moviWrapperFullscreenPatched',{value:true,configurable:true});
+    }catch(_){/* retain native fullscreen if the browser locks the prototype */}
+  }
+  const ids=['pcSwitchBtn','pcLaptopBtn','pcDownloadBtn','switchPop','laptopPop'];
+  const homes=new Map(ids.map(id=>[document.getElementById(id),wrapper]));
+  function sync(){
+    const fs=document.fullscreenElement||document.webkitFullscreenElement;
+    const target=(fs===player)?player:wrapper;
+    ids.forEach(id=>{
+      const node=document.getElementById(id);
+      if(node && node.parentElement!==target) target.appendChild(node);
+    });
+    if(fs===player){
+      player.style.position='relative';
+      player.style.overflow='visible';
+    }else{
+      player.style.removeProperty('position');
+      player.style.removeProperty('overflow');
+    }
+  }
+  document.addEventListener('fullscreenchange',sync);
+  document.addEventListener('webkitfullscreenchange',sync);
+  sync();
+})();
 
 /* ===== Group / title context for switch, prev/next, related ===== */
 const WATCH_GROUPS = {{ (_wg if _wg is defined else [])|tojson }};
@@ -684,6 +781,9 @@ function goToGroupButton(groupIdx, buttonIdx) {
     return;
   }
   list.innerHTML = '';
+  list.style.maxHeight = 'min(52vh, 420px)';
+  list.style.overflowY = 'auto';
+  list.style.overscrollBehavior = 'contain';
   g.buttons.forEach((b, i) => {
     const a = document.createElement('button');
     a.type = 'button';
@@ -713,6 +813,9 @@ function goToGroupButton(groupIdx, buttonIdx) {
     ['VLC', androidIntent(STREAM_URL, 'org.videolan.vlc', INTENT_MIME)],
   ];
   list.innerHTML = '';
+  list.style.maxHeight = 'min(52vh, 420px)';
+  list.style.overflowY = 'auto';
+  list.style.overscrollBehavior = 'contain';
   items.forEach(([label, href]) => {
     const a = document.createElement('a');
     a.href = href;
@@ -1163,4 +1266,51 @@ initWasm();
 .player-shell{background:#080808;box-shadow:0 18px 48px rgba(0,0,0,.58),0 0 20px rgba(216,179,106,.10)}
 .player-shell .neon-ribbon{background:conic-gradient(from 0deg,#8b6b34,#e7c77f,#8b6b34,#d4ad61,#8b6b34)}
 .player-loading .spinner{border-top-color:#d8b36a}
+</style>
+
+<style>
+
+/* Movi seek-bar: neon purple -> red -> blue, with matching track/handle. */
+movi-player {
+  --movi-primary-color: #a855f7;
+  --movi-progress-color: linear-gradient(90deg, #a855f7 0%, #ef4444 52%, #3b82f6 100%);
+  --movi-buffer-color: rgba(147, 120, 255, .38);
+  --movi-divider-color: rgba(168, 85, 247, .28);
+}
+movi-player::part(progress) {
+  background: rgba(255,255,255,.22);
+  border-radius: 999px;
+}
+movi-player::part(progress-played) {
+  background: linear-gradient(90deg, #a855f7 0%, #ef4444 52%, #3b82f6 100%);
+  border-radius: 999px;
+  box-shadow: 0 0 8px rgba(168,85,247,.55), 0 0 12px rgba(59,130,246,.3);
+}
+movi-player::part(progress-buffer) { background: rgba(147,120,255,.38); }
+movi-player::part(progress-handle) {
+  background: #fff;
+  border: 2px solid #a855f7;
+  box-shadow: 0 0 0 2px rgba(239,68,68,.35), 0 0 10px rgba(59,130,246,.65);
+}
+/* Page-owned laptop/source/download buttons follow the player's 2.6s idle rule. */
+#playerWrapper.chrome-idle .player-chrome-btn {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-4px);
+}
+#playerWrapper .player-chrome-btn {
+  transition: opacity .18s ease, visibility .18s ease, transform .18s ease,
+             background .2s, border-color .2s;
+}
+#playerWrapper.chrome-idle .player-pop:not(.open) {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+#playerWrapper .player-pop { transition: opacity .18s ease, visibility .18s ease; }
+@media (prefers-reduced-motion: reduce) {
+  #playerWrapper .player-chrome-btn, #playerWrapper .player-pop { transition: none; }
+}
+
 </style>
