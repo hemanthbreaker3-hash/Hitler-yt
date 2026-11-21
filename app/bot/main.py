@@ -3420,49 +3420,109 @@ def register_handlers(bot):
             errors: list[str] = []
             idx = 0
             total = end_id - start_id + 1
-            chunk_ranges = [
-                list(range(cs, min(cs + 200, end_id + 1)))
-                for cs in range(start_id, end_id + 1, 200)
-            ]
-            sem = asyncio.Semaphore(4)
 
-            async def fetch_chunk(chunk_ids: list[int]):
-                async with sem:
-                    try:
-                        fetched = await client.get_messages(resolved_chat_id, chunk_ids)
-                        if not isinstance(fetched, list):
-                            fetched = [fetched]
-                        by_id = {getattr(item, "id", None): item for item in fetched if item is not None}
-                        return [(mid, by_id.get(mid)) for mid in chunk_ids]
-                    except Exception as batch_error:
-                        logger.warning("batch chunk %s-%s failed, falling back: %s", chunk_ids[0], chunk_ids[-1], batch_error)
-                        out = []
-                        for mid in chunk_ids:
-                            try:
-                                item = await client.get_messages(resolved_chat_id, mid)
-                                if isinstance(item, list):
-                                    item = item[0] if item else None
-                            except Exception as item_error:
-                                logger.warning("batch msg %s fetch failed: %s", mid, item_error)
-                                item = None
-                            out.append((mid, item))
-                        return out
+            # Split range automatically into 5–10 parts based on total range size
+            import math as _math
+            import time as _time
+            if total <= 50:
+                num_parts = min(5, total)
+            else:
+                num_parts = min(10, max(5, _math.ceil(total / 200)))
 
-            # Fetch chunks concurrently in waves of 4 (up to 800 messages per wave)
+            part_ranges: list[tuple[int, int, int]] = []
+            base_size, rem = divmod(total, num_parts)
+            cur = start_id
+            for p_idx in range(num_parts):
+                p_len = base_size + (1 if p_idx < rem else 0)
+                if p_len <= 0:
+                    continue
+                part_ranges.append((p_idx, cur, cur + p_len - 1))
+                cur += p_len
+
+            part_state = {
+                p_idx: {"done": 0, "total": (pe - ps + 1), "status": "queued"}
+                for p_idx, ps, pe in part_ranges
+            }
+            last_ui_at = 0.0
+
+            def _render_progress(force: bool = False) -> str | None:
+                nonlocal last_ui_at
+                now_ts = _time.monotonic()
+                if not force and (now_ts - last_ui_at) < 1.5:
+                    return None
+                last_ui_at = now_ts
+                done_sum = sum(v["done"] for v in part_state.values())
+                pct = min(100, int((done_sum / max(1, total)) * 100))
+                filled = int(round((pct / 100) * 16))
+                bar = "█" * filled + "░" * (16 - filled)
+                done_parts = sum(1 for v in part_state.values() if v["status"] == "done")
+                active_parts = sum(1 for v in part_state.values() if v["status"] == "running")
+                part_badges = []
+                for p_i in sorted(part_state):
+                    st = part_state[p_i]
+                    if st["status"] == "done":
+                        part_badges.append(f"P{p_i + 1} ✅")
+                    elif st["status"] == "running":
+                        ppct = int((st["done"] / max(1, st["total"])) * 100)
+                        part_badges.append(f"P{p_i + 1} ⚡{ppct}%")
+                    else:
+                        part_badges.append(f"P{p_i + 1} ⏳")
+                return (
+                    f"⚡ <b>Batch Processing ({len(part_ranges)} parts · 5 parallel)</b>\n"
+                    f"<code>[{bar}]</code> <b>{pct}%</b> ({done_sum}/{total})\n"
+                    f"Done: {done_parts}/{len(part_ranges)} · Active: {active_parts}\n"
+                    + " · ".join(part_badges)
+                )
+
+            async def _push_progress(force: bool = False):
+                txt = _render_progress(force=force)
+                if not txt:
+                    return
+                try:
+                    await status.edit_text(txt, parse_mode=ParseMode.HTML)
+                except Exception:
+                    pass
+
+            part_sem = asyncio.Semaphore(5)
+
+            async def run_part(p_idx: int, p_start: int, p_end: int):
+                async with part_sem:
+                    part_state[p_idx]["status"] = "running"
+                    await _push_progress()
+                    out = []
+                    for cs in range(p_start, p_end + 1, 200):
+                        chunk_ids = list(range(cs, min(cs + 200, p_end + 1)))
+                        try:
+                            fetched = await client.get_messages(resolved_chat_id, chunk_ids)
+                            if not isinstance(fetched, list):
+                                fetched = [fetched]
+                            by_id = {getattr(item, "id", None): item for item in fetched if item is not None}
+                            for mid in chunk_ids:
+                                out.append((mid, by_id.get(mid)))
+                        except Exception as batch_error:
+                            logger.warning("batch part %s chunk %s-%s failed, falling back: %s", p_idx + 1, chunk_ids[0], chunk_ids[-1], batch_error)
+                            for mid in chunk_ids:
+                                try:
+                                    item = await client.get_messages(resolved_chat_id, mid)
+                                    if isinstance(item, list):
+                                        item = item[0] if item else None
+                                except Exception as item_error:
+                                    logger.warning("batch msg %s fetch failed: %s", mid, item_error)
+                                    item = None
+                                out.append((mid, item))
+                        part_state[p_idx]["done"] += len(chunk_ids)
+                        await _push_progress()
+                    part_state[p_idx]["status"] = "done"
+                    await _push_progress()
+                    return out
+
+            await _push_progress(force=True)
+            part_outputs = await asyncio.gather(*(run_part(pi, ps, pe) for pi, ps, pe in part_ranges))
+            await _push_progress(force=True)
+
             all_items = []
-            for wave_start in range(0, len(chunk_ranges), 4):
-                wave = chunk_ranges[wave_start : wave_start + 4]
-                wave_results = await asyncio.gather(*(fetch_chunk(c) for c in wave))
-                for chunk_pairs in wave_results:
-                    all_items.extend(chunk_pairs)
-                if len(chunk_ranges) > 4:
-                    try:
-                        await status.edit_text(
-                            f"⚡ Fast batch fetching… {min(len(all_items), total)}/{total}",
-                            parse_mode=ParseMode.HTML,
-                        )
-                    except Exception:
-                        pass
+            for part_pairs in part_outputs:
+                all_items.extend(part_pairs)
 
             # Extract media metadata in memory first
             prepared = []
