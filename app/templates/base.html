@@ -71,7 +71,7 @@
     }
     .topbar-logo{display:inline-flex;align-items:center;gap:12px;transition:transform .2s ease}
     .topbar-logo:hover{transform:translateY(-1px)}
-    .topbar-logo img{display:block;width:46px;height:46px;object-fit:contain;border-radius:10px;flex:0 0 auto}.topbar-logo img[src=""]{display:none}
+    .topbar-logo img{display:none!important}.topbar-logo img[src=""]{display:none}
     .brand-lockup{display:flex;align-items:center;gap:10px}
     .brand-mark{position:relative;width:34px;height:44px;display:grid;place-items:center}
     .brand-mark span{
@@ -355,7 +355,7 @@
   <header class="topbar">
     <div class="topbar-inner">
       <a class="topbar-logo" href="/" title="{{ BRANDING }} Home">
-        {% if LOGO_URL %}<img src="{{ LOGO_URL }}" alt="{{ BRANDING }} logo" width="42" height="42" loading="eager">{% else %}<img src="/static/images/cinema-mark.png" alt="{{ BRANDING }} logo" width="42" height="42">{% endif %}
+        {% if LOGO_URL %}{% else %}<img src="/static/images/cinema-mark.png" alt="{{ BRANDING }} logo" width="42" height="42">{% endif %}
         <span class="brand-lockup"><span class="brand-word">{{ BRANDING }}</span></span>
       </a>
       <nav class="topbar-links" aria-label="Primary">

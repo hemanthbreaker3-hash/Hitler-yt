@@ -121,17 +121,11 @@
     img.alt = (p.title || 'Poster') + ' poster';
     img.loading = 'lazy';
     img.decoding = 'async';
-    // Bottom-left style badges matching reference UI (quality + genre)
+    // Clean cards: no quality/1080P badge (user request)
     const badges = document.createElement('div');
     badges.className = 'badge-row home-badges';
-    const quality = (p.quality || p.resolution || '1080P').toString().toUpperCase();
-    const qBadge = document.createElement('span');
-    qBadge.className = 'badge badge-quality';
-    qBadge.textContent = quality;
-    badges.appendChild(qBadge);
     let genreLabel = '';
     if (Array.isArray(p.genres) && p.genres.length) genreLabel = String(p.genres[0]).toUpperCase();
-    else if (p.media_type) genreLabel = String(p.media_type).toUpperCase();
     if (genreLabel) {
       const g = document.createElement('span');
       g.className = 'badge badge-genre';

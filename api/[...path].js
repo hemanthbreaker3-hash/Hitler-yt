@@ -415,7 +415,7 @@ async function ensureDefaultCategories(db) {
     if (count === 0) {
       const now = new Date();
       await col.updateOne({ slug: 'movies' }, { $setOnInsert: { name: 'Movies', slug: 'movies', created_at: now } }, { upsert: true });
-      await col.updateOne({ slug: 'web-series' }, { $setOnInsert: { name: 'Web Series', slug: 'web-series', created_at: now } }, { upsert: true });
+      await col.updateOne({ slug: 'series' }, { $setOnInsert: { name: 'Series', slug: 'series', created_at: now } }, { upsert: true });
     }
   } catch {}
 }
@@ -694,7 +694,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     /* HITLER YT anime-cinema theme */
     body{background:radial-gradient(ellipse 75% 38% at 5% -8%,rgba(139,92,246,.16),transparent 62%),radial-gradient(ellipse 65% 42% at 100% 5%,rgba(111,48,151,.13),transparent 60%),linear-gradient(180deg,#09090d,#0b0a10 52%,#09090d)}
     .topbar{border-bottom-color:rgba(139,92,246,.18)}
-    .topbar-logo img{display:block;object-fit:contain;background:#0a0a0c}
+    .topbar-logo img{display:none!important}
     .brand-word{font-family:var(--font-display);font-weight:900;letter-spacing:-.055em;background:linear-gradient(100deg,#fff 8%,#c4b5fd 43%,#8b5cf6 83%,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
     .brand-mark span{background:linear-gradient(180deg,#22d3ee,#7c3aed);-webkit-background-clip:text;background-clip:text}
     .brand-mark::before{border-left-color:#8b5cf6;border-right-color:rgba(255,155,66,.75)}
@@ -710,6 +710,22 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     .chip:hover,.chip.active{color:#ffad70;border-color:rgba(139,92,246,.55);background:rgba(139,92,246,.16)}
     .footer{border-top-color:rgba(139,92,246,.16)}
     @media(max-width:640px){.page-hero{padding:22px 18px;min-height:135px}.brand-mark{display:grid;width:25px}}
+
+    /* Homepage reference: search top, 3-col pills, landscape cards, gold active */
+    .search-bar{border-radius:24px!important;min-height:68px!important;padding:8px 12px 8px 22px!important;margin:16px 0 18px!important;border-color:rgba(216,179,106,.22)!important;background:linear-gradient(145deg,#171717,#101010)!important;box-shadow:0 14px 34px rgba(0,0,0,.32)!important}
+    .search-bar i{color:#d8b36a!important;font-size:22px!important}
+    .search-bar input{font-size:17px!important;padding:13px 0!important}
+    .search-bar button{display:none!important}
+    .cat-nav{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px!important;margin:0 0 24px!important;max-width:720px}
+    .cat-nav .chip{border-radius:999px!important;min-height:52px!important;display:flex;align-items:center;justify-content:center;text-align:center;padding:10px 12px!important;background:#101010!important;border:1px solid rgba(255,255,255,.12)!important;color:#ddd!important;font-weight:700!important}
+    .cat-nav .chip.active{background:linear-gradient(130deg,#d8b36a,#f0d9a2)!important;color:#18120a!important;border-color:transparent!important;box-shadow:0 8px 22px rgba(216,179,106,.22)!important}
+    .poster-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:14px!important}
+    .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important}
+    .home-badges{top:auto!important;bottom:10px!important;left:10px!important;right:auto!important;justify-content:flex-start!important;gap:6px!important}
+    .badge-quality{background:rgba(0,0,0,.75)!important;color:#fff!important;border:1px solid rgba(255,255,255,.2)!important;border-radius:6px!important;font-size:11px!important;font-weight:800!important;padding:4px 8px!important}
+    .badge-genre{background:linear-gradient(130deg,#d8b36a,#f0d9a2)!important;color:#18120a!important;border:0!important;border-radius:6px!important;font-size:11px!important;font-weight:800!important;padding:4px 8px!important}
+    @media(max-width:440px){.cat-nav{gap:8px!important}.cat-nav .chip{min-height:46px;padding:8px;font-size:13px}.poster-grid{gap:10px!important}}
+
   </style>
   ${headExtra}
 </head>
@@ -717,7 +733,6 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
 <header class="topbar">
   <div class="topbar-inner">
     <a class="topbar-logo" href="/" title="HITLER YT Home">
-      <img src="/static/images/logo.jpg" alt="HITLER YT" width="42" height="42" loading="eager" onerror="this.style.display='none'">
       <span class="brand-lockup">
         <span class="brand-mark" aria-hidden="true"><span>HYT</span></span>
         <span class="brand-word">HITLER YT</span>
@@ -727,7 +742,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
       <a href="/">Home</a>
       <a href="/search">Search</a>
       <a href="/?category=movies">Movies</a>
-      <a href="/?category=web-series">Series</a>
+      <a href="/?category=series">Series</a>
     </nav>
   </div>
 </header>
@@ -808,7 +823,7 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
   if (Array.isArray(window.__INITIAL_CATEGORIES__) && window.__INITIAL_CATEGORIES__.length) {
     renderCategories(window.__INITIAL_CATEGORIES__);
   } else {
-    renderCategories([{ name: 'Movies', slug: 'movies' }, { name: 'Web Series', slug: 'web-series' }]);
+    renderCategories([{ name: 'Movies', slug: 'movies' }, { name: 'Series', slug: 'series' }]);
   }
 
   try {
@@ -878,18 +893,19 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
       const img = document.createElement('img');
       img.loading = 'lazy';
       img.decoding = 'async';
-      img.src = p.poster_path?.startsWith('http') ? p.poster_path : (p.poster_path ? 'https://image.tmdb.org/t/p/w780' + p.poster_path : '/static/images/poster.jpg');
+      // Landscape on home (backdrop preferred); portrait on title page
+      const homeSrc = (p.backdrop_path)
+        ? (p.backdrop_path.startsWith('http') ? p.backdrop_path : 'https://image.tmdb.org/t/p/w780' + p.backdrop_path)
+        : (p.poster_path?.startsWith('http') ? p.poster_path : (p.poster_path ? 'https://image.tmdb.org/t/p/w780' + p.poster_path : '/static/images/poster.jpg'));
+      img.src = homeSrc;
       img.alt = p.title || 'Poster';
       const badges = document.createElement('div');
-      badges.className = 'badge-row';
-      const rating = p.rating != null && p.rating !== '' ? Number(p.rating) : null;
-      if (rating != null && !Number.isNaN(rating) && rating > 0) {
-        const b = document.createElement('span'); b.className = 'badge badge-rating';
-        b.textContent = '★ ' + (rating % 1 ? rating.toFixed(1) : rating); badges.appendChild(b);
-      }
-      const year = (p.release_date || '').toString().slice(0, 4);
-      if (year) {
-        const y = document.createElement('span'); y.className = 'badge badge-year'; y.textContent = year; badges.appendChild(y);
+      badges.className = 'badge-row home-badges';
+      let genreLabel = '';
+      if (Array.isArray(p.genres) && p.genres.length) genreLabel = String(p.genres[0]).toUpperCase();
+      if (genreLabel) {
+        const g = document.createElement('span'); g.className = 'badge badge-genre'; g.textContent = genreLabel;
+        badges.appendChild(g);
       }
       const play = document.createElement('div'); play.className = 'play-hint'; play.innerHTML = '<span>▶</span>';
       const info = document.createElement('div');
@@ -899,7 +915,8 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
       t.textContent = p.title || 'Untitled';
       const m = document.createElement('div');
       m.className = 'meta';
-      m.textContent = qualityLine(p);
+      const year = (p.release_date || p.first_air_date || '').toString().slice(0, 4);
+      m.textContent = year || (p.media_type ? String(p.media_type).toUpperCase() : '');
       info.append(t, m);
       a.append(img, badges, play, info);
       el.append(a);
@@ -1143,6 +1160,10 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
     .link-box.telegram{border-color:rgba(61,214,198,.22);background:linear-gradient(155deg,#0c1924,#0a121c)}
     .link-box .box-hint{color:var(--muted);font-size:12px;margin:-4px 0 12px;line-height:1.4}
     .group-block{background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:10px}
+    .season-selector{display:flex;flex-wrap:wrap;gap:9px;margin:0 0 14px;padding:10px;border:1px solid rgba(255,255,255,.1);border-radius:16px;background:rgba(8,9,13,.75)}
+    .season-selector button{border:1px solid rgba(255,255,255,.1);background:#171820;color:#c8c6d1;border-radius:999px;padding:9px 15px;font-weight:750;cursor:pointer}
+    .season-selector button.active{background:linear-gradient(120deg,#e8d9ff,#d8b77e);color:#17151b;border:0}
+
     .group-block h3{font-size:14px;margin:0 0 10px;color:var(--text);font-weight:700}
     .tools a[href*="t.me/"]{background:linear-gradient(135deg,#0ea5e9,#2563eb)!important;color:#fff;border:0}
     .groups-pager{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
@@ -1183,7 +1204,7 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
                   `<a class="btn-yellow cf-media-btn${boxKey === 'watch' ? ' watch-btn' : ''}" href="${escapeHtml(btn.url || '#')}" data-raw-url="${escapeHtml(btn.url || '#')}" data-group-index="${idx}" data-button-index="${bi}" rel="noopener"${boxKey === 'watch' ? '' : ' target="_blank"'}>${escapeHtml(btn.name || 'Link')}</a>`,
               )
               .join('');
-            return `<div class="group-block" data-group-index="${idx}">
+            return `<div class="group-block" data-group-index="${idx}" data-group-name="${escapeHtml(group.name || '')}">
                 <h3>${escapeHtml(group.name || '')}</h3>
                 <div class="tools">${btnsHtml}</div>
               </div>`;
@@ -1206,6 +1227,7 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
 
       return `<section class="link-box ${boxKey}" aria-label="${escapeHtml(boxTitle)} links" data-box="${boxKey}">
         <h2><span aria-hidden="true">${boxIcon}</span>${escapeHtml(boxTitle)}</h2>
+        ${boxKey === 'watch' ? '<div class="season-selector" id="seasonSelector" hidden aria-label="Available seasons"></div>' : ''}
         <div class="groups-list" data-box="${boxKey}">${groupsContent}</div>
         ${pagerHtml}
       </section>`;
@@ -1353,13 +1375,102 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
     if (manual) manual.setAttribute('href', dest);
     const params = new URLSearchParams(window.location.search);
     const skip = params.get('stay') === '1' || params.get('noredir') === '1';
-    if (!skip && dest) {
-      setTimeout(function(){ window.location.replace(dest); }, 350);
+    // Light-speed: only auto-open when a single watch group exists; multi-group stays interactive
+    const watchGroupCount = document.querySelectorAll('.groups-list[data-box="watch"] .group-block').length;
+    if (!skip && dest && watchGroupCount <= 1) {
+      window.location.replace(dest); // instant — no delay
     } else {
       const banner = document.getElementById('autoOpenBanner');
       if (banner) banner.style.display = 'none';
     }
   }
+  
+  // Seasons from group names (S01E01 etc). Only real seasons. EXTRA for non-S/E groups.
+  (function setupSeasonNavigation(){
+    var list=document.querySelector('.groups-list[data-box="watch"]');
+    var selector=document.getElementById('seasonSelector');
+    if(!list||!selector) return;
+    var blocks=Array.prototype.slice.call(list.querySelectorAll('.group-block'));
+    if(blocks.length<=1) return;
+    var parsed=[], nonEpisode=[];
+    function parseEpisode(name){
+      name=String(name||'').trim();
+      var patterns=[
+        /\bS0*(\d{1,3})\s*[-_. ]*E0*(\d{1,4})\b/i,
+        /\bSeason\s*0*(\d{1,3})\s*(?:[-_. ]*)?(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
+        /\b0*(\d{1,3})\s*[xX]\s*0*(\d{1,4})\b/i,
+        /\bS0*(\d{1,3})[ ._-]+(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
+        /\bSeason\s*0*(\d{1,3})\b.*?\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i,
+        /\b(?:S|Season)\s*0*(\d{1,3})\b.*?\b(?:E|Episode|Ep)\s*0*(\d{1,4})\b/i
+      ];
+      for(var i=0;i<patterns.length;i++){var m=name.match(patterns[i]);if(m)return {season:Number(m[1]),episode:Number(m[2])};}
+      return null;
+    }
+    blocks.forEach(function(block){
+      var name=block.getAttribute('data-group-name')||(block.querySelector('h3')&&block.querySelector('h3').textContent)||'';
+      var ep=parseEpisode(name);
+      if(ep && Number.isFinite(ep.season) && Number.isFinite(ep.episode)){
+        block.dataset.season=String(ep.season);block.dataset.episode=String(ep.episode);
+        parsed.push({block:block,season:ep.season,episode:ep.episode,name:name});
+      } else nonEpisode.push(block);
+    });
+    var watchPager=document.querySelector('.groups-pager[data-box="watch"]');
+    if(parsed.length){
+      parsed.sort(function(a,b){return a.season-b.season||a.episode-b.episode;});
+      var merged=[];
+      parsed.forEach(function(item){
+        var key=item.season+'-'+item.episode,existing=merged.find(function(x){return x.key===key;});
+        if(!existing){merged.push({key:key,season:item.season,episode:item.episode,block:item.block});return;}
+        var target=existing.block.querySelector('.tools'),source=item.block.querySelector('.tools');
+        if(target&&source){ Array.prototype.slice.call(source.querySelectorAll('a')).forEach(function(a){ target.appendChild(a.cloneNode(true)); }); }
+        item.block.style.display='none';
+      });
+      selector.hidden=false;
+      if(watchPager) watchPager.style.display='none';
+      var seasons=Array.from(new Set(merged.map(function(x){return x.season;}))).sort(function(a,b){return a-b;});
+      var selected=seasons[0];
+      seasons.forEach(function(season){
+        var count=merged.filter(function(x){return x.season===season;}).length;
+        var b=document.createElement('button'); b.type='button'; b.dataset.season=String(season);
+        b.textContent='Season '+season+' ('+count+' episodes)';
+        b.addEventListener('click',function(){selected=season;render();});
+        selector.appendChild(b);
+      });
+      function render(){
+        selector.querySelectorAll('button').forEach(function(b){b.classList.toggle('active',Number(b.dataset.season)===selected);});
+        nonEpisode.forEach(function(b){b.style.display='none';});
+        merged.forEach(function(x){x.block.style.display=x.season===selected?'':'none'; list.appendChild(x.block);});
+      }
+      render();
+      // EXTRA section for non-episode groups
+      if(nonEpisode.length){
+        var extra=document.createElement('div'); extra.className='extra-groups'; extra.style.marginTop='16px';
+        var h=document.createElement('h3'); h.textContent='EXTRA / Other groups'; h.style.fontSize='14px'; h.style.marginBottom='8px';
+        extra.appendChild(h);
+        nonEpisode.forEach(function(b){ b.style.display=''; extra.appendChild(b); });
+        list.parentNode.appendChild(extra);
+      }
+      return;
+    }
+    // No S/E labels: group picker
+    if(nonEpisode.length>1){
+      selector.hidden=false; selector.setAttribute('aria-label','Available groups');
+      if(watchPager) watchPager.style.display='none';
+      var selected=0;
+      nonEpisode.forEach(function(block,i){
+        var b=document.createElement('button'); b.type='button'; b.dataset.group=String(i);
+        b.textContent=((block.querySelector('h3')&&block.querySelector('h3').textContent)||('Group '+(i+1))).trim();
+        b.addEventListener('click',function(){selected=i;render();});
+        selector.appendChild(b);
+      });
+      function render(){
+        selector.querySelectorAll('button').forEach(function(b){b.classList.toggle('active',Number(b.dataset.group)===selected);});
+        nonEpisode.forEach(function(b,i){b.style.display=i===selected?'':'none';});
+      }
+      render();
+    }
+  })();
+
   var PER=5;
   function setupBox(boxKey){
     var list=document.querySelector('.groups-list[data-box="'+boxKey+'"]');
@@ -2605,81 +2716,164 @@ document.addEventListener('click', () => {
   }
 })();
 
+
 (function setupRelated() {
   const list = document.getElementById('sideEpList');
   const seasonSelect = document.getElementById('seasonFilter');
   const search = document.getElementById('episodeSearch');
   const count = document.getElementById('episodeCount');
   const seasonBar = document.getElementById('sideSeasonBar');
-  if (!list || WATCH_GROUPS.length <= 1) {
-    const card = document.getElementById('sideEpsCard');
+  const card = document.getElementById('sideEpsCard');
+  if (!list || !Array.isArray(WATCH_GROUPS) || WATCH_GROUPS.length <= 1) {
     if (card) card.style.display = 'none';
     return;
   }
-  const seasonOf = name => {
-    const text = String(name || '');
-    const m = text.match(/(?:season\s*|s\s*)(\d{1,2})\b/i) || text.match(/\bS(\d{1,2})E\d{1,3}\b/i);
-    return m ? 'Season ' + Number(m[1]) : 'Season 1';
-  };
-  const seasons = [...new Set(WATCH_GROUPS.map(g => seasonOf(g.name)))].sort((a, b) => Number(a.replace(/\D/g, '')) - Number(b.replace(/\D/g, '')));
-  seasons.forEach(season => {
-    if (!seasonSelect) return;
-    const o = document.createElement('option');
-    o.value = season; o.textContent = season; seasonSelect.appendChild(o);
+  if (card) card.style.display = '';
+
+  function parseEpisode(name) {
+    const text = String(name || '').replace(/[._]+/g, ' ').trim();
+    const patterns = [
+      /\bS(?:eason\s*)?0*(\d{1,3})\s*[-_. ]*E(?:p(?:isode)?\s*)?0*(\d{1,4})\b/i,
+      /\bSeason\s*0*(\d{1,3})\s*[-_. ]*(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
+      /\b0*(\d{1,3})\s*[xX]\s*0*(\d{1,4})\b/i,
+      /\bS0*(\d{1,3})[ ._-]+(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
+      /\bSeason\s*0*(\d{1,3})\b.*?\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i,
+      /\b(?:S|Season)\s*0*(\d{1,3})\b.*?\b(?:E|Episode|Ep)\s*0*(\d{1,4})\b/i,
+    ];
+    for (let i = 0; i < patterns.length; i++) {
+      const m = text.match(patterns[i]);
+      if (m) return { season: Number(m[1]), episode: Number(m[2]) };
+    }
+    const seasonOnly = text.match(/\bSeason\s*0*(\d{1,3})\b|\bS0*(\d{1,3})(?!\s*[-_. ]*E)/i);
+    if (seasonOnly) return null;
+    const epOnly = text.match(/\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i);
+    if (epOnly) return { season: 1, episode: Number(epOnly[1]) };
+    return null;
+  }
+
+  const parsedRows = [];
+  const extraRows = [];
+  WATCH_GROUPS.forEach((g, idx) => {
+    const parsed = parseEpisode(g && g.name);
+    if (parsed && Number.isFinite(parsed.season) && parsed.season > 0 &&
+        Number.isFinite(parsed.episode) && parsed.episode > 0) {
+      parsedRows.push({ g, idx, parsed });
+    } else {
+      extraRows.push({ g, idx, parsed: null });
+    }
   });
+
+  parsedRows.sort((a, b) => a.parsed.season - b.parsed.season || a.parsed.episode - b.parsed.episode || a.idx - b.idx);
+  const seasons = [...new Set(parsedRows.map(r => r.parsed.season))].sort((a, b) => a - b);
+  const useSeasons = seasons.length > 0;
+  const currentParsed = parsedRows.find(r => r.idx === Number(GROUP_INDEX));
+  let selected = useSeasons
+    ? (currentParsed ? String(currentParsed.parsed.season) : String(seasons[0]))
+    : 'extra';
+
+  if (seasonSelect) {
+    seasonSelect.innerHTML = '';
+    if (useSeasons) {
+      const allOpt = document.createElement('option');
+      allOpt.value = 'all'; allOpt.textContent = 'All Seasons';
+      seasonSelect.appendChild(allOpt);
+      seasons.forEach(s => {
+        const o = document.createElement('option');
+        o.value = String(s);
+        const n = parsedRows.filter(r => r.parsed.season === s).length;
+        o.textContent = 'Season ' + s + ' (' + n + ' eps)';
+        seasonSelect.appendChild(o);
+      });
+    }
+    if (extraRows.length) {
+      const o = document.createElement('option');
+      o.value = 'extra';
+      o.textContent = useSeasons ? ('EXTRA (' + extraRows.length + ' groups)') : 'All Groups';
+      seasonSelect.appendChild(o);
+    }
+    if (!useSeasons && !extraRows.length) {
+      if (card) card.style.display = 'none';
+      return;
+    }
+  }
+
   function setActiveSeasonUI(value) {
+    selected = value;
     if (seasonBar) {
       seasonBar.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.season === value));
     }
     if (seasonSelect) seasonSelect.value = value;
   }
+
   if (seasonBar) {
-    const add = (label, value) => {
+    seasonBar.innerHTML = '';
+    const addBtn = (label, value) => {
       const b = document.createElement('button');
-      b.type = 'button'; b.textContent = label; b.dataset.season = value;
-      b.className = value === 'all' ? 'active' : '';
+      b.type = 'button';
+      b.textContent = label;
+      b.dataset.season = value;
       b.onclick = () => { setActiveSeasonUI(value); render(); };
       seasonBar.appendChild(b);
     };
-    add('All', 'all');
-    seasons.forEach(s => add(s.replace(/^Season\s+/i, 'S'), s));
+    if (useSeasons) {
+      seasons.forEach(s => {
+        const n = parsedRows.filter(r => r.parsed.season === s).length;
+        addBtn('S' + s + ' (' + n + ')', String(s));
+      });
+    }
+    if (extraRows.length) {
+      addBtn(useSeasons ? ('EXTRA (' + extraRows.length + ')') : ('Groups (' + extraRows.length + ')'), 'extra');
+    }
   }
-  function filtered() {
-    const term = (search && search.value || '').trim().toLowerCase();
-    const season = (seasonSelect && seasonSelect.value) || 'all';
-    return WATCH_GROUPS.map((g, idx) => ({ g, idx })).filter(({ g }) => {
-      const name = String(g.name || '');
-      return (season === 'all' || seasonOf(name) === season) && (!term || name.toLowerCase().includes(term));
-    });
-  }
+
+  if (useSeasons && currentParsed) setActiveSeasonUI(String(currentParsed.parsed.season));
+  else if (useSeasons) setActiveSeasonUI(String(seasons[0]));
+  else setActiveSeasonUI('extra');
+
   function render() {
-    const rows = filtered();
+    const term = (search && search.value || '').trim().toLowerCase();
+    let rows = [];
+    if (selected === 'extra') rows = extraRows;
+    else if (selected === 'all') rows = parsedRows.concat(extraRows);
+    else rows = parsedRows.filter(r => String(r.parsed.season) === String(selected));
+    if (term) rows = rows.filter(r => String(r.g.name || '').toLowerCase().includes(term));
     list.innerHTML = '';
-    rows.forEach(({ g, idx }) => {
-      const first = (g.buttons || [])[0];
-      if (!first) return;
-      const href = (typeof watchHrefFor === 'function' ? watchHrefFor(idx, 0) : null) || first.url;
-      const a = document.createElement('a');
-      a.className = 'side-ep-btn' + (idx === GROUP_INDEX ? ' active' : '');
-      a.href = href;
+    rows.forEach(({ g, idx, parsed }) => {
+      const buttons = g.buttons || [];
+      const first = buttons[0];
+      if (!first || !first.url) return;
+      let preferred = Math.min(Number(typeof BUTTON_INDEX !== 'undefined' ? BUTTON_INDEX : 0) || 0, buttons.length - 1);
+      const chosen = buttons[preferred] || first;
+      const href = (typeof watchHrefFor === 'function' ? watchHrefFor(idx, preferred) : null) || chosen.url;
+      const link = document.createElement('a');
+      link.className = 'side-ep-btn' + (idx === Number(GROUP_INDEX) ? ' active' : '');
+      link.href = href;
       const tag = document.createElement('span');
       tag.className = 'ep-tag';
-      tag.textContent = 'EP ' + (idx + 1);
+      tag.textContent = parsed
+        ? ('S' + String(parsed.season).padStart(2, '0') + ' · EP ' + String(parsed.episode).padStart(2, '0'))
+        : 'GROUP';
+      link.appendChild(tag);
       const name = document.createElement('span');
       name.className = 'ep-name';
-      name.textContent = g.name || ('Episode ' + (idx + 1));
-      a.append(tag, name);
-      list.appendChild(a);
+      name.textContent = g.name || (parsed ? ('Episode ' + parsed.episode) : ('Group ' + (idx + 1)));
+      link.appendChild(name);
+      list.appendChild(link);
     });
-    if (count) count.textContent = rows.length + ' episode' + (rows.length === 1 ? '' : 's');
+    if (count) {
+      const label = selected === 'extra' ? 'group' : 'episode';
+      count.textContent = rows.length + ' ' + label + (rows.length === 1 ? '' : 's');
+    }
   }
+
   search && search.addEventListener('input', render);
   seasonSelect && seasonSelect.addEventListener('change', () => {
-    setActiveSeasonUI(seasonSelect.value);
+    setActiveSeasonUI(seasonSelect.value || (useSeasons ? String(seasons[0]) : 'extra'));
     render();
   });
   render();
 })();
+
 
 async function copyStream() {
   try {
@@ -3019,7 +3213,7 @@ export default async function handler(req, res) {
         sendJson(res, 200, {
           items: [
             { name: 'Movies', slug: 'movies' },
-            { name: 'Web Series', slug: 'web-series' },
+            { name: 'Series', slug: 'series' },
           ],
         });
         return;
@@ -3192,7 +3386,7 @@ export default async function handler(req, res) {
         ? rawItems.map((c) => ({ name: c.name, slug: c.slug }))
         : [
             { name: 'Movies', slug: 'movies' },
-            { name: 'Web Series', slug: 'web-series' },
+            { name: 'Series', slug: 'series' },
           ];
       sendJson(res, 200, { items });
       return;
@@ -3457,7 +3651,7 @@ export default async function handler(req, res) {
         ? rawCats.map((c) => ({ name: c.name, slug: c.slug }))
         : [
             { name: 'Movies', slug: 'movies' },
-            { name: 'Web Series', slug: 'web-series' },
+            { name: 'Series', slug: 'series' },
           ];
       sendHtml(res, 200, renderIndexHtml(initialItems, initialCategories, searchParams.get('q') || ''));
       return;

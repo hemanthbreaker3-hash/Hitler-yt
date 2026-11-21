@@ -1488,6 +1488,11 @@ def register_handlers(bot):
         # only the first ever fires — see _maybe_handle_bot_token_input's docstring.
         if raw_override is None and await _maybe_handle_bot_token_input(client, message, user):
             return
+        # FSpanel admin text inputs (add/remove fsub, admins, autodel) — must run here
+        # because a separate handler on the same filter is swallowed by this one.
+        if raw_override is None and user.id in _awaiting_fspanel and _is_admin_user(user.id):
+            await _handle_fspanel_text_input(client, message, user)
+            return
         raw = (raw_override if raw_override is not None else (message.text or "")).strip()
         pending = _awaiting_shortener.get(user.id) if raw_override is None else None
         if pending and _is_admin_user(user.id):
@@ -2493,7 +2498,12 @@ def register_handlers(bot):
         ])
     )
     async def fspanel_text_input(client, message: Message):
-        user = message.from_user
+        """Decorator entry — delegates to helper so main text handler can also call it."""
+        return await _handle_fspanel_text_input(client, message)
+
+    async def _handle_fspanel_text_input(client, message: Message, user=None):
+        """Process pending /fspanel text input (add/remove fsub, admins, autodel)."""
+        user = user or message.from_user
         if not user or user.id not in _awaiting_fspanel:
             return
         if not _is_admin_user(user.id):

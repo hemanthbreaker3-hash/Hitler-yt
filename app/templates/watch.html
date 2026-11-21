@@ -952,7 +952,8 @@ document.addEventListener('click', () => {
   }, { once: true });
 })();
 
-/* Episode / Seasons: only render seasons actually present; each season is strictly isolated. */
+
+/* Episode / Seasons on /watch/: only real SxxExx seasons; EXTRA for non-S/E groups; 1 group = hide */
 (function setupRelated() {
   const list = document.getElementById('sideEpList');
   const seasonSelect = document.getElementById('seasonFilter');
@@ -964,116 +965,180 @@ document.addEventListener('click', () => {
     if (card) card.style.display = 'none';
     return;
   }
+  if (card) card.style.display = '';
 
   function parseEpisode(name) {
     const text = String(name || '').replace(/[._]+/g, ' ').trim();
-    let m = text.match(/\bS(?:eason\s*)?0*(\d{1,3})\s*[-_. ]*E(?:pisode\s*)?0*(\d{1,4})\b/i)
-      || text.match(/\bSeason\s*0*(\d{1,3})\s*[-_. ]*(?:Episode|Ep)\s*0*(\d{1,4})\b/i)
-      || text.match(/\b0*(\d{1,3})\s*[xX]\s*0*(\d{1,4})\b/i);
-    if (m) return { season: Number(m[1]), episode: Number(m[2]) };
-
-    // A season marker without an episode must never be treated as Season 1.
-    const seasonMarker = text.match(/\bSeason\s*0*(\d{1,3})\b|\bS0*(\d{1,3})(?!\s*[-_. ]*E)/i);
-    if (seasonMarker) return null;
-
-    // Bare EP/E numbers are Season 1 only when no other season marker exists.
-    m = text.match(/\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i);
-    if (m) return { season: 1, episode: Number(m[1]) };
+    const patterns = [
+      /\bS(?:eason\s*)?0*(\d{1,3})\s*[-_. ]*E(?:p(?:isode)?\s*)?0*(\d{1,4})\b/i,
+      /\bSeason\s*0*(\d{1,3})\s*[-_. ]*(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
+      /\b0*(\d{1,3})\s*[xX]\s*0*(\d{1,4})\b/i,
+      /\bS0*(\d{1,3})[ ._-]+(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
+      /\bSeason\s*0*(\d{1,3})\b.*?\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i,
+      /\b(?:S|Season)\s*0*(\d{1,3})\b.*?\b(?:E|Episode|Ep)\s*0*(\d{1,4})\b/i,
+    ];
+    for (let i = 0; i < patterns.length; i++) {
+      const m = text.match(patterns[i]);
+      if (m) return { season: Number(m[1]), episode: Number(m[2]) };
+    }
+    // Bare EP only counts as Season 1 when no season marker is present
+    const seasonOnly = text.match(/\bSeason\s*0*(\d{1,3})\b|\bS0*(\d{1,3})(?!\s*[-_. ]*E)/i);
+    if (seasonOnly) return null;
+    const epOnly = text.match(/\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i);
+    if (epOnly) return { season: 1, episode: Number(epOnly[1]) };
     return null;
   }
 
-  const rows = WATCH_GROUPS.map((g, idx) => ({
-    g, idx, parsed: parseEpisode(g && g.name)
-  })).filter(row => row.parsed &&
-      Number.isInteger(row.parsed.season) && row.parsed.season > 0 &&
-      Number.isInteger(row.parsed.episode) && row.parsed.episode > 0);
+  const parsedRows = [];
+  const extraRows = [];
+  WATCH_GROUPS.forEach((g, idx) => {
+    const parsed = parseEpisode(g && g.name);
+    if (parsed && Number.isFinite(parsed.season) && parsed.season > 0 &&
+        Number.isFinite(parsed.episode) && parsed.episode > 0) {
+      parsedRows.push({ g, idx, parsed });
+    } else {
+      extraRows.push({ g, idx, parsed: null });
+    }
+  });
 
-  rows.sort((a,b) => a.parsed.season-b.parsed.season ||
-    a.parsed.episode-b.parsed.episode || a.idx-b.idx);
-  const seasons = [...new Set(rows.map(row => row.parsed.season))].sort((a,b)=>a-b);
-  if (!rows.length || !seasons.length) {
-    if (card) card.style.display = 'none';
-    return;
-  }
+  parsedRows.sort((a, b) => a.parsed.season - b.parsed.season || a.parsed.episode - b.parsed.episode || a.idx - b.idx);
+  const seasons = [...new Set(parsedRows.map(r => r.parsed.season))].sort((a, b) => a - b);
 
-  const currentRow = rows.find(row => row.idx === Number(GROUP_INDEX));
-  let selected = currentRow ? String(currentRow.parsed.season) :
-    (seasons.includes(1) ? '1' : String(seasons[0]));
+  // Mode: seasons (has S/E) or EXTRA-only (no S/E labels)
+  const useSeasons = seasons.length > 0;
+  const currentParsed = parsedRows.find(r => r.idx === Number(GROUP_INDEX));
+  let selected = useSeasons
+    ? (currentParsed ? String(currentParsed.parsed.season) : String(seasons[0]))
+    : 'extra';
 
   if (seasonSelect) {
-    seasonSelect.innerHTML = '<option value="all">All Seasons</option>';
-    seasons.forEach(season => {
-      const option = document.createElement('option');
-      option.value = String(season);
-      option.textContent = 'Season ' + season;
-      seasonSelect.appendChild(option);
-    });
-    seasonSelect.value = selected;
+    seasonSelect.innerHTML = '';
+    if (useSeasons) {
+      const allOpt = document.createElement('option');
+      allOpt.value = 'all'; allOpt.textContent = 'All Seasons';
+      seasonSelect.appendChild(allOpt);
+      seasons.forEach(s => {
+        const o = document.createElement('option');
+        o.value = String(s);
+        const n = parsedRows.filter(r => r.parsed.season === s).length;
+        o.textContent = 'Season ' + s + ' (' + n + ' eps)';
+        seasonSelect.appendChild(o);
+      });
+    }
+    if (extraRows.length) {
+      const o = document.createElement('option');
+      o.value = 'extra';
+      o.textContent = useSeasons ? ('EXTRA (' + extraRows.length + ' groups)') : 'All Groups';
+      seasonSelect.appendChild(o);
+    }
+    if (!useSeasons && !extraRows.length) {
+      if (card) card.style.display = 'none';
+      return;
+    }
   }
 
   function setActiveSeasonUI(value) {
     selected = value;
+    if (seasonBar) {
+      seasonBar.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.season === value));
+    }
     if (seasonSelect) seasonSelect.value = value;
-    if (seasonBar) seasonBar.querySelectorAll('button').forEach(button =>
-      button.classList.toggle('active', button.dataset.season === value));
   }
 
   if (seasonBar) {
     seasonBar.innerHTML = '';
-    const all = document.createElement('button');
-    all.type = 'button'; all.textContent = 'All Seasons'; all.dataset.season = 'all';
-    all.className = selected === 'all' ? 'active' : '';
-    all.addEventListener('click', () => { setActiveSeasonUI('all'); render(); });
-    seasonBar.appendChild(all);
-
-    seasons.forEach(season => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = 'Season ' + season;
-      button.dataset.season = String(season);
-      button.className = String(season) === selected ? 'active' : '';
-      button.addEventListener('click', () => {
-        setActiveSeasonUI(String(season)); render();
+    const addBtn = (label, value) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.dataset.season = value;
+      b.onclick = () => { setActiveSeasonUI(value); render(); };
+      seasonBar.appendChild(b);
+    };
+    if (useSeasons) {
+      seasons.forEach(s => {
+        const n = parsedRows.filter(r => r.parsed.season === s).length;
+        addBtn('S' + s + ' (' + n + ')', String(s));
       });
-      seasonBar.appendChild(button);
-    });
+    }
+    if (extraRows.length) {
+      addBtn(useSeasons ? ('EXTRA (' + extraRows.length + ')') : ('Groups (' + extraRows.length + ')'), 'extra');
+    }
+  }
+
+  // Default selection
+  if (useSeasons && currentParsed) setActiveSeasonUI(String(currentParsed.parsed.season));
+  else if (useSeasons) setActiveSeasonUI(String(seasons[0]));
+  else setActiveSeasonUI('extra');
+
+  function pickButtonIndex(idx) {
+    const cur = (WATCH_GROUPS[GROUP_INDEX] && WATCH_GROUPS[GROUP_INDEX].buttons) || [];
+    const target = (WATCH_GROUPS[idx] && WATCH_GROUPS[idx].buttons) || [];
+    if (!target.length) return 0;
+    const curBtn = cur[BUTTON_INDEX] || cur[0];
+    if (curBtn && curBtn.name) {
+      const match = target.findIndex(b => String(b.name || '').toLowerCase() === String(curBtn.name || '').toLowerCase());
+      if (match >= 0) return match;
+    }
+    return Math.min(Number(BUTTON_INDEX) || 0, target.length - 1);
   }
 
   function render() {
     const term = (search && search.value || '').trim().toLowerCase();
-    const filtered = rows.filter(row =>
-      (selected === 'all' || String(row.parsed.season) === selected) &&
-      (!term || String(row.g.name || '').toLowerCase().includes(term))
-    );
+    let rows = [];
+    if (selected === 'extra') {
+      rows = extraRows;
+    } else if (selected === 'all') {
+      rows = parsedRows.concat(extraRows);
+    } else {
+      rows = parsedRows.filter(r => String(r.parsed.season) === String(selected));
+    }
+    if (term) {
+      rows = rows.filter(r => String(r.g.name || '').toLowerCase().includes(term));
+    }
     list.innerHTML = '';
-    filtered.forEach(({g, idx, parsed}) => {
-      const first = (g.buttons || [])[0];
+    rows.forEach(({ g, idx, parsed }) => {
+      const buttons = g.buttons || [];
+      const first = buttons[0];
       if (!first || !first.url) return;
-      const preferred = preferredButtonForGroup(idx);
-      const chosen = (g.buttons || [])[preferred] || first;
+      let preferred = 0;
+      try { preferred = (typeof preferredButtonForGroup === "function" ? preferredButtonForGroup(idx) : pickButtonIndex(idx)); } catch (e) { preferred = 0; }
+      const chosen = buttons[preferred] || first;
       const href = (typeof watchHrefFor === 'function' ? watchHrefFor(idx, preferred) : null) || chosen.url;
       const link = document.createElement('a');
       link.className = 'side-ep-btn' + (idx === Number(GROUP_INDEX) ? ' active' : '');
       link.href = href;
-      const tag = document.createElement('span');
-      tag.className = 'ep-tag';
-      tag.textContent = 'S' + String(parsed.season).padStart(2,'0') +
-        ' · EP ' + String(parsed.episode).padStart(2,'0');
+      if (parsed) {
+        const tag = document.createElement('span');
+        tag.className = 'ep-tag';
+        tag.textContent = 'S' + String(parsed.season).padStart(2, '0') + ' · EP ' + String(parsed.episode).padStart(2, '0');
+        link.appendChild(tag);
+      } else {
+        const tag = document.createElement('span');
+        tag.className = 'ep-tag';
+        tag.textContent = 'GROUP';
+        link.appendChild(tag);
+      }
       const name = document.createElement('span');
       name.className = 'ep-name';
-      name.textContent = g.name || ('Episode ' + parsed.episode);
-      link.append(tag, name);
+      name.textContent = g.name || (parsed ? ('Episode ' + parsed.episode) : ('Group ' + (idx + 1)));
+      link.appendChild(name);
       list.appendChild(link);
     });
-    if (count) count.textContent = filtered.length + ' episode' + (filtered.length === 1 ? '' : 's');
+    if (count) {
+      const label = selected === 'extra' ? 'group' : 'episode';
+      count.textContent = rows.length + ' ' + label + (rows.length === 1 ? '' : 's');
+    }
   }
 
   search && search.addEventListener('input', render);
   seasonSelect && seasonSelect.addEventListener('change', () => {
-    setActiveSeasonUI(seasonSelect.value || 'all'); render();
+    setActiveSeasonUI(seasonSelect.value || (useSeasons ? String(seasons[0]) : 'extra'));
+    render();
   });
   render();
 })();
+
 
 /* ===== Movi-only playback with verified stall recovery ===== */
 let stallRetries = 0;
