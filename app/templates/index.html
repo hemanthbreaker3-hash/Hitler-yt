@@ -64,13 +64,33 @@
   function backdropUrl(p) {
     if (!p) return '';
     if (String(p).startsWith('http')) return p;
-    return 'https://image.tmdb.org/t/p/w780' + p;
+    return 'https://image.tmdb.org/t/p/w1280' + p;
   }
 
   function homeImageUrl(p) {
-    // Landscape on home page (backdrop preferred); portrait stays for title page
+    // Landscape from TMDB backdrop on home; portrait only as last fallback
     if (p && p.backdrop_path) return backdropUrl(p.backdrop_path);
     return posterUrl(p && p.poster_path);
+  }
+
+  async function fillMissingBackdrops() {
+    const imgs = document.querySelectorAll('#catalog-grid img[data-tmdb-id]');
+    if (!imgs.length) return;
+    const queue = Math.min(imgs.length, 12);
+    for (let i = 0; i < queue; i++) {
+      const img = imgs[i];
+      const id = img.dataset.tmdbId;
+      const mt = (img.dataset.mediaType || 'movie').toLowerCase() === 'tv' ? 'tv' : 'movie';
+      try {
+        const r = await fetch('/api/tmdb-backdrop?id=' + encodeURIComponent(id) + '&type=' + mt, { cache: 'force-cache' });
+        if (!r.ok) continue;
+        const d = await r.json();
+        if (d && d.backdrop_path) {
+          img.src = d.backdrop_path.startsWith('http') ? d.backdrop_path : ('https://image.tmdb.org/t/p/w1280' + d.backdrop_path);
+          img.removeAttribute('data-tmdb-id');
+        }
+      } catch (e) {}
+    }
   }
 
   function applyHero(list) {
@@ -118,6 +138,10 @@
     a.href = '/title/' + encodeURIComponent(p.slug);
     const img = document.createElement('img');
     img.src = homeImageUrl(p);
+    if (!(p && p.backdrop_path) && p && p.tmdb_id) {
+      img.dataset.tmdbId = String(p.tmdb_id);
+      img.dataset.mediaType = String(p.media_type || 'movie');
+    }
     img.alt = (p.title || 'Poster') + ' poster';
     img.loading = 'lazy';
     img.decoding = 'async';
@@ -158,6 +182,7 @@
     catalogPage = Math.min(Math.max(1, catalogPage), pages);
     grid.innerHTML = '';
     catalogItems.slice((catalogPage - 1) * CATALOG_PER_PAGE, catalogPage * CATALOG_PER_PAGE).forEach(p => grid.appendChild(card(p)));
+    try { fillMissingBackdrops(); } catch (e) {}
     const pager = document.getElementById('catalog-pagination');
     if (!pager) return;
     pager.hidden = pages <= 1;

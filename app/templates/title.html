@@ -261,9 +261,9 @@
     // Skip auto-redirect if user already chose a quality (?stay=1) or came from back
     const params = new URLSearchParams(window.location.search);
     const skip = params.get('stay') === '1' || params.get('noredir') === '1';
-    const watchGroupCount = document.querySelectorAll('.groups-list[data-box=\"watch\"] .group-block').length;
-    // Keep the catalog page interactive when there are multiple groups/seasons.
-    if (!skip && dest && watchGroupCount <= 1) {
+    // Always open first watch group / first button instantly.
+    // All groups remain selectable in the /watch/ side panel.
+    if (!skip && dest) {
       window.location.replace(dest);
     } else {
       const banner = document.getElementById('autoOpenBanner');

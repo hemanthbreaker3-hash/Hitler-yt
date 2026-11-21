@@ -408,6 +408,59 @@ async function syncVercelWebsiteUrls(req, db) {
   } catch {}
 }
 
+
+/** Fill missing landscape backdrop_path from TMDB for existing catalog pages (throttled). */
+let _backdropBackfillAt = 0;
+async function ensureTmdbBackdrops(db) {
+  const now = Date.now();
+  if (now - _backdropBackfillAt < 10 * 60 * 1000) return; // at most every 10 minutes
+  _backdropBackfillAt = now;
+  const tmdbKey = String(process.env.TMDB_API_KEY || '').trim();
+  if (!tmdbKey) return;
+  try {
+    const missing = await db.collection('catalog_pages').find(
+      {
+        tmdb_id: { $exists: true, $ne: null },
+        $or: [
+          { backdrop_path: { $exists: false } },
+          { backdrop_path: null },
+          { backdrop_path: '' },
+        ],
+      },
+      { projection: { tmdb_id: 1, media_type: 1 } }
+    ).limit(40).toArray();
+    if (!missing.length) return;
+    for (const row of missing) {
+      const tid = row.tmdb_id;
+      if (!tid) continue;
+      const mt = String(row.media_type || 'movie').toLowerCase();
+      let mediaType = (mt === 'tv' || mt === 'series' || mt === 'web-series') ? 'tv' : 'movie';
+      try {
+        let r = await fetch(
+          'https://api.themoviedb.org/3/' + mediaType + '/' + tid + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
+          { signal: AbortSignal.timeout(8000) }
+        );
+        if (!r.ok) {
+          mediaType = mediaType === 'tv' ? 'movie' : 'tv';
+          r = await fetch(
+            'https://api.themoviedb.org/3/' + mediaType + '/' + tid + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
+            { signal: AbortSignal.timeout(8000) }
+          );
+        }
+        if (!r.ok) continue;
+        const data = await r.json();
+        const backdrop = data.backdrop_path || '';
+        const poster = data.poster_path || '';
+        if (!backdrop && !poster) continue;
+        const patch = { updated_at: new Date() };
+        if (backdrop) patch.backdrop_path = backdrop;
+        if (poster) patch.poster_path = poster;
+        await db.collection('catalog_pages').updateMany({ tmdb_id: Number(tid) }, { $set: patch }).catch(() => {});
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
 async function ensureDefaultCategories(db) {
   try {
     const col = db.collection('catalog_categories');
@@ -848,6 +901,29 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
     return parts.join(' ');
   }
 
+  
+  // Fill missing landscape backdrops from TMDB for home grid cards
+  async function fillMissingBackdrops() {
+    const imgs = document.querySelectorAll('#catalog-grid img[data-tmdb-id]');
+    if (!imgs.length) return;
+    const queue = Math.min(imgs.length, 12);
+    for (let i = 0; i < queue; i++) {
+      const img = imgs[i];
+      const id = img.dataset.tmdbId;
+      const mt = (img.dataset.mediaType || 'movie').toLowerCase() === 'tv' ? 'tv' : 'movie';
+      try {
+        const r = await fetch('/api/tmdb-backdrop?id=' + encodeURIComponent(id) + '&type=' + mt, { cache: 'force-cache' });
+        if (!r.ok) continue;
+        const d = await r.json();
+        if (d && d.backdrop_path) {
+          const src = d.backdrop_path.startsWith('http') ? d.backdrop_path : ('https://image.tmdb.org/t/p/w1280' + d.backdrop_path);
+          img.src = src;
+          img.removeAttribute('data-tmdb-id');
+        }
+      } catch (e) {}
+    }
+  }
+
   function renderItems(items) {
     const el = document.getElementById('catalog-grid');
     const countEl = document.getElementById('result-count');
@@ -893,10 +969,19 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
       const img = document.createElement('img');
       img.loading = 'lazy';
       img.decoding = 'async';
-      // Landscape on home (backdrop preferred); portrait on title page
-      const homeSrc = (p.backdrop_path)
-        ? (p.backdrop_path.startsWith('http') ? p.backdrop_path : 'https://image.tmdb.org/t/p/w780' + p.backdrop_path)
-        : (p.poster_path?.startsWith('http') ? p.poster_path : (p.poster_path ? 'https://image.tmdb.org/t/p/w780' + p.poster_path : '/static/images/poster.jpg'));
+      // Landscape on home from TMDB backdrop (w1280); portrait poster only as last fallback
+      function tmdbImg(path, size) {
+        if (!path) return '';
+        if (String(path).startsWith('http')) return path;
+        return 'https://image.tmdb.org/t/p/' + size + path;
+      }
+      let homeSrc = tmdbImg(p.backdrop_path, 'w1280');
+      if (!homeSrc && p.tmdb_id) {
+        // Mark for async TMDB backdrop fill
+        img.dataset.tmdbId = String(p.tmdb_id);
+        img.dataset.mediaType = String(p.media_type || 'movie');
+      }
+      if (!homeSrc) homeSrc = tmdbImg(p.poster_path, 'w780') || '/static/images/poster.jpg';
       img.src = homeSrc;
       img.alt = p.title || 'Poster';
       const badges = document.createElement('div');
@@ -939,6 +1024,7 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
       }
     };
     drawPage();
+    fillMissingBackdrops();
   }
 
   function filterInitialItems() {
@@ -1376,9 +1462,10 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
     const params = new URLSearchParams(window.location.search);
     const skip = params.get('stay') === '1' || params.get('noredir') === '1';
     // Light-speed: only auto-open when a single watch group exists; multi-group stays interactive
-    const watchGroupCount = document.querySelectorAll('.groups-list[data-box="watch"] .group-block').length;
-    if (!skip && dest && watchGroupCount <= 1) {
-      window.location.replace(dest); // instant — no delay
+    // Always open first watch group / first button instantly.
+    // All groups remain selectable in the /watch/ side panel.
+    if (!skip && dest) {
+      window.location.replace(dest);
     } else {
       const banner = document.getElementById('autoOpenBanner');
       if (banner) banner.style.display = 'none';
@@ -1763,6 +1850,7 @@ async function createPage(x) {
       title: x.title,
       overview: x.overview,
       poster_path: x.poster_path || '',
+      backdrop_path: x.backdrop_path || '',
       release_date: x.release_date,
       rating: x.rating,
       media_type: x.media_type,
@@ -3199,6 +3287,7 @@ export default async function handler(req, res) {
       db = await getDatabase();
       await syncVercelWebsiteUrls(req, db);
       await ensureDefaultCategories(db);
+      ensureTmdbBackdrops(db).catch(() => {});
     } catch (error) {
       console.error('MongoDB connection error in Vercel:', error);
       if (pathname === '/api/catalog') {
@@ -3516,6 +3605,41 @@ export default async function handler(req, res) {
         return;
       }
 
+      
+      if (pathname === '/api/tmdb-backdrop' && req.method === 'GET') {
+        const id = String(url.searchParams.get('id') || '').trim();
+        const mediaType = String(url.searchParams.get('type') || 'movie').toLowerCase() === 'tv' ? 'tv' : 'movie';
+        if (!id || !/^\d+$/.test(id)) return json(res, 400, { error: 'id required' });
+        const tmdbKey = String(process.env.TMDB_API_KEY || state._raw_map?.tmdb_api_key || '').trim();
+        if (!tmdbKey) return json(res, 503, { error: 'TMDB not configured' });
+        try {
+          const page = await db.collection('catalog_pages').findOne(
+            { tmdb_id: Number(id) },
+            { projection: { backdrop_path: 1, poster_path: 1 } }
+          );
+          if (page && page.backdrop_path) {
+            return json(res, 200, { backdrop_path: page.backdrop_path, poster_path: page.poster_path || '' });
+          }
+          const r = await fetch(
+            'https://api.themoviedb.org/3/' + mediaType + '/' + id + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
+            { signal: AbortSignal.timeout(8000) }
+          );
+          if (!r.ok) return json(res, 502, { error: 'TMDB fetch failed' });
+          const data = await r.json();
+          const backdrop = data.backdrop_path || '';
+          const poster = data.poster_path || '';
+          if (backdrop) {
+            await db.collection('catalog_pages').updateMany(
+              { tmdb_id: Number(id) },
+              { $set: { backdrop_path: backdrop, updated_at: new Date() } }
+            ).catch(() => {});
+          }
+          return json(res, 200, { backdrop_path: backdrop, poster_path: poster });
+        } catch (e) {
+          return json(res, 502, { error: 'TMDB error' });
+        }
+      }
+
       if (pathname === '/api/admin/tmdb-search' && req.method === 'GET') {
         const q = (searchParams.get('q') || '').trim();
         const mediaType = searchParams.get('media_type') || 'multi';
@@ -3540,6 +3664,7 @@ export default async function handler(req, res) {
           title: x.title || x.name,
           overview: x.overview || '',
           poster_path: x.poster_path || '',
+          backdrop_path: x.backdrop_path || '',
           release_date: x.release_date || x.first_air_date || '',
           rating: x.vote_average,
         }));
@@ -3583,6 +3708,7 @@ export default async function handler(req, res) {
           title,
           overview: String(body.overview || ''),
           poster_path: String(body.poster_path || ''),
+          backdrop_path: String(body.backdrop_path || ''),
           release_date: String(body.release_date || ''),
           rating: body.rating !== null && body.rating !== undefined && body.rating !== '' ? Number(body.rating) : null,
           media_type: body.media_type === 'tv' ? 'tv' : 'movie',
@@ -3619,6 +3745,7 @@ export default async function handler(req, res) {
             title: String(body.title || '').trim(),
             overview: String(body.overview || ''),
             poster_path: String(body.poster_path || ''),
+            backdrop_path: String(body.backdrop_path || ''),
             release_date: String(body.release_date || ''),
             rating: body.rating !== null && body.rating !== undefined && body.rating !== '' ? Number(body.rating) : null,
             media_type: body.media_type === 'tv' ? 'tv' : 'movie',

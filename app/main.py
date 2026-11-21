@@ -19,7 +19,7 @@ from app.streamer.engine import get_streaming_response, get_remux_response
 from app.streamer.probe import probe_tracks
 from app.bot.main import register_handlers
 from app.admin.routes import router as admin_router
-from app.cms import router as cms_router, get_settings, seed_categories, serialize_catalog_doc
+from app.cms import router as cms_router, get_settings, seed_categories, serialize_catalog_doc, backfill_tmdb_backdrops
 from app.shorteners import (
     gate_request, verify_key, config as shortener_config, create_shortlink,
     get_key_page, is_protected_title_target,
@@ -57,6 +57,14 @@ async def lifespan(app: FastAPI):
         await create_indexes()
         await load_custom_settings()
         await seed_categories()
+        # Background: fill landscape backdrops for existing catalog pages from TMDB
+        async def _bg_backfill():
+            try:
+                await backfill_tmdb_backdrops(limit=100)
+            except Exception:
+                pass
+        import asyncio as _asyncio
+        _asyncio.create_task(_bg_backfill())
         start_cloudflare_auto_tunnel()
         session_manager.prepare_bot()
         register_handlers(session_manager.bot_client)

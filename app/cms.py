@@ -177,6 +177,86 @@ async def get_settings():
     }
 
 
+
+async def backfill_tmdb_backdrops(limit: int = 80) -> int:
+    """On startup: fetch TMDB landscape backdrops for catalog pages missing them."""
+    key = getattr(settings, 'TMDB_API_KEY', None) or ''
+    if not key:
+        try:
+            doc = await settings_col.find_one({'key': 'tmdb_api_key'}, {'value': 1})
+            key = (doc or {}).get('value') or ''
+        except Exception:
+            key = ''
+    if not key:
+        return 0
+    try:
+        cursor = pages.find(
+            {
+                'tmdb_id': {'$exists': True, '$ne': None},
+                '$or': [
+                    {'backdrop_path': {'$exists': False}},
+                    {'backdrop_path': None},
+                    {'backdrop_path': ''},
+                ],
+            },
+            {'tmdb_id': 1, 'media_type': 1, 'title': 1},
+        ).limit(limit)
+        rows = await cursor.to_list(limit)
+    except Exception:
+        return 0
+    if not rows:
+        return 0
+    updated = 0
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for row in rows:
+                tid = row.get('tmdb_id')
+                if not tid:
+                    continue
+                mt = str(row.get('media_type') or 'movie').lower()
+                media_type = 'tv' if mt in ('tv', 'series', 'web-series') else 'movie'
+                try:
+                    r = await client.get(
+                        f'https://api.themoviedb.org/3/{media_type}/{int(tid)}',
+                        params={'api_key': key, 'language': 'en-US'},
+                    )
+                    if r.status_code != 200:
+                        # try the other type once
+                        other = 'movie' if media_type == 'tv' else 'tv'
+                        r = await client.get(
+                            f'https://api.themoviedb.org/3/{other}/{int(tid)}',
+                            params={'api_key': key, 'language': 'en-US'},
+                        )
+                    if r.status_code != 200:
+                        continue
+                    data = r.json()
+                    backdrop = data.get('backdrop_path') or ''
+                    poster = data.get('poster_path') or ''
+                    if not backdrop and not poster:
+                        continue
+                    patch = {'updated_at': datetime.now(timezone.utc)}
+                    if backdrop:
+                        patch['backdrop_path'] = backdrop
+                    if poster:
+                        # only fill poster if missing
+                        existing = await pages.find_one({'tmdb_id': tid}, {'poster_path': 1})
+                        if not (existing or {}).get('poster_path'):
+                            patch['poster_path'] = poster
+                    await pages.update_many({'tmdb_id': tid}, {'$set': patch})
+                    updated += 1
+                except Exception as e:
+                    log.debug('backdrop backfill %s: %s', tid, e)
+                    continue
+    except Exception as e:
+        log.warning('backfill_tmdb_backdrops failed: %s', e)
+        return updated
+    if updated:
+        log.info('TMDB landscape backfill: updated %s pages', updated)
+    return updated
+
+
 async def seed_categories():
     await pages.create_index('slug', unique=True)
     await categories.create_index('slug', unique=True)
@@ -509,6 +589,44 @@ async def remove_category(slug: str, _: bool = Depends(admin_auth)):
     await categories.delete_one({'slug': slug})
     return {'ok': True}
 
+
+
+
+@router.get('/api/tmdb-backdrop')
+async def tmdb_backdrop(id: int, type: str = 'movie'):
+    """Return TMDB backdrop for home landscape cards; persist onto matching catalog pages."""
+    media_type = 'tv' if str(type).lower() == 'tv' else 'movie'
+    # Prefer already stored
+    page = await pages.find_one({'tmdb_id': id}, {'backdrop_path': 1, 'poster_path': 1})
+    if page and page.get('backdrop_path'):
+        return {'backdrop_path': page['backdrop_path'], 'poster_path': page.get('poster_path') or ''}
+    key = settings.TMDB_API_KEY
+    if not key:
+        doc = await settings_col.find_one({'key': 'tmdb_api_key'}, {'value': 1})
+        key = (doc or {}).get('value') or ''
+    if not key:
+        raise HTTPException(503, 'TMDB_API_KEY is not configured')
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(
+                f'https://api.themoviedb.org/3/{media_type}/{id}',
+                params={'api_key': key, 'language': 'en-US'},
+            )
+        if r.status_code != 200:
+            raise HTTPException(502, 'TMDB fetch failed')
+        data = r.json()
+        backdrop = data.get('backdrop_path') or ''
+        poster = data.get('poster_path') or ''
+        if backdrop:
+            await pages.update_many(
+                {'tmdb_id': id},
+                {'$set': {'backdrop_path': backdrop, 'updated_at': datetime.now(timezone.utc)}},
+            )
+        return {'backdrop_path': backdrop, 'poster_path': poster}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, 'TMDB error')
 
 @router.get('/api/admin/tmdb-search')
 async def tmdb_search(q: str, media_type: str = 'multi', _: bool = Depends(admin_auth)):
