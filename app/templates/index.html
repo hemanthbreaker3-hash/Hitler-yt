@@ -9,7 +9,7 @@
 .home-cinema .backdrop-scrim{background:linear-gradient(90deg,rgba(4,5,8,.94) 0%,rgba(4,5,8,.68) 48%,rgba(4,5,8,.08) 100%),linear-gradient(0deg,rgba(4,5,8,.68),transparent 52%)}
 .home-cinema .backdrop-content{padding:clamp(22px,5vw,54px);max-width:760px}
 .home-cinema #homeHeroTitle{font-size:clamp(2rem,5.2vw,4rem)!important;letter-spacing:-.045em!important;background:linear-gradient(100deg,#fff 10%,#f2dfb7 65%,#d8b36a)!important;-webkit-background-clip:text!important;background-clip:text!important;color:transparent!important}
-.home-cinema .hero-eyebrow{letter-spacing:.24em!important;color:#d8b36a!important}
+.home-cinema .hero-eyebrow{letter-spacing:.24em!important;color:#60a5fa!important}
 #trending-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(142px,1fr));gap:16px}
 @media(max-width:600px){.home-cinema{min-height:330px;border-radius:18px}.home-cinema .backdrop-scrim{background:linear-gradient(0deg,rgba(4,5,8,.94),rgba(4,5,8,.2) 100%)}#trending-row{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}}
 </style>
@@ -62,24 +62,22 @@
   }
 
   async function fillMissingBackdrops() {
-    // Fetch landscape artwork for every visible existing catalog page with a TMDB ID.
-    // Parallel batches avoid serial delays while keeping TMDB/backend load modest.
-    const imgs = Array.from(document.querySelectorAll('#catalog-grid img[data-tmdb-id]'));
+    const imgs = document.querySelectorAll('#catalog-grid img[data-tmdb-id]');
     if (!imgs.length) return;
-    for (let start = 0; start < imgs.length; start += 6) {
-      await Promise.all(imgs.slice(start, start + 6).map(async (img) => {
-        const id = img.dataset.tmdbId;
-        const mt = (img.dataset.mediaType || 'movie').toLowerCase() === 'tv' ? 'tv' : 'movie';
-        try {
-          const r = await fetch('/api/tmdb-backdrop?id=' + encodeURIComponent(id) + '&type=' + mt, { cache: 'force-cache' });
-          if (!r.ok) return;
-          const d = await r.json();
-          if (d && d.backdrop_path) {
-            img.src = d.backdrop_path.startsWith('http') ? d.backdrop_path : ('https://image.tmdb.org/t/p/w1280' + d.backdrop_path);
-            img.removeAttribute('data-tmdb-id');
-          }
-        } catch (e) {}
-      }));
+    const queue = Math.min(imgs.length, 12);
+    for (let i = 0; i < queue; i++) {
+      const img = imgs[i];
+      const id = img.dataset.tmdbId;
+      const mt = (img.dataset.mediaType || 'movie').toLowerCase() === 'tv' ? 'tv' : 'movie';
+      try {
+        const r = await fetch('/api/tmdb-backdrop?id=' + encodeURIComponent(id) + '&type=' + mt, { cache: 'force-cache' });
+        if (!r.ok) continue;
+        const d = await r.json();
+        if (d && d.backdrop_path) {
+          img.src = d.backdrop_path.startsWith('http') ? d.backdrop_path : ('https://image.tmdb.org/t/p/w1280' + d.backdrop_path);
+          img.removeAttribute('data-tmdb-id');
+        }
+      } catch (e) {}
     }
   }
 
@@ -160,8 +158,8 @@
     meta.textContent = year || (p.media_type ? String(p.media_type).toUpperCase() : '');
     info.appendChild(title);
     info.appendChild(meta);
+    if (badges.childElementCount) info.appendChild(badges);
     a.appendChild(img);
-    a.appendChild(badges);
     a.appendChild(play);
     a.appendChild(info);
     return a;
@@ -264,7 +262,7 @@
 .search-bar{margin:16px 0 18px!important;min-height:68px!important;border-radius:24px!important}
 #category-nav{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px!important;margin:0 0 24px!important}
 #category-nav .chip{min-height:52px;border-radius:999px;display:flex;align-items:center;justify-content:center;padding:10px 12px;background:#101010;border:1px solid rgba(255,255,255,.12);color:#ddd}
-#category-nav .chip.active{background:linear-gradient(130deg,#d8b36a,#f0d9a2);color:#18120a;border-color:transparent;box-shadow:0 8px 22px rgba(216,179,106,.22)}
+#category-nav .chip.active{background:linear-gradient(130deg,#2563eb,#60a5fa);color:#07111f;border-color:transparent;box-shadow:0 8px 22px rgba(37,99,235,.25)}
 #catalog-grid .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important}
 #catalog-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:14px!important}
 @media(max-width:440px){ #category-nav{gap:8px!important}#category-nav .chip{min-height:46px;padding:8px;font-size:13px}#catalog-grid{gap:10px!important}}
@@ -272,10 +270,10 @@
 <script>document.addEventListener('DOMContentLoaded',()=>{const search=document.querySelector('.search-bar');const nav=document.getElementById('category-nav');const head=document.getElementById('catalog');if(search&&nav&&head){head.parentNode.insertBefore(nav,head);head.parentNode.insertBefore(search,nav);}});</script>
 
 <style>
-/* Reference UI badges bottom-left on landscape cards */
-.home-badges{top:auto!important;bottom:10px!important;left:10px!important;right:auto!important;justify-content:flex-start!important;gap:6px!important}
+/* Genre badges are a separate row below title and year */
+.home-badges{position:static!important;display:flex!important;flex-wrap:wrap!important;justify-content:flex-start!important;gap:6px!important;margin-top:6px!important;max-width:100%!important}
 .badge-quality{background:rgba(0,0,0,.75)!important;color:#fff!important;border:1px solid rgba(255,255,255,.2)!important;border-radius:6px!important;font-size:11px!important;font-weight:800!important;padding:4px 8px!important}
-.badge-genre{background:linear-gradient(130deg,#d8b36a,#f0d9a2)!important;color:#18120a!important;border:0!important;border-radius:6px!important;font-size:11px!important;font-weight:800!important;padding:4px 8px!important}
+.badge-genre{background:linear-gradient(130deg,#2563eb,#60a5fa)!important;color:#07111f!important;border:0!important;border-radius:6px!important;font-size:11px!important;font-weight:800!important;padding:4px 8px!important}
 .poster-card .info{padding:10px 4px 4px}
 .poster-card .title{font-size:14px;font-weight:700;line-height:1.25}
 .poster-card .meta{font-size:12px;color:var(--muted);margin-top:2px}
@@ -289,23 +287,6 @@
 #category-nav .chip{min-height:44px!important;border-radius:999px!important;font-size:13px!important;font-weight:700}
 .search-bar{border-radius:20px!important;min-height:56px!important;margin:12px 0 14px!important}
 .poster-card .title{font-size:13px!important}.poster-card .meta{font-size:11px!important}
-.home-badges{bottom:8px!important;left:8px!important}
+ .home-badges{position:static!important;bottom:auto!important;left:auto!important;margin-top:6px!important}
 .badge-genre{font-size:10px!important;padding:3px 7px!important}
-</style>
-
-<style>
-/* Blue reference home layout: compact search, 3x3 category chips, 2-column landscape catalog */
-.search-bar{min-height:56px!important;margin:12px 0 14px!important;border-radius:20px!important;border-color:rgba(59,130,246,.30)!important;background:#10131a!important}
-.search-bar:focus-within{border-color:rgba(59,130,246,.72)!important;box-shadow:0 0 0 4px rgba(59,130,246,.13),0 10px 30px rgba(0,0,0,.3)!important}
-.search-bar i{color:#60a5fa!important}
-#category-nav{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:9px!important;margin:0 0 16px!important;max-width:none!important}
-#category-nav .chip{min-height:48px!important;border-radius:999px!important;display:flex!important;align-items:center!important;justify-content:center!important;padding:9px 12px!important;background:#10131a!important;border:1px solid rgba(148,163,184,.18)!important;color:#e2e8f0!important;font-size:14px!important;font-weight:700!important}
-#category-nav .chip.active{background:linear-gradient(130deg,#1d4ed8,#60a5fa)!important;color:white!important;border-color:transparent!important;box-shadow:0 8px 22px rgba(37,99,235,.28)!important}
-#catalog-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important}
-#catalog-grid .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important}
-.poster-card{border-radius:14px!important;border-color:rgba(96,165,250,.15)!important}
-.poster-card:hover{border-color:rgba(59,130,246,.55)!important;box-shadow:0 15px 34px rgba(0,0,0,.48),0 0 18px rgba(59,130,246,.12)!important}
-.home-badges{bottom:8px!important;left:8px!important}
-.badge-genre{background:linear-gradient(130deg,#1d4ed8,#60a5fa)!important;color:#fff!important;border:0!important}
-@media(max-width:440px){#category-nav{gap:8px!important}#category-nav .chip{min-height:46px!important;font-size:13px!important;padding:8px!important}#catalog-grid{gap:10px!important}}
 </style>

@@ -373,7 +373,23 @@
   }
 })();
 
-/* Player controls are initialized after the player markup below. */
+/* Controls stay available; user explicitly toggles the complete chrome. */
+(function syncPlayerChromeIdle() {
+  const wrapper=document.getElementById('playerWrapper'); const player=document.getElementById('moviPlayer');
+  const toggle=document.getElementById('controlsToggle'); if(!wrapper||!player||!toggle)return;
+  let hidden=false;
+  const setHidden=(value)=>{hidden=!!value;wrapper.classList.toggle('controls-hidden',hidden);
+    wrapper.setAttribute('data-controls-visible',hidden?'false':'true');
+    toggle.textContent='{{ BRANDING }}';
+    toggle.setAttribute('aria-label',hidden?'Show all player controls':'Hide all player controls');};
+  toggle.addEventListener('click',(e)=>{e.stopPropagation();setHidden(!hidden);});
+  // Do not auto-reveal or auto-hide on playback, taps, pause, or fullscreen changes.
+  // The toggle button is the sole visibility control; player interactions remain independent.
+  wrapper.addEventListener('pointerdown', (e) => {
+    if (hidden && e.target !== toggle && !e.target.closest('.controls-toggle')) e.stopPropagation();
+  }, {capture:true});
+  setHidden(false);
+})();;
 </script>
 {% endblock %}
 
@@ -1655,14 +1671,3 @@ movi-player.chrome-idle::part(progress-container) {
 }
 
 </style>
-
-<style>
-/* Unified visibility state for every player overlay/control. */
-#playerWrapper.controls-hidden .player-chrome-btn,#playerWrapper.controls-hidden .player-pop,#playerWrapper.controls-hidden .player-chrome-left,#playerWrapper.controls-hidden .player-chrome-right,#playerWrapper.controls-hidden .player-shortcut-hint,#playerWrapper.controls-hidden movi-player::part(chrome),#playerWrapper.controls-hidden movi-player::part(controls),#playerWrapper.controls-hidden movi-player::part(bottom-controls),#playerWrapper.controls-hidden movi-player::part(progress-container),#playerWrapper.controls-hidden movi-player::part(progress),#playerWrapper.controls-hidden movi-player::part(seek),#playerWrapper.controls-hidden movi-player::part(control-bar),#playerWrapper.controls-hidden movi-player::part(bottom-bar),#playerWrapper.controls-hidden movi-player::part(time-controls),#playerWrapper.controls-hidden movi-player::part(overlay-controls),#playerWrapper.controls-hidden movi-player::part(controls-overlay){opacity:0!important;visibility:hidden!important;pointer-events:none!important;display:none!important}
-#playerWrapper.controls-hidden .controls-toggle{display:flex!important;opacity:1!important;visibility:visible!important;pointer-events:auto!important;position:absolute!important;z-index:2147483005!important;right:12px!important;top:12px!important;width:auto!important;height:auto!important;min-height:40px!important;max-width:75%!important;padding:9px 14px!important;border:1px solid rgba(96,165,250,.55)!important;border-radius:12px!important;background:rgba(10,18,35,.88)!important;color:#bfdbfe!important;backdrop-filter:blur(10px)!important;font-weight:800!important}
-#playerWrapper:not(.controls-hidden) .controls-toggle{display:none!important}
-#playerWrapper:not(.controls-hidden) .player-chrome-btn,#playerWrapper:not(.controls-hidden) .player-pop{opacity:1!important;visibility:visible!important;pointer-events:auto!important}
-</style>
-<script>
-(function(){function init(){const w=document.getElementById('playerWrapper'),b=document.getElementById('controlsToggle');if(!w||!b||b.dataset.unifiedInit)return;b.dataset.unifiedInit='1';let hidden=false;function sync(){w.classList.toggle('controls-hidden',hidden);w.setAttribute('data-controls-visible',hidden?'false':'true');b.textContent='{{ BRANDING }}';b.title=hidden?'Show all player controls':'Hide all player controls';b.setAttribute('aria-label',hidden?'Show all player controls':'Hide all player controls');}b.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();hidden=!hidden;sync();});sync();}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();})();
-</script>

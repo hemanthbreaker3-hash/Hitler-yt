@@ -87,3 +87,12 @@
   {% endif %}
 </div>
 {% endblock %}
+
+<style>
+/* Search catalog uses the same landscape card geometry as home. */
+.poster-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:14px!important}
+.poster-grid .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important}
+.poster-grid .poster-card{overflow:hidden;border-radius:14px}
+.poster-grid .poster-card .info{padding:9px 3px 5px!important;background:transparent!important}
+@media(max-width:440px){.poster-grid{gap:10px!important}}
+</style>
