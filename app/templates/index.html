@@ -28,6 +28,8 @@
 <div id="catalog-pagination" class="pager-bar" hidden aria-label="Catalog pagination"></div>
 
 <script>
+window.__INITIAL_CATALOG__ = {{ initial_items|default([])|tojson }};
+window.__INITIAL_CATEGORIES__ = {{ initial_categories|default([])|tojson }};
 (async () => {
   const grid = document.getElementById('catalog-grid');
   const nav = document.getElementById('category-nav');
@@ -218,6 +220,18 @@
     }
   }
 
+  // Instant synchronous render from server-embedded catalog (zero Loading delay)
+  if (Array.isArray(window.__INITIAL_CATEGORIES__) && window.__INITIAL_CATEGORIES__.length) {
+    nav.innerHTML = '';
+    nav.appendChild(chip('All', '', !category));
+    window.__INITIAL_CATEGORIES__.forEach(c => nav.appendChild(chip(c.name || c.slug, c.slug, category === c.slug)));
+  }
+  if (Array.isArray(window.__INITIAL_CATALOG__) && window.__INITIAL_CATALOG__.length && !category && !q) {
+    catalogItems = window.__INITIAL_CATALOG__;
+    countEl.textContent = catalogItems.length + (catalogItems.length === 1 ? ' title' : ' titles');
+    catalogPage = 1;
+    renderCatalogPage();
+  }
   load();
 })();
 </script>

@@ -916,15 +916,11 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
     renderCategories([{ name: 'Movies', slug: 'movies' }, { name: 'Series', slug: 'series' }]);
   }
 
-  try {
-    const catRes = await fetch('/api/categories', { cache: 'no-store' });
-    if (catRes.ok) {
-      const cats = await catRes.json();
-      if (Array.isArray(cats.items) && cats.items.length) {
-        renderCategories(cats.items);
-      }
-    }
-  } catch (e) {}
+  // Refresh categories in background without blocking initial catalog paint
+  fetch('/api/categories', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null)
+    .then(cats => { if (cats && Array.isArray(cats.items) && cats.items.length) renderCategories(cats.items); })
+    .catch(() => {});
 
   function qualityLine(p) {
     const type = (p.media_type || 'movie').toLowerCase();
@@ -2706,6 +2702,22 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     #playerWrapper:fullscreen .player-chrome-left,#playerWrapper:-webkit-full-screen .player-chrome-left{top:max(12px,env(safe-area-inset-top))!important;left:max(12px,env(safe-area-inset-left))!important}
     #playerWrapper:fullscreen .player-chrome-right,#playerWrapper:-webkit-full-screen .player-chrome-right{top:max(12px,env(safe-area-inset-top))!important;right:max(12px,env(safe-area-inset-right))!important}
 
+
+  /* Unified, non-touching player toolbar arrangement */
+  .player-chrome-left,.player-chrome-right{position:absolute!important;top:10px!important;z-index:60!important;display:flex!important;flex-direction:row!important;align-items:center!important;gap:8px!important;pointer-events:none!important;margin:0!important;padding:0!important}
+  .player-chrome-left{left:10px!important;right:auto!important}
+  .player-chrome-right{right:10px!important;left:auto!important}
+  .player-chrome-btn{position:relative!important;top:auto!important;left:auto!important;right:auto!important;bottom:auto!important;width:36px!important;height:36px!important;min-width:36px!important;max-width:36px!important;flex:0 0 36px!important;margin:0!important;padding:0!important;border-radius:10px!important;pointer-events:auto!important;display:inline-flex!important;align-items:center!important;justify-content:center!important}
+  .player-chrome-btn svg{width:16px!important;height:16px!important;pointer-events:none!important}
+  .player-brand-float{left:56px!important;top:12px!important;pointer-events:none!important;z-index:20!important}
+  @media(max-width:600px){
+    .player-chrome-left,.player-chrome-right{top:8px!important;gap:6px!important}
+    .player-chrome-left{left:8px!important}.player-chrome-right{right:8px!important}
+    .player-chrome-btn{width:32px!important;height:32px!important;min-width:32px!important;max-width:32px!important;flex:0 0 32px!important;border-radius:9px!important}
+    .player-chrome-btn svg{width:15px!important;height:15px!important}
+  }
+  @media(max-width:480px){.player-brand-float{display:none!important}}
+
   </style>`;
 
   // Episodes / Seasons UI lives in the right side panel (sideEpList + season filter)
@@ -4387,7 +4399,7 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET' && pathname === '/') {
       const [rawItems, rawCats] = await Promise.all([
-        db.collection('catalog_pages').find({ published: true }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(100).toArray(),
+        db.collection('catalog_pages').find({ published: true }, { projection: { _id: 0, groups: 0, overview: 0 } }).sort({ created_at: -1 }).limit(100).toArray(),
         db.collection('catalog_categories').find({}, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
       ]);
       const initialItems = rawItems.map((item) => serializeCatalogDoc(item, cloudflareUrl));
