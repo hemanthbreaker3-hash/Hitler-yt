@@ -2327,11 +2327,163 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     ${!settings.streaming_enabled ? '.player-shell{display:none!important}' : ''}
     .player-shell{position:relative;border-radius:20px;padding:2px;overflow:hidden;background:#0a0a14;box-shadow:0 18px 48px rgba(0,0,0,.58),0 0 24px rgba(139,92,246,.16)}
     .player-box{background:#000;border-radius:18px;overflow:hidden;position:relative;z-index:1}
-    .player-wrapper{width:100%;aspect-ratio:16/9;position:relative;background:#000;contain:paint}
+    .player-wrapper{width:100%;aspect-ratio:16/9;position:relative;background:#000}
     .player-wrapper movi-player{width:100%;height:100%;background:#000;object-fit:contain;display:block}
     movi-player{--movi-primary:#8b5cf6;--movi-primary-light:#a78bfa;--movi-accent:#22d3ee;--movi-brand-fill:linear-gradient(135deg,#8b5cf6,#22d3ee);--movi-glass-bg:rgba(10,10,20,.88);--movi-chrome-bg:rgba(10,10,20,.88);--movi-bar-bg:rgba(10,10,20,.88);--movi-chrome-fg:#f5f5f5;--movi-surface:#12122a}
     
     
+    
+    /* ===== Built-in player chrome (single clean system) ===== */
+    .player-wrapper{
+      position:relative!important;
+      width:100%!important;
+      aspect-ratio:16/9;
+      background:#000!important;
+      overflow:hidden!important;
+      contain:none!important;
+      isolation:isolate;
+    }
+    .player-wrapper movi-player,
+    #moviPlayer{
+      position:absolute!important;
+      inset:0!important;
+      width:100%!important;
+      height:100%!important;
+      display:block!important;
+      object-fit:contain;
+      z-index:1!important;
+      background:#000;
+    }
+    #playerLoading{
+      position:absolute!important;inset:0!important;z-index:4!important;
+      display:none;align-items:center;justify-content:center;
+      background:rgba(0,0,0,.28)!important;pointer-events:none!important;
+    }
+    #playerLoading.active, #playerLoading[style*="flex"]{display:flex!important}
+    .player-chrome-left,
+    .player-chrome-right{
+      position:absolute!important;
+      top:10px!important;
+      z-index:30!important;
+      display:flex!important;
+      flex-direction:row!important;
+      align-items:center!important;
+      gap:6px!important;
+      margin:0!important;
+      padding:0!important;
+      pointer-events:none!important; /* container ignores clicks; buttons re-enable */
+      transform:none!important;
+    }
+    .player-chrome-left{left:10px!important;right:auto!important}
+    .player-chrome-right{right:10px!important;left:auto!important}
+    .player-chrome-btn{
+      position:relative!important;
+      top:auto!important;left:auto!important;right:auto!important;bottom:auto!important;
+      width:36px!important;height:36px!important;min-width:36px!important;max-width:36px!important;
+      margin:0!important;padding:0!important;
+      border-radius:10px!important;
+      border:1px solid rgba(255,255,255,.2)!important;
+      background:rgba(8,8,14,.92)!important;
+      color:#fff!important;
+      display:inline-flex!important;align-items:center!important;justify-content:center!important;
+      cursor:pointer!important;
+      pointer-events:auto!important;
+      touch-action:manipulation!important;
+      transform:none!important;
+      opacity:1!important;visibility:visible!important;
+      z-index:31!important;
+      line-height:0!important;
+      flex:0 0 36px!important;
+      box-shadow:0 4px 12px rgba(0,0,0,.35)!important;
+    }
+    .player-chrome-btn svg{
+      width:16px!important;height:16px!important;
+      fill:none!important;stroke:currentColor!important;stroke-width:1.9!important;
+      pointer-events:none!important;transform:none!important;
+    }
+    .player-chrome-btn:hover{
+      background:rgba(216,179,106,.28)!important;
+      border-color:rgba(216,179,106,.55)!important;
+      transform:none!important;
+    }
+    .player-chrome-btn:active{transform:scale(.96)!important}
+    /* kill legacy absolute positions that mixed buttons */
+    .pc-switch,.pc-laptop,.pc-download,.pc-fit,.pc-retry,.pc-fullscreen{
+      top:auto!important;left:auto!important;right:auto!important;bottom:auto!important;
+      position:relative!important;
+    }
+    .player-pop{
+      position:absolute!important;
+      z-index:40!important;
+      min-width:148px!important;max-width:min(260px,88vw)!important;
+      max-height:min(50vh,320px)!important;
+      overflow:auto!important;
+      background:rgba(10,10,16,.98)!important;
+      border:1px solid rgba(216,179,106,.28)!important;
+      border-radius:12px!important;
+      padding:6px!important;
+      display:none!important;
+      flex-direction:column!important;
+      gap:2px!important;
+      box-shadow:0 12px 28px rgba(0,0,0,.5)!important;
+      pointer-events:auto!important;
+      transform:none!important;
+    }
+    .player-pop.open{display:flex!important}
+    .player-pop.switch-pop{top:50px!important;left:10px!important;right:auto!important}
+    .player-pop.laptop-pop{top:50px!important;right:10px!important;left:auto!important}
+    .player-pop button,.player-pop a{
+      display:block!important;width:100%!important;text-align:left!important;
+      border:0!important;background:transparent!important;color:#eee!important;
+      padding:9px 11px!important;border-radius:8px!important;
+      font:600 12px/1.3 system-ui!important;cursor:pointer!important;text-decoration:none!important;
+    }
+    .player-pop button:hover,.player-pop a:hover{background:rgba(216,179,106,.14)!important}
+    .player-pop .pop-title{font-size:10px!important;color:#9a9aab!important;padding:4px 10px 6px!important;text-transform:uppercase!important;letter-spacing:.05em!important}
+    .controls-toggle{
+      position:absolute!important;z-index:35!important;
+      left:10px!important;bottom:10px!important;top:auto!important;right:auto!important;
+      opacity:1!important;pointer-events:auto!important;visibility:visible!important;
+      width:auto!important;height:auto!important;overflow:visible!important;
+      padding:6px 10px!important;border-radius:8px!important;
+      border:1px solid rgba(255,255,255,.18)!important;
+      background:rgba(8,8,14,.75)!important;color:rgba(255,255,255,.85)!important;
+      font:700 11px system-ui!important;cursor:pointer!important;
+      transform:none!important;
+    }
+    .player-wrapper.controls-hidden .player-chrome-left,
+    .player-wrapper.controls-hidden .player-chrome-right,
+    .player-wrapper.controls-hidden .player-chrome-btn,
+    .player-wrapper.controls-hidden .player-pop{
+      opacity:0!important;visibility:hidden!important;pointer-events:none!important;
+    }
+    .player-wrapper.controls-hidden .controls-toggle{
+      left:50%!important;bottom:auto!important;top:50%!important;
+      transform:translate(-50%,-50%)!important;
+      padding:12px 18px!important;border-radius:999px!important;
+      background:rgba(8,8,14,.92)!important;color:#fff!important;
+      font:800 14px system-ui!important;border-color:rgba(255,255,255,.28)!important;
+    }
+    .player-wrapper:fullscreen,
+    .player-wrapper:-webkit-full-screen{
+      width:100vw!important;height:100vh!important;aspect-ratio:auto!important;
+      background:#000!important;
+    }
+    .player-wrapper:fullscreen movi-player,
+    .player-wrapper:fullscreen #moviPlayer{
+      width:100%!important;height:100%!important;
+    }
+    @media(max-width:600px){
+      .player-chrome-btn{width:34px!important;height:34px!important;min-width:34px!important;max-width:34px!important;flex-basis:34px!important;border-radius:9px!important}
+      .player-chrome-btn svg{width:15px!important;height:15px!important}
+      .player-chrome-left,.player-chrome-right{top:8px!important;gap:5px!important}
+      .player-chrome-left{left:8px!important}
+      .player-chrome-right{right:8px!important}
+      .player-pop.switch-pop{top:46px!important;left:8px!important}
+      .player-pop.laptop-pop{top:46px!important;right:8px!important}
+    }
+    /* ===== end player chrome ===== */
+
     /* === Player controls — fixed layout === */
     .player-wrapper{position:relative!important}
     .player-chrome-left,.player-chrome-right{
@@ -2363,7 +2515,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .player-pop.laptop-pop{top:48px!important;right:10px!important;left:auto!important}
     .player-wrapper.controls-hidden .player-chrome-btn,
     .player-wrapper.controls-hidden .player-chrome-left,
-    .player-wrapper.controls-hidden .player-chrome-right{opacity:1!important;pointer-events:auto!important;visibility:visible!important}
+    .player-wrapper.controls-hidden .player-chrome-right{opacity:0!important;pointer-events:none!important;visibility:hidden!important}
     #playerLoading{pointer-events:none!important;z-index:5!important}
     #playGate{z-index:55!important}
 
@@ -2381,11 +2533,38 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .player-wrapper.controls-hidden .player-chrome-btn{opacity:0;pointer-events:none;transition:opacity .18s ease}
     .player-wrapper.controls-hidden movi-player::part(chrome),.player-wrapper.controls-hidden movi-player::part(controls),.player-wrapper.controls-hidden movi-player::part(bottom-controls),.player-wrapper.controls-hidden movi-player::part(progress-container),.player-wrapper.controls-hidden movi-player::part(progress),.player-wrapper.controls-hidden movi-player::part(seek),.player-wrapper.controls-hidden movi-player::part(control-bar),.player-wrapper.controls-hidden movi-player::part(bottom-bar){opacity:0!important;visibility:hidden!important;pointer-events:none!important}
     .player-wrapper .controls-toggle{position:absolute;z-index:2147483002;top:12px;right:12px;opacity:0!important;pointer-events:auto!important;visibility:visible!important;width:150px;height:44px;padding:8px 12px;border:0;background:transparent;color:transparent;font:600 13px system-ui;cursor:pointer}
+    
+    /* Hide/show controls on toggle */
+    .player-wrapper.controls-hidden .player-chrome-btn,
+    .player-wrapper.controls-hidden .player-chrome-left,
+    .player-wrapper.controls-hidden .player-chrome-right,
+    .player-wrapper.controls-hidden .player-pop{
+      opacity:0!important;pointer-events:none!important;visibility:hidden!important
+    }
+    .player-wrapper.controls-hidden movi-player::part(chrome),
+    .player-wrapper.controls-hidden movi-player::part(controls),
+    .player-wrapper.controls-hidden movi-player::part(bottom-controls),
+    .player-wrapper.controls-hidden movi-player::part(control-bar),
+    .player-wrapper.controls-hidden movi-player::part(progress-container){
+      opacity:0!important;visibility:hidden!important;pointer-events:none!important
+    }
+    .player-wrapper .controls-toggle{
+      position:absolute!important;z-index:80!important;top:10px!important;right:10px!important;
+      opacity:0.02!important;width:130px!important;height:40px!important;border:0!important;
+      background:transparent!important;color:transparent!important;cursor:pointer!important;
+      pointer-events:auto!important;visibility:visible!important
+    }
+    .player-wrapper.controls-hidden .controls-toggle{
+      opacity:1!important;color:#fff!important;background:rgba(8,8,14,.88)!important;
+      border:1px solid rgba(255,255,255,.22)!important;border-radius:10px!important;
+      font:700 12px system-ui!important;padding:8px 12px!important;width:auto!important;height:auto!important
+    }
+
     .player-wrapper.controls-hidden .player-pop{display:none!important}
     .player-wrapper .player-chrome-btn{transition:opacity .18s ease}
     .player-wrapper:fullscreen{width:100vw;height:100vh;aspect-ratio:auto;border-radius:0}
     .player-wrapper:fullscreen movi-player{width:100%;height:100%;object-fit:contain}
-    @media(max-width:520px){.pc-fit{top:58px}.pc-fullscreen{top:104px}}
+    
     .player-pop{position:absolute;z-index:12;min-width:160px;max-width:min(280px,86vw);background:rgba(10,10,20,.96);border:1px solid rgba(139,92,246,.35);border-radius:14px;padding:8px;box-shadow:0 12px 32px rgba(0,0,0,.55);display:none;flex-direction:column;gap:4px}
     .player-pop.open{display:flex}
     .player-pop.switch-pop{top:56px;left:12px}.player-pop.laptop-pop{top:56px;right:12px}
@@ -2599,8 +2778,39 @@ function showToast(msg) {
 (function setupPlayerChrome(){
   const wrapper = document.getElementById('playerWrapper');
   if (!wrapper || !moviPlayer) return;
-  wrapper.classList.remove('controls-hidden');
-  try { moviPlayer.setAttribute('controls', ''); } catch(_){}
+  let visible = true;
+  const toggle = document.getElementById('controlsToggle');
+  function setControlsVisible(on) {
+    visible = !!on;
+    wrapper.classList.toggle('controls-hidden', !visible);
+    try {
+      if (visible) moviPlayer.setAttribute('controls', '');
+      else moviPlayer.removeAttribute('controls');
+    } catch(_){}
+    if (toggle) {
+      toggle.textContent = visible ? 'Hide controls' : 'Show controls';
+      toggle.setAttribute('aria-label', visible ? 'Hide controls' : 'Show controls');
+    }
+    if (!visible) {
+      document.getElementById('switchPop')?.classList.remove('open');
+      document.getElementById('laptopPop')?.classList.remove('open');
+    }
+  }
+  setControlsVisible(true);
+  if (toggle) {
+    toggle.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      setControlsVisible(!visible);
+    });
+  }
+  wrapper.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!t) return;
+    if (t.closest && (t.closest('.player-chrome-btn') || t.closest('.player-pop') || t.closest('#controlsToggle') || t.closest('#playGate'))) return;
+    if (t === wrapper || t === moviPlayer || (t.tagName && String(t.tagName).toLowerCase() === 'movi-player')) {
+      setControlsVisible(!visible);
+    }
+  });
   const fit = document.getElementById('pcFitBtn');
   let fitMode = 'contain';
   if (fit) fit.addEventListener('click', (e) => {
@@ -2609,6 +2819,7 @@ function showToast(msg) {
     moviPlayer.classList.toggle('player-fit-cover', fitMode === 'cover');
     moviPlayer.classList.toggle('player-fit-contain', fitMode === 'contain');
     try { moviPlayer.style.objectFit = fitMode; } catch(_){}
+    fit.setAttribute('data-fit', fitMode);
     showToast(fitMode === 'cover' ? 'Fill' : 'Fit');
   });
   const fs = document.getElementById('pcFullscreenBtn');
@@ -2626,8 +2837,9 @@ function showToast(msg) {
   const retry = document.getElementById('pcRetryBtn');
   if (retry) retry.addEventListener('click', (e) => {
     e.preventDefault(); e.stopPropagation();
-    forceReloadPlayer();
+    if (typeof forceReloadPlayer === 'function') forceReloadPlayer();
   });
+  window.__setPlayerControlsVisible = setControlsVisible;
 })();
 
 let wasmLoading = false, wasmLoaded = false, wasmWired = false;
@@ -2945,7 +3157,7 @@ document.addEventListener('click', (e) => {
 (function bindAllPlayerControls(){
   try {
     const wrap = document.getElementById('playerWrapper');
-    if (wrap) wrap.classList.remove('controls-hidden');
+    /* visibility managed by setControlsVisible */
     // Switch
     const sw = document.getElementById('pcSwitchBtn');
     const swPop = document.getElementById('switchPop');
