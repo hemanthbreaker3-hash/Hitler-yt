@@ -261,7 +261,9 @@
     // Skip auto-redirect if user already chose a quality (?stay=1) or came from back
     const params = new URLSearchParams(window.location.search);
     const skip = params.get('stay') === '1' || params.get('noredir') === '1';
-    if (!skip && dest) {
+    const watchGroupCount = document.querySelectorAll('.groups-list[data-box=\"watch\"] .group-block').length;
+    // Keep the catalog page interactive when there are multiple groups/seasons.
+    if (!skip && dest && watchGroupCount <= 1) {
       window.location.replace(dest);
     } else {
       const banner = document.getElementById('autoOpenBanner');
@@ -277,65 +279,57 @@
     var selector=document.getElementById('seasonSelector');
     if(!list||!selector) return;
     var blocks=Array.prototype.slice.call(list.querySelectorAll('.group-block'));
-    var parsed=[];
-    var nonEpisode=[];
+    if(blocks.length<=1) return; // Preserve the existing single-group behavior.
+    var parsed=[], nonEpisode=[];
     function parseEpisode(name){
       name=String(name||'').trim();
-      var m=name.match(/\bS(?:eason\s*)?0*(\d{1,3})\s*[-_. ]*E(?:pisode\s*)?0*(\d{1,4})\b/i)
-        || name.match(/\bSeason\s*0*(\d{1,3})\s*(?:[-_. ]*)?(?:Episode|Ep)\s*0*(\d{1,4})\b/i)
-        || name.match(/\b0*(\d{1,3})\s*[xX]\s*0*(\d{1,4})\b/i)
-        || name.match(/\bSeason\s*0*(\d{1,3})\b.*?\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i);
-      if(!m) return null;
-      return {season:Number(m[1]),episode:Number(m[2])};
+      var patterns=[
+        /\bS0*(\d{1,3})\s*[-_. ]*E0*(\d{1,4})\b/i,
+        /\bSeason\s*0*(\d{1,3})\s*(?:[-_. ]*)?(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
+        /\b0*(\d{1,3})\s*[xX]\s*0*(\d{1,4})\b/i,
+        /\bS0*(\d{1,3})[ ._-]+(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
+        /\bSeason\s*0*(\d{1,3})\b.*?\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i,
+        /\b(?:S|Season)\s*0*(\d{1,3})\b.*?\b(?:E|Episode|Ep)\s*0*(\d{1,4})\b/i
+      ];
+      for(var i=0;i<patterns.length;i++){var m=name.match(patterns[i]);if(m)return {season:Number(m[1]),episode:Number(m[2])};}
+      return null;
     }
     blocks.forEach(function(block){
       var name=block.getAttribute('data-group-name')||block.querySelector('h3')?.textContent||'';
       var ep=parseEpisode(name);
       if(ep && Number.isFinite(ep.season) && Number.isFinite(ep.episode)){
-        block.dataset.season=String(ep.season); block.dataset.episode=String(ep.episode);
+        block.dataset.season=String(ep.season);block.dataset.episode=String(ep.episode);
         parsed.push({block:block,season:ep.season,episode:ep.episode,name:name});
       } else nonEpisode.push(block);
     });
-    if(!parsed.length) return;
-    parsed.sort(function(a,b){return a.season-b.season || a.episode-b.episode;});
-    // Combine duplicate season/episode groups into one episode card, retaining all unique links.
-    var merged=[];
-    parsed.forEach(function(item){
-      var key=item.season+'-'+item.episode;
-      var existing=merged.find(function(x){return x.key===key;});
-      if(!existing){existing={key:key,season:item.season,episode:item.episode,block:item.block};merged.push(existing);return;}
-      var target=existing.block.querySelector('.tools');
-      var source=item.block.querySelector('.tools');
-      if(target&&source){
-        Array.prototype.slice.call(source.querySelectorAll('a')).forEach(function(a){
+    var watchPager=document.querySelector('.groups-pager[data-box="watch"]');
+    if(parsed.length){
+      parsed.sort(function(a,b){return a.season-b.season||a.episode-b.episode;});
+      var merged=[];
+      parsed.forEach(function(item){
+        var key=item.season+'-'+item.episode,existing=merged.find(function(x){return x.key===key;});
+        if(!existing){merged.push({key:key,season:item.season,episode:item.episode,block:item.block});return;}
+        var target=existing.block.querySelector('.tools'),source=item.block.querySelector('.tools');
+        if(target&&source)Array.prototype.slice.call(source.querySelectorAll('a')).forEach(function(a){
           var raw=a.getAttribute('data-raw-url')||a.getAttribute('href')||'';
           var duplicate=Array.prototype.some.call(target.querySelectorAll('a'),function(old){return (old.getAttribute('data-raw-url')||old.getAttribute('href')||'')===raw;});
-          if(!duplicate) target.appendChild(a);
+          if(!duplicate)target.appendChild(a);
         });
-      }
-      item.block.remove();
-    });
-    // Preserve all links in their original order; do not detect or infer quality.
-    var seasonNumbers=Array.from(new Set(merged.map(function(x){return x.season;}))).sort(function(a,b){return a-b;});
-    selector.hidden=false;
-    var watchPager=document.querySelector('.groups-pager[data-box="watch"]');
-    if(watchPager) watchPager.style.display='none';
-    var selected=seasonNumbers[0];
-    seasonNumbers.forEach(function(season){
-      var count=merged.filter(function(x){return x.season===season;}).length;
-      var button=document.createElement('button'); button.type='button'; button.dataset.season=String(season);
-      button.innerHTML='Season '+season+' <span class="season-count">('+count+' episodes)</span>';
-      button.addEventListener('click',function(){selected=season;render();});
-      selector.appendChild(button);
-    });
-    function render(){
-      selector.querySelectorAll('button').forEach(function(b){b.classList.toggle('active',Number(b.dataset.season)===selected);});
-      nonEpisode.forEach(function(block){block.style.display='';});
-      merged.forEach(function(item){item.block.style.display=item.season===selected?'':'none';});
-      // DOM order is always season/episode ascending, independent of admin input order.
-      merged.forEach(function(item){list.appendChild(item.block);});
+        item.block.remove();
+      });
+      var seasons=Array.from(new Set(merged.map(function(x){return x.season;}))).sort(function(a,b){return a-b;});
+      selector.hidden=false;if(watchPager)watchPager.style.display='none';
+      var selected=seasons[0];
+      seasons.forEach(function(season){var count=merged.filter(function(x){return x.season===season;}).length;var b=document.createElement('button');b.type='button';b.dataset.season=String(season);b.textContent='Season '+season+' ('+count+' episodes)';b.addEventListener('click',function(){selected=season;render();});selector.appendChild(b);});
+      function render(){selector.querySelectorAll('button').forEach(function(b){b.classList.toggle('active',Number(b.dataset.season)===selected);});nonEpisode.forEach(function(b){b.style.display='';});merged.forEach(function(x){x.block.style.display=x.season===selected?'':'none';});merged.forEach(function(x){list.appendChild(x.block);});}
+      render();return;
     }
-    render();
+    // No S/E labels: offer an explicit group picker below the links heading.
+    if(nonEpisode.length>1){selector.hidden=false;selector.setAttribute('aria-label','Available groups');if(watchPager)watchPager.style.display='none';
+      var selected=0;nonEpisode.forEach(function(block,i){var b=document.createElement('button');b.type='button';b.dataset.group=String(i);b.textContent=(block.querySelector('h3')?.textContent||('Group '+(i+1))).trim();b.addEventListener('click',function(){selected=i;render();});selector.appendChild(b);});
+      function render(){selector.querySelectorAll('button').forEach(function(b){b.classList.toggle('active',Number(b.dataset.group)===selected);});nonEpisode.forEach(function(b,i){b.style.display=i===selected?'':'none';});}
+      render();
+    }
   })();
 
   // Groups pagination

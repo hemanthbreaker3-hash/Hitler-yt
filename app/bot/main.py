@@ -1486,6 +1486,15 @@ def register_handlers(bot):
         # admin text-input state here, in order, before falling through to t.me link
         # parsing. Two handlers registered on the same (overlapping) filter would mean
         # only the first ever fires — see _maybe_handle_bot_token_input's docstring.
+        # FIX: /fspanel replies (addfsub/delfsub/setfsub/addadmin/etc.) were being
+        # silently swallowed here because this handler never checked
+        # _awaiting_fspanel before falling through to the t.me-link parser below,
+        # which returns without replying on anything that isn't a t.me link. Admins
+        # sending a channel ID / @username / t.me link for FSub never reached
+        # fspanel_text_input because only the first matching handler on an
+        # overlapping filter runs. Delegate to it explicitly before anything else.
+        if raw_override is None and user.id in _awaiting_fspanel and _is_admin_user(user.id):
+            return await _fspanel_text_input_impl(client, message, user)
         if raw_override is None and await _maybe_handle_bot_token_input(client, message, user):
             return
         raw = (raw_override if raw_override is not None else (message.text or "")).strip()
@@ -2485,7 +2494,7 @@ def register_handlers(bot):
         filters.private
         & filters.text
         & ~filters.command([
-            "start", "cancel", "fspanel", "panel", "filestore",
+            "start", "fspanel", "panel", "filestore",
             "batch", "ss", "sv", "mi", "stats", "broadcast", "ban", "unban",
             "autodel", "del", "addgroups", "save", "link", "addbots", "shorteners",
             "search", "username", "password", "backendurl", "baseurl",
@@ -2499,10 +2508,16 @@ def register_handlers(bot):
         if not _is_admin_user(user.id):
             _awaiting_fspanel.pop(user.id, None)
             return
+        return await _fspanel_text_input_impl(client, message, user)
+
+    async def _fspanel_text_input_impl(client, message: Message, user):
         state = _awaiting_fspanel.pop(user.id, None)
         raw = (message.text or "").strip()
-        if not raw or raw.lower() in ("/cancel", "cancel"):
-            return await message.reply("Cancelled.")
+        if raw.lower() in ("/cancel", "cancel"):
+            return await message.reply("Cancelled. FSpanel input cleared.")
+        if not raw:
+            _awaiting_fspanel[user.id] = state
+            return await message.reply("Empty input. Please send a value or /cancel to abort.")
 
         runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
         now = datetime.datetime.utcnow()
@@ -2526,7 +2541,8 @@ def register_handlers(bot):
         if state == "addadmin":
             ids = parse_ids(raw)
             if not ids:
-                return await message.reply("❌ Send a valid numeric user ID.")
+                _awaiting_fspanel[user.id] = state
+                return await message.reply("❌ Send a valid numeric user ID, or /cancel.")
             cur = list(runtime.get("runtime_admins") or [])
             for i in ids:
                 if i not in cur:
@@ -2542,7 +2558,8 @@ def register_handlers(bot):
         if state == "deladmin":
             ids = set(parse_ids(raw))
             if not ids:
-                return await message.reply("❌ Send a valid numeric user ID.")
+                _awaiting_fspanel[user.id] = state
+                return await message.reply("❌ Send a valid numeric user ID, or /cancel.")
             if settings.OWNER_ID in ids:
                 return await message.reply("❌ Cannot remove the owner.")
             cur = [i for i in (runtime.get("runtime_admins") or []) if int(i) not in ids]
@@ -2576,7 +2593,8 @@ def register_handlers(bot):
         if state == "addfsub":
             ids = list(dict.fromkeys(parse_fsub_refs(raw)))
             if not ids:
-                return await message.reply("❌ Invalid chat reference. Send -100… ID, @username, or t.me link.")
+                _awaiting_fspanel[user.id] = state
+                return await message.reply("❌ Invalid chat reference. Send -100… ID, @username, or t.me link, or /cancel.")
             verified = []
             failures = []
             me = await client.get_me()
@@ -2592,7 +2610,8 @@ def register_handlers(bot):
                 except Exception as exc:
                     failures.append(f"{chat_ref}: {type(exc).__name__} — check the ID and bot access")
             if not verified:
-                return await message.reply("❌ No FSub chats were saved.\n" + "\n".join(failures[:8]))
+                _awaiting_fspanel[user.id] = state
+                return await message.reply("❌ No FSub chats were saved.\n" + "\n".join(failures[:8]) + "\nSend a corrected value or /cancel.")
             cur = [int(x) for x in (runtime.get("runtime_fsub") or []) if str(x).lstrip('-').isdigit()]
             for chat_id in verified:
                 if chat_id not in cur:
