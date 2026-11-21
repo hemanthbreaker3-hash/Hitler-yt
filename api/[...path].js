@@ -2797,48 +2797,25 @@ function showToast(msg) {
     }
   }
   setControlsVisible(true);
-  if (toggle) {
+  if (toggle && !toggle.dataset.boundToggle) {
+    toggle.dataset.boundToggle = '1';
     toggle.addEventListener('click', (e) => {
-      e.preventDefault(); e.stopPropagation();
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
       setControlsVisible(!visible);
     });
   }
-  wrapper.addEventListener('click', (e) => {
-    const t = e.target;
-    if (!t) return;
-    if (t.closest && (t.closest('.player-chrome-btn') || t.closest('.player-pop') || t.closest('#controlsToggle') || t.closest('#playGate'))) return;
-    if (t === wrapper || t === moviPlayer || (t.tagName && String(t.tagName).toLowerCase() === 'movi-player')) {
-      setControlsVisible(!visible);
-    }
-  });
-  const fit = document.getElementById('pcFitBtn');
-  let fitMode = 'contain';
-  if (fit) fit.addEventListener('click', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    fitMode = fitMode === 'contain' ? 'cover' : 'contain';
-    moviPlayer.classList.toggle('player-fit-cover', fitMode === 'cover');
-    moviPlayer.classList.toggle('player-fit-contain', fitMode === 'contain');
-    try { moviPlayer.style.objectFit = fitMode; } catch(_){}
-    fit.setAttribute('data-fit', fitMode);
-    showToast(fitMode === 'cover' ? 'Fill' : 'Fit');
-  });
-  const fs = document.getElementById('pcFullscreenBtn');
-  if (fs) fs.addEventListener('click', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    const active = document.fullscreenElement || document.webkitFullscreenElement;
-    if (!active) {
-      const req = wrapper.requestFullscreen || wrapper.webkitRequestFullscreen;
-      if (req) req.call(wrapper).catch(() => showToast('Fullscreen blocked'));
-    } else {
-      const exit = document.exitFullscreen || document.webkitExitFullscreen;
-      if (exit) exit.call(document);
-    }
-  });
-  const retry = document.getElementById('pcRetryBtn');
-  if (retry) retry.addEventListener('click', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    if (typeof forceReloadPlayer === 'function') forceReloadPlayer();
-  });
+  // Tap player surface (not buttons) toggles chrome
+  if (!wrapper.dataset.boundTap) {
+    wrapper.dataset.boundTap = '1';
+    wrapper.addEventListener('click', (e) => {
+      const t = e.target;
+      if (!t || !t.closest) return;
+      if (t.closest('.player-chrome-btn') || t.closest('.player-pop') || t.closest('#controlsToggle') || t.closest('#playGate')) return;
+      if (t === wrapper || t === moviPlayer || (t.tagName && String(t.tagName).toLowerCase() === 'movi-player')) {
+        setControlsVisible(!visible);
+      }
+    });
+  }
   window.__setPlayerControlsVisible = setControlsVisible;
 })();
 
@@ -3057,79 +3034,18 @@ function goToGroupButton(groupIdx, buttonIdx) {
   if (href) window.location.href = href;
 }
 
-(function setupSwitchPop() {
-  const btn = document.getElementById('pcSwitchBtn');
-  const pop = document.getElementById('switchPop');
-  const list = document.getElementById('switchPopList');
-  if (!btn || !pop || !list) return;
-  const g = WATCH_GROUPS[GROUP_INDEX];
-  if (!g || !g.buttons || !g.buttons.length) { btn.style.display = 'none'; return; }
-  list.innerHTML = '';
-  g.buttons.forEach((b, i) => {
-    const a = document.createElement('button');
-    a.type = 'button';
-    a.textContent = (b.name || ('Source ' + (i + 1))) + (i === BUTTON_INDEX ? ' ✓' : '');
-    a.addEventListener('click', () => {
-      pop.classList.remove('open');
-      if (i !== BUTTON_INDEX) goToGroupButton(GROUP_INDEX, i);
-    });
-    list.appendChild(a);
-  });
-  btn.addEventListener('click', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    document.getElementById('laptopPop')?.classList.remove('open');
-    pop.classList.toggle('open');
-  });
-})();
+/* setupSwitchPop moved to bindAllPlayerControls */
 
-(function setupLaptopPop() {
-  const btn = document.getElementById('pcLaptopBtn');
-  const pop = document.getElementById('laptopPop');
-  const list = document.getElementById('laptopPopList');
-  if (!btn || !pop || !list) return;
-  const items = [
-    ['MX Player', androidIntent(EXTERNAL_STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME)],
-    ['PLAYit', androidIntent(EXTERNAL_STREAM_URL, 'com.playit.videoplayer', INTENT_MIME)],
-    ['VLC', androidIntent(EXTERNAL_STREAM_URL, 'org.videolan.vlc', INTENT_MIME)],
-  ];
-  list.innerHTML = '';
-  items.forEach(([label, href]) => {
-    const a = document.createElement('a');
-    a.href = href;
-    a.textContent = label;
-    list.appendChild(a);
-  });
-  btn.addEventListener('click', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    document.getElementById('switchPop')?.classList.remove('open');
-    pop.classList.toggle('open');
-  });
-})();
 
-(function setupDownloadBtn() {
-  const btn = document.getElementById('pcDownloadBtn');
-  if (!btn) return;
-  btn.addEventListener('click', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    try {
-      const a = document.createElement('a');
-      a.href = DL_URL;
-      a.setAttribute('download', '');
-      a.rel = 'noopener';
-      a.target = '_blank';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      showToast('Download started');
-    } catch(_) {
-      window.open(DL_URL, '_blank');
-    }
-  });
-})();
+/* setupLaptopPop moved to bindAllPlayerControls */
+
+
+/* setupDownloadBtn moved to bindAllPlayerControls */
+
 
 document.addEventListener('click', (e) => {
   const t = e.target;
-  if (t && t.closest && (t.closest('#switchPop') || t.closest('#laptopPop') || t.closest('#pcSwitchBtn') || t.closest('#pcLaptopBtn') || t.closest('.player-chrome-btn'))) return;
+  if (t && t.closest && (t.closest('#switchPop') || t.closest('#laptopPop') || t.closest('#pcSwitchBtn') || t.closest('#pcLaptopBtn') || t.closest('.player-chrome-btn') || t.closest('#controlsToggle'))) return;
   document.getElementById('switchPop')?.classList.remove('open');
   document.getElementById('laptopPop')?.classList.remove('open');
 });
@@ -3182,9 +3098,10 @@ document.addEventListener('click', (e) => {
         });
       }
       sw.addEventListener('click', (e) => {
-        e.preventDefault(); e.stopPropagation();
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
         document.getElementById('laptopPop')?.classList.remove('open');
-        swPop.classList.toggle('open');
+        const open = !swPop.classList.contains('open');
+        swPop.classList.toggle('open', open);
       });
     }
     // Laptop
@@ -3204,9 +3121,10 @@ document.addEventListener('click', (e) => {
         });
       }
       lp.addEventListener('click', (e) => {
-        e.preventDefault(); e.stopPropagation();
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
         document.getElementById('switchPop')?.classList.remove('open');
-        lpPop.classList.toggle('open');
+        const open = !lpPop.classList.contains('open');
+        lpPop.classList.toggle('open', open);
       });
     }
     // Download
