@@ -1565,6 +1565,119 @@ def register_handlers(bot):
 
         match = re.search(r"https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))(?:\?.*)?$", raw)
         if not match:
+            # Admin sent a direct HTTP(S) download link -> check if alive, then return watch link
+            url_m = re.search(r'(https?://[^\s<>"]+)', raw)
+            if url_m and _is_admin_user(user.id) and "/title/" not in url_m.group(1):
+                dl_url = url_m.group(1).rstrip(".,;)")
+                status = await message.reply("🔎 Checking download link status…")
+                try:
+                    base_url = (
+                        (await get_watch_page_base_url())
+                        or (await get_active_cloudflare_url())
+                        or (await get_active_website_url())
+                        or settings.BASE_URL
+                        or settings.WEBSITE_URL
+                    )
+                    base_url = str(base_url or "").rstrip("/")
+                    if not base_url:
+                        return await status.edit_text("❌ No public website URL configured for watch links.")
+
+                    # Case A: Own /dl/<short_code> or /stream/<short_code> link
+                    own_m = re.search(r"/(?:dl|stream|watch)/([A-Za-z0-9_-]{3,64})(?:[/?#]|$)", dl_url, re.I)
+                    if own_m:
+                        sc = own_m.group(1)
+                        rec = await files_col.find_one({"short_code": sc})
+                        if not rec:
+                            return await status.edit_text("❌ **Download link is dead** (file not found). Watch link is also dead.")
+                        ext = rec.get("external_url")
+                        if ext:
+                            async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as hc:
+                                pr = await hc.head(ext)
+                                if pr.status_code in (403, 405):
+                                    pr = await hc.get(ext, headers={"Range": "bytes=0-0"})
+                                if pr.status_code >= 400:
+                                    return await status.edit_text(
+                                        f"❌ **Download link is dead** (HTTP `{pr.status_code}`).\nWatch link is also dead."
+                                    )
+                        watch_url = f"{base_url}/watch/{sc}"
+                        return await status.edit_text(
+                            f"✅ **Download link is working!**\n\n"
+                            f"📁 File: `{rec.get('filename') or 'Media'}`\n"
+                            f"▶️ **Watch Link:** <code>{html.escape(watch_url)}</code>",
+                            parse_mode=ParseMode.HTML,
+                            disable_web_page_preview=True,
+                        )
+
+                    # Case B: External direct download URL
+                    import urllib.parse as _up
+                    async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as hc:
+                        resp = await hc.head(dl_url)
+                        if resp.status_code in (403, 405, 501) or not resp.headers.get("content-length"):
+                            async with hc.stream("GET", dl_url, headers={"Range": "bytes=0-0"}) as gresp:
+                                st_code = gresp.status_code
+                                hdrs = dict(gresp.headers)
+                        else:
+                            st_code = resp.status_code
+                            hdrs = dict(resp.headers)
+
+                    ctype = str(hdrs.get("content-type") or "").split(";")[0].strip().lower()
+                    if st_code >= 400 or ctype.startswith("text/html"):
+                        reason = f"HTTP {st_code}" if st_code >= 400 else "URL returned an HTML page instead of a media file"
+                        return await status.edit_text(
+                            f"❌ **Download link is dead / invalid** ({reason}).\nWatch link cannot be created."
+                        )
+
+                    cd = hdrs.get("content-disposition") or ""
+                    fn_m = re.search(r'filename\*?=(?:UTF-8'')?"?([^";\r\n]+)"?', cd, re.I)
+                    if fn_m:
+                        fname = _up.unquote(fn_m.group(1).strip())
+                    else:
+                        path_part = _up.unquote(_up.urlparse(dl_url).path.rstrip("/").split("/")[-1])
+                        fname = path_part or "video.mp4"
+                    mime = ctype or mimetypes.guess_type(fname)[0] or "video/mp4"
+                    cr = hdrs.get("content-range") or ""
+                    cr_m = re.search(r"/(\d+)$", cr)
+                    fsize = int(cr_m.group(1)) if cr_m else int(hdrs.get("content-length") or 0)
+
+                    existing = await files_col.find_one({"external_url": dl_url})
+                    if existing and existing.get("short_code"):
+                        sc = existing["short_code"]
+                        await files_col.update_one(
+                            {"_id": existing["_id"]},
+                            {"$set": {"filename": fname, "mime_type": mime, "file_size": fsize}},
+                        )
+                    else:
+                        sc = generate_short_code()
+                        await files_col.insert_one({
+                            "file_id": f"ext_{sc}",
+                            "file_unique_id": f"ext_{sc}",
+                            "filename": fname,
+                            "mime_type": mime,
+                            "file_size": fsize,
+                            "uploader_id": user.id,
+                            "created_at": datetime.datetime.utcnow(),
+                            "expiry_time": None,
+                            "access_count": 0,
+                            "short_code": sc,
+                            "chat_id": 0,
+                            "message_id": 0,
+                            "external_url": dl_url,
+                        })
+                    watch_url = f"{base_url}/watch/{sc}"
+                    size_str = format_bytes(fsize) if fsize else "Unknown"
+                    return await status.edit_text(
+                        f"✅ **Download link is working!**\n\n"
+                        f"📁 File: `{html.escape(fname)}`\n"
+                        f"📦 Size: `{size_str}`\n"
+                        f"▶️ **Watch Link:** <code>{html.escape(watch_url)}</code>\n\n"
+                        f"<i>Note: Watch link stays synced — if the download link dies, watch will also stop working.</i>",
+                        parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=True,
+                    )
+                except Exception as exc:
+                    return await status.edit_text(
+                        f"❌ **Download link is dead / unreachable** (`{type(exc).__name__}`).\nWatch link is also dead."
+                    )
             return
         if not _is_admin_user(user.id) and not await is_access_allowed(user.id):
             return await message.reply("🔒 This bot is restricted by the administrator.")

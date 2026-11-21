@@ -4651,6 +4651,27 @@ export default async function handler(req, res) {
         sendJson(res, 404, { detail: 'Link not found' });
         return;
       }
+      if (fileData.external_url) {
+        try {
+          let pr = await fetch(fileData.external_url, { method: 'HEAD', redirect: 'follow', signal: AbortSignal.timeout(6000) });
+          if (pr.status === 403 || pr.status === 405 || pr.status === 501) {
+            pr = await fetch(fileData.external_url, { method: 'GET', headers: { Range: 'bytes=0-0' }, redirect: 'follow', signal: AbortSignal.timeout(6000) });
+          }
+          if (!pr.ok) {
+            sendHtml(res, 410, renderBaseLayout({
+              title: 'Watch Link Dead',
+              content: '<div class="page-hero"><h1>Watch Link Dead</h1><p>The source download link for this file is offline or removed (HTTP ' + pr.status + ').</p></div>',
+            }));
+            return;
+          }
+        } catch (_) {
+          sendHtml(res, 410, renderBaseLayout({
+            title: 'Watch Link Dead',
+            content: '<div class="page-hero"><h1>Watch Link Dead</h1><p>The source download link for this file is unreachable.</p></div>',
+          }));
+          return;
+        }
+      }
 
       // Title context for prev/next, switch, related groups (works on Vercel website)
       // Use searchParams from getRequestPath — NOT a missing `url` variable.

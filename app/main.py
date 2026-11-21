@@ -411,6 +411,60 @@ async def stream_file(request: Request, short_code: str, extra_name: str = ""):
     file_data = await files_col.find_one({"short_code": short_code})
     if not file_data:
         raise HTTPException(status_code=404, detail="File not found")
+    ext_url = file_data.get("external_url")
+    if ext_url:
+        import httpx as _httpx
+        from starlette.responses import StreamingResponse
+        from starlette.background import BackgroundTask
+        req_headers = {}
+        if request.headers.get("range"):
+            req_headers["Range"] = request.headers["range"]
+        _client = _httpx.AsyncClient(follow_redirects=True, timeout=30.0)
+        try:
+            _req = _client.build_request(request.method, ext_url, headers=req_headers)
+            _resp = await _client.send(_req, stream=True)
+            if _resp.status_code >= 400:
+                await _resp.aclose()
+                await _client.aclose()
+                raise HTTPException(status_code=410, detail="Download link is dead")
+            resp_headers = {}
+            for _h in ("content-type", "content-length", "content-range", "accept-ranges", "content-disposition"):
+                if _resp.headers.get(_h):
+                    resp_headers[_h] = _resp.headers[_h]
+            if "accept-ranges" not in resp_headers:
+                resp_headers["accept-ranges"] = "bytes"
+            async def _cleanup():
+                await _resp.aclose()
+                await _client.aclose()
+            return StreamingResponse(
+                _resp.aiter_bytes(chunk_size=131072),
+                status_code=_resp.status_code,
+                headers=resp_headers,
+                media_type=resp_headers.get("content-type") or file_data.get("mime_type") or "video/mp4",
+                background=BackgroundTask(_cleanup),
+            )
+        except HTTPException:
+            raise
+        except Exception as _exc:
+            await _client.aclose()
+            raise HTTPException(status_code=410, detail="Download link is dead or unreachable") from _exc
+    ext_url = file_data.get("external_url")
+    if ext_url:
+        import httpx as _httpx
+        try:
+            async with _httpx.AsyncClient(follow_redirects=True, timeout=6.0) as _hc:
+                _r = await _hc.head(ext_url)
+                if _r.status_code in (403, 405, 501):
+                    async with _hc.stream("GET", ext_url, headers={"Range": "bytes=0-0"}) as _gr:
+                        _st = _gr.status_code
+                else:
+                    _st = _r.status_code
+                if _st >= 400:
+                    raise HTTPException(status_code=410, detail="Watch link is dead (source download link is offline)")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=410, detail="Watch link is dead (source download link is unreachable)")
 
     # Views are counted only when playback starts via /api/views/{short_code}.
     # Stream, HEAD and byte-range requests are intentionally not counted.
