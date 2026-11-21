@@ -24,7 +24,7 @@
       --muted:#9aa3b5;
       --accent:#8b5cf6;
       --accent-2:#22d3ee;
-      --gold:#e4bd82;
+      --green:#22c55e;--red:#ef4444;--rgb:linear-gradient(135deg,#3b82f6,#8b5cf6,#ef4444,#22c55e);
       --accent-soft:rgba(139,92,246,.16);
       --danger:#fb7185;
       --radius:16px;
@@ -187,7 +187,7 @@
     .poster-card .badge-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
     .poster-card .badge{font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;letter-spacing:.03em}
     .poster-card .badge-genre{background:linear-gradient(130deg,var(--accent),var(--accent-2));color:#061019}
-    .poster-card .badge-rating{background:rgba(228,189,130,.14);color:var(--gold);border:1px solid rgba(228,189,130,.28)}
+    .poster-card .badge-rating{background:rgba(34,197,94,.16);color:#4ade80;border:1px solid rgba(34,197,94,.35)}
     .poster-card .info{padding:11px 12px 13px;display:flex;flex-direction:column;gap:3px;flex:1}
     .poster-card .title{
       font-family:var(--font-display);font-weight:700;font-size:clamp(13px,2.2vw,15px);line-height:1.28;
@@ -251,10 +251,22 @@
     }
     @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 
+
+    /* Dynamic latest-day portrait background */
+    #bg-portrait-wrap{position:fixed;inset:0;z-index:-2;pointer-events:none;overflow:hidden;background:#07090e}
+    .bg-portrait-layer{position:absolute;inset:0;background-size:cover;background-position:center 18%;opacity:0;transition:opacity 1.2s ease;filter:blur(2px) saturate(1.18);transform:scale(1.03)}
+    .bg-portrait-layer.active{opacity:.24}
+    #bg-portrait-scrim{position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(ellipse 75% 45% at 15% 0%,rgba(139,92,246,.22),transparent 60%),radial-gradient(ellipse 65% 40% at 88% 10%,rgba(59,130,246,.18),transparent 58%),radial-gradient(ellipse 60% 40% at 50% 100%,rgba(239,68,68,.12),transparent 60%),linear-gradient(180deg,rgba(7,9,14,.76),rgba(7,9,14,.88) 55%,rgba(7,9,14,.96))}
+
     {% block head %}{% endblock %}
   </style>
 </head>
 <body>
+  <div id="bg-portrait-wrap" aria-hidden="true">
+    <div class="bg-portrait-layer" id="bgLayerA"></div>
+    <div class="bg-portrait-layer" id="bgLayerB"></div>
+  </div>
+  <div id="bg-portrait-scrim" aria-hidden="true"></div>
   <header class="topbar">
     <div class="topbar-inner">
       <a class="topbar-logo" href="/" title="{{ BRANDING }} Home">
@@ -276,5 +288,66 @@
   <footer class="footer wrap">
     <strong>{{ BRANDING }}</strong> · Stream &amp; download with speed and clarity
   </footer>
+<script>
+(function initLatestPortraitBackground(){
+  const layerA = document.getElementById('bgLayerA');
+  const layerB = document.getElementById('bgLayerB');
+  if (!layerA || !layerB) return;
+  const toPoster = (p) => {
+    if (!p) return '';
+    return String(p).startsWith('http') ? p : ('https://image.tmdb.org/t/p/w780' + p);
+  };
+  const dayOf = (item) => {
+    const raw = item && (item.created_at || item.updated_at || item.published_at || '');
+    const m = String(raw).match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : '';
+  };
+  function startRotation(items) {
+    if (!Array.isArray(items) || !items.length) return;
+    const withPoster = items.filter(x => x && x.poster_path);
+    if (!withPoster.length) return;
+    const days = withPoster.map(dayOf).filter(Boolean).sort().reverse();
+    let pool = withPoster;
+    if (days.length) {
+      const latestDay = days[0];
+      const sameDay = withPoster.filter(x => dayOf(x) === latestDay);
+      if (sameDay.length) pool = sameDay;
+    } else {
+      pool = withPoster.slice(0, 6);
+    }
+    const urls = [...new Set(pool.map(x => toPoster(x.poster_path)).filter(Boolean))];
+    if (!urls.length) return;
+    let useA = true;
+    let lastUrl = '';
+    const showNext = () => {
+      let pick = urls[0];
+      if (urls.length > 1) {
+        const candidates = urls.filter(u => u !== lastUrl);
+        pick = candidates[Math.floor(Math.random() * candidates.length)] || urls[0];
+      }
+      lastUrl = pick;
+      const active = useA ? layerA : layerB;
+      const other = useA ? layerB : layerA;
+      active.style.backgroundImage = 'url("' + pick.replace(/"/g, '\"') + '")';
+      active.classList.add('active');
+      other.classList.remove('active');
+      useA = !useA;
+    };
+    showNext();
+    if (urls.length > 1) setInterval(showNext, 6000);
+  }
+  if (Array.isArray(window.__INITIAL_CATALOG__) && window.__INITIAL_CATALOG__.length) {
+    startRotation(window.__INITIAL_CATALOG__);
+  } else {
+    fetch('/api/catalog', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        const list = d && (Array.isArray(d.items) ? d.items : (Array.isArray(d) ? d : []));
+        if (list && list.length) startRotation(list);
+      })
+      .catch(() => {});
+  }
+})();
+</script>
 </body>
 </html>

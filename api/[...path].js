@@ -669,7 +669,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
       --bg:#07090e;--bg-elevated:#0e121b;--bg-card:#121722;--bg-card-hover:#181f2e;
       --line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.16);
       --text:#f5f6fa;--muted:#9aa3b5;--accent:#8b5cf6;--accent-2:#22d3ee;
-      --gold:#e4bd82;--accent-soft:rgba(139,92,246,.16);--cyan:#22d3ee;--prime:#f5c518;--danger:#fb7185;
+      --green:#22c55e;--red:#ef4444;--accent-soft:rgba(139,92,246,.16);--cyan:#22d3ee;--prime:#22c55e;--danger:#fb7185;
       --radius:16px;--radius-sm:10px;--shadow:0 20px 50px rgba(0,0,0,.48);
       --font:"DM Sans",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
       --font-display:"Outfit","DM Sans",system-ui,sans-serif;--max:1340px;--pad:4vw;
@@ -736,7 +736,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     .poster-card .badge-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
     .poster-card .badge{font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;letter-spacing:.03em}
     .poster-card .badge-genre{background:linear-gradient(130deg,var(--accent),var(--accent-2));color:#061019}
-    .poster-card .badge-rating{background:rgba(228,189,130,.14);color:var(--gold);border:1px solid rgba(228,189,130,.28)}
+    .poster-card .badge-rating{background:rgba(34,197,94,.16);color:#4ade80;border:1px solid rgba(34,197,94,.35)}
     .poster-card .info{padding:11px 12px 13px;display:flex;flex-direction:column;gap:3px;flex:1}
     .poster-card .title{font-family:var(--font-display);font-weight:700;font-size:clamp(13px,2.2vw,15px);line-height:1.28;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
     .poster-card .meta{font-size:12px;color:var(--muted);line-height:1.3}
@@ -758,10 +758,19 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
       .wrap,.topbar-inner{width:min(100% - 20px,var(--max))}
       .topbar-links a{padding:7px 11px;font-size:11px}.brand-word{font-size:.82rem;letter-spacing:.14em}.brand-mark{width:24px;height:32px}
     }
+    #bg-portrait-wrap{position:fixed;inset:0;z-index:-2;pointer-events:none;overflow:hidden;background:#07090e}
+    .bg-portrait-layer{position:absolute;inset:0;background-size:cover;background-position:center 18%;opacity:0;transition:opacity 1.2s ease;filter:blur(2px) saturate(1.18);transform:scale(1.03)}
+    .bg-portrait-layer.active{opacity:.24}
+    #bg-portrait-scrim{position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(ellipse 75% 45% at 15% 0%,rgba(139,92,246,.22),transparent 60%),radial-gradient(ellipse 65% 40% at 88% 10%,rgba(59,130,246,.18),transparent 58%),radial-gradient(ellipse 60% 40% at 50% 100%,rgba(239,68,68,.12),transparent 60%),linear-gradient(180deg,rgba(7,9,14,.76),rgba(7,9,14,.88) 55%,rgba(7,9,14,.96))}
   </style>
   ${headExtra}
 </head>
 <body>
+<div id="bg-portrait-wrap" aria-hidden="true">
+  <div class="bg-portrait-layer" id="bgLayerA"></div>
+  <div class="bg-portrait-layer" id="bgLayerB"></div>
+</div>
+<div id="bg-portrait-scrim" aria-hidden="true"></div>
 <header class="topbar">
   <div class="topbar-inner">
     <a class="topbar-logo" href="/" title="HITLER YT Home">
@@ -780,6 +789,63 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
 </header>
 <main class="wrap">${content}</main>
 <footer class="footer wrap"><strong>HITLER YT</strong> · Stream &amp; download with speed and clarity</footer>
+<script>
+(function initLatestPortraitBackground(){
+  const layerA = document.getElementById('bgLayerA');
+  const layerB = document.getElementById('bgLayerB');
+  if (!layerA || !layerB) return;
+  const toPoster = (p) => (!p ? '' : (String(p).startsWith('http') ? p : ('https://image.tmdb.org/t/p/w780' + p)));
+  const dayOf = (item) => {
+    const raw = item && (item.created_at || item.updated_at || item.published_at || '');
+    const m = String(raw).match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : '';
+  };
+  function startRotation(items) {
+    if (!Array.isArray(items) || !items.length) return;
+    const withPoster = items.filter(x => x && x.poster_path);
+    if (!withPoster.length) return;
+    const days = withPoster.map(dayOf).filter(Boolean).sort().reverse();
+    let pool = withPoster;
+    if (days.length) {
+      const latestDay = days[0];
+      const sameDay = withPoster.filter(x => dayOf(x) === latestDay);
+      if (sameDay.length) pool = sameDay;
+    } else {
+      pool = withPoster.slice(0, 6);
+    }
+    const urls = [...new Set(pool.map(x => toPoster(x.poster_path)).filter(Boolean))];
+    if (!urls.length) return;
+    let useA = true, lastUrl = '';
+    const showNext = () => {
+      let pick = urls[0];
+      if (urls.length > 1) {
+        const candidates = urls.filter(u => u !== lastUrl);
+        pick = candidates[Math.floor(Math.random() * candidates.length)] || urls[0];
+      }
+      lastUrl = pick;
+      const active = useA ? layerA : layerB;
+      const other = useA ? layerB : layerA;
+      active.style.backgroundImage = 'url("' + pick.replace(/"/g, '\\"') + '")';
+      active.classList.add('active');
+      other.classList.remove('active');
+      useA = !useA;
+    };
+    showNext();
+    if (urls.length > 1) setInterval(showNext, 6000);
+  }
+  if (Array.isArray(window.__INITIAL_CATALOG__) && window.__INITIAL_CATALOG__.length) {
+    startRotation(window.__INITIAL_CATALOG__);
+  } else {
+    fetch('/api/catalog', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        const list = d && (Array.isArray(d.items) ? d.items : (Array.isArray(d) ? d : []));
+        if (list && list.length) startRotation(list);
+      })
+      .catch(() => {});
+  }
+})();
+</script>
 </body>
 </html>`;
 }
@@ -2389,8 +2455,8 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
       pointer-events:none!important;transform:none!important;
     }
     .player-chrome-btn:hover{
-      background:rgba(216,179,106,.28)!important;
-      border-color:rgba(216,179,106,.55)!important;
+      background:rgba(139,92,246,.28)!important;
+      border-color:rgba(139,92,246,.55)!important;
       transform:none!important;
     }
     .player-chrome-btn:active{transform:scale(.96)!important}
@@ -2406,7 +2472,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
       max-height:min(50vh,320px)!important;
       overflow:auto!important;
       background:rgba(10,10,16,.98)!important;
-      border:1px solid rgba(216,179,106,.28)!important;
+      border:1px solid rgba(139,92,246,.28)!important;
       border-radius:12px!important;
       padding:6px!important;
       display:none!important;
@@ -2425,7 +2491,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
       padding:9px 11px!important;border-radius:8px!important;
       font:600 12px/1.3 system-ui!important;cursor:pointer!important;text-decoration:none!important;
     }
-    .player-pop button:hover,.player-pop a:hover{background:rgba(216,179,106,.14)!important}
+    .player-pop button:hover,.player-pop a:hover{background:rgba(139,92,246,.14)!important}
     .player-pop .pop-title{font-size:10px!important;color:#9a9aab!important;padding:4px 10px 6px!important;text-transform:uppercase!important;letter-spacing:.05em!important}
     .controls-toggle{
       position:absolute!important;z-index:35!important;
@@ -2490,10 +2556,10 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
       z-index:61!important;line-height:0!important;flex:0 0 auto!important
     }
     .player-chrome-btn svg{width:16px!important;height:16px!important;pointer-events:none!important}
-    .player-chrome-btn:hover{background:rgba(216,179,106,.25)!important;border-color:rgba(216,179,106,.55)!important}
+    .player-chrome-btn:hover{background:rgba(139,92,246,.25)!important;border-color:rgba(139,92,246,.55)!important}
     .player-pop{
       position:absolute!important;z-index:70!important;min-width:150px!important;max-width:min(260px,90vw)!important;
-      background:rgba(10,10,16,.98)!important;border:1px solid rgba(216,179,106,.3)!important;
+      background:rgba(10,10,16,.98)!important;border:1px solid rgba(139,92,246,.3)!important;
       border-radius:12px!important;padding:6px!important;display:none;flex-direction:column!important;gap:2px!important;
       box-shadow:0 12px 28px rgba(0,0,0,.55)!important;pointer-events:auto!important
     }
@@ -2512,7 +2578,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .player-pop.switch-pop{top:48px!important;left:10px!important}
     .player-pop.laptop-pop{top:48px!important;right:10px!important}
 .player-chrome-btn{position:absolute;z-index:50;pointer-events:auto!important;touch-action:manipulation;width:40px;height:40px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(6,6,12,.82);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px);padding:0;line-height:0}
-    .player-chrome-btn:hover{background:rgba(255,106,0,.25);border-color:rgba(139,92,246,.55)}
+    .player-chrome-btn:hover{background:rgba(139,92,246,.25);border-color:rgba(139,92,246,.55)}
     .player-chrome-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 
     .player-wrapper.controls-hidden .player-chrome-btn{opacity:0;pointer-events:none;transition:opacity .18s ease}
@@ -2565,7 +2631,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .nav-row .tg-btn{background:linear-gradient(135deg,#0ea5e9,#2563eb);border:0;color:#fff;border-radius:12px;padding:10px 16px;font:700 13px system-ui;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
     .info{padding:18px 16px}
     .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;color:var(--muted);font-size:13px}
-    .meta span{background:rgba(139,92,246,.08);border:1px solid rgba(255,106,0,.2);padding:3px 10px;border-radius:20px;font-size:12px}
+    .meta span{background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);padding:3px 10px;border-radius:20px;font-size:12px}
     .tools{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
     .player-panel{display:block}
     .player-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px}
@@ -2618,6 +2684,28 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .related-pager button{background:#141b28;border-color:rgba(148,163,184,.18)}.related-pager button.active{background:linear-gradient(120deg,#7c3aed,#22d3ee);color:#071018}
     @media(max-width:520px){.related-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.related-groups{padding:12px!important}.player-shell{border-radius:14px}.player-box{border-radius:12px}}
     @media(min-width:900px){.watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}.side{align-self:start;position:sticky;top:72px}}
+
+    /* Clean RGB / Blue / Purple / Red / Green player accents & all-mode fixes */
+    .player-shell{background:linear-gradient(135deg,#3b82f6,#8b5cf6,#ef4444,#22c55e)!important;padding:2px!important}
+    .player-chrome-btn{background:rgba(8,10,18,.88)!important;border:1px solid rgba(139,92,246,.38)!important;color:#f8fafc!important}
+    .pc-switch{border-color:rgba(139,92,246,.6)!important;color:#c4b5fd!important}
+    .pc-laptop{border-color:rgba(59,130,246,.6)!important;color:#93c5fd!important}
+    .pc-download{border-color:rgba(34,197,94,.6)!important;color:#86efac!important}
+    .pc-fit{border-color:rgba(168,85,247,.6)!important;color:#d8b4fe!important}
+    .pc-retry{border-color:rgba(239,68,68,.6)!important;color:#fca5a5!important}
+    .pc-fullscreen{border-color:rgba(59,130,246,.7)!important;color:#fff!important;box-shadow:0 0 10px rgba(59,130,246,.28)!important}
+    .player-chrome-btn:hover{transform:scale(1.06)!important;box-shadow:0 0 14px rgba(139,92,246,.45)!important}
+    movi-player.player-fit-cover,movi-player.player-fit-cover::part(video){object-fit:cover!important;width:100%!important;height:100%!important}
+    movi-player.player-fit-contain,movi-player.player-fit-contain::part(video){object-fit:contain!important;width:100%!important;height:100%!important}
+    @media (orientation: landscape) and (max-height: 620px){
+      .player-wrapper{max-height:calc(100dvh - 18px)!important;width:100%!important;aspect-ratio:16/9}
+      .player-chrome-left{top:max(8px,env(safe-area-inset-top))!important;left:max(8px,env(safe-area-inset-left))!important}
+      .player-chrome-right{top:max(8px,env(safe-area-inset-top))!important;right:max(8px,env(safe-area-inset-right))!important}
+      .player-chrome-btn{width:34px!important;height:34px!important;min-width:34px!important;max-width:34px!important}
+    }
+    #playerWrapper:fullscreen .player-chrome-left,#playerWrapper:-webkit-full-screen .player-chrome-left{top:max(12px,env(safe-area-inset-top))!important;left:max(12px,env(safe-area-inset-left))!important}
+    #playerWrapper:fullscreen .player-chrome-right,#playerWrapper:-webkit-full-screen .player-chrome-right{top:max(12px,env(safe-area-inset-top))!important;right:max(12px,env(safe-area-inset-right))!important}
+
   </style>`;
 
   // Episodes / Seasons UI lives in the right side panel (sideEpList + season filter)
@@ -3177,7 +3265,13 @@ document.addEventListener('click', (e) => {
         if (mp) {
           mp.classList.toggle('player-fit-cover', mode === 'cover');
           mp.classList.toggle('player-fit-contain', mode === 'contain');
-          try { mp.style.setProperty('--movi-object-fit', mode); } catch(_){}
+          try {
+            mp.style.setProperty('--movi-object-fit', mode);
+            mp.style.objectFit = mode;
+            if (mp.shadowRoot) {
+              mp.shadowRoot.querySelectorAll('video, canvas').forEach(v => { v.style.objectFit = mode; });
+            }
+          } catch(_){}
         }
         fit.setAttribute('data-fit', mode);
         fit.setAttribute('aria-pressed', String(mode === 'cover'));
@@ -3253,6 +3347,9 @@ document.addEventListener('click', (e) => {
       const isFull = !!fs;
       fsBtn.setAttribute('aria-pressed', String(isFull));
       fsBtn.title = isFull ? 'Exit fullscreen' : 'Fullscreen';
+      fsBtn.innerHTML = isFull
+        ? '<svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M20 15h-5v5M4 15h5v5"/></svg>'
+        : '<svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>';
     }
   }
   document.addEventListener('fullscreenchange', sync);
