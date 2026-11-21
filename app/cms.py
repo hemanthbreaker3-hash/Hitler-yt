@@ -180,7 +180,11 @@ async def get_settings():
 async def seed_categories():
     await pages.create_index('slug', unique=True)
     await categories.create_index('slug', unique=True)
-    for name, slug in [('Movies', 'movies'), ('Web Series', 'web-series')]:
+    defaults = [
+        ('Movies', 'movies'),
+        ('Series', 'series'),
+    ]
+    for name, slug in defaults:
         await categories.update_one(
             {'slug': slug},
             {'$setOnInsert': {'name': name, 'slug': slug, 'created_at': datetime.now(timezone.utc)}},
@@ -206,14 +210,14 @@ async def public_categories():
         if not items:
             items = [
                 {'name': 'Movies', 'slug': 'movies'},
-                {'name': 'Web Series', 'slug': 'web-series'},
+                {'name': 'Series', 'slug': 'series'},
             ]
         return {'items': items}
     except Exception:
         return {
             'items': [
                 {'name': 'Movies', 'slug': 'movies'},
-                {'name': 'Web Series', 'slug': 'web-series'},
+                {'name': 'Series', 'slug': 'series'},
             ]
         }
 

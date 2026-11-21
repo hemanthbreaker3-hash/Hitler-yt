@@ -64,7 +64,13 @@
   function backdropUrl(p) {
     if (!p) return '';
     if (String(p).startsWith('http')) return p;
-    return 'https://image.tmdb.org/t/p/original' + p;
+    return 'https://image.tmdb.org/t/p/w780' + p;
+  }
+
+  function homeImageUrl(p) {
+    // Landscape on home page (backdrop preferred); portrait stays for title page
+    if (p && p.backdrop_path) return backdropUrl(p.backdrop_path);
+    return posterUrl(p && p.poster_path);
   }
 
   function applyHero(list) {
@@ -111,34 +117,26 @@
     a.className = 'poster-card';
     a.href = '/title/' + encodeURIComponent(p.slug);
     const img = document.createElement('img');
-    // Home grid shows the landscape (backdrop) still, same as the reference layout;
-    // the title/detail page keeps the portrait poster — see title.html.
-    img.src = backdropUrl(p.backdrop_path) || posterUrl(p.poster_path);
-    img.alt = (p.title || 'Poster') + ' artwork';
+    img.src = homeImageUrl(p);
+    img.alt = (p.title || 'Poster') + ' poster';
     img.loading = 'lazy';
     img.decoding = 'async';
+    // Bottom-left style badges matching reference UI (quality + genre)
     const badges = document.createElement('div');
-    badges.className = 'badge-row';
-    const cat = (Array.isArray(p.genres) && p.genres[0]) || p.category || (p.media_type ? String(p.media_type).toUpperCase() : '');
-    if (cat) {
-      const c = document.createElement('span');
-      c.className = 'badge badge-cat';
-      c.textContent = String(cat).toUpperCase();
-      badges.appendChild(c);
-    }
-    const rating = p.rating != null && p.rating !== '' ? Number(p.rating) : null;
-    if (rating != null && !Number.isNaN(rating) && rating > 0) {
-      const b = document.createElement('span');
-      b.className = 'badge badge-rating';
-      b.textContent = '★ ' + (rating % 1 ? rating.toFixed(1) : rating);
-      badges.appendChild(b);
-    }
-    const year = (p.release_date || p.first_air_date || '').toString().slice(0, 4);
-    if (year) {
-      const y = document.createElement('span');
-      y.className = 'badge badge-year';
-      y.textContent = year;
-      badges.appendChild(y);
+    badges.className = 'badge-row home-badges';
+    const quality = (p.quality || p.resolution || '1080P').toString().toUpperCase();
+    const qBadge = document.createElement('span');
+    qBadge.className = 'badge badge-quality';
+    qBadge.textContent = quality;
+    badges.appendChild(qBadge);
+    let genreLabel = '';
+    if (Array.isArray(p.genres) && p.genres.length) genreLabel = String(p.genres[0]).toUpperCase();
+    else if (p.media_type) genreLabel = String(p.media_type).toUpperCase();
+    if (genreLabel) {
+      const g = document.createElement('span');
+      g.className = 'badge badge-genre';
+      g.textContent = genreLabel;
+      badges.appendChild(g);
     }
     const play = document.createElement('div');
     play.className = 'play-hint';
@@ -150,10 +148,8 @@
     title.textContent = p.title || 'Untitled';
     const meta = document.createElement('div');
     meta.className = 'meta';
-    const parts = [];
-    if (p.media_type) parts.push(String(p.media_type).toUpperCase());
-    if (Array.isArray(p.genres) && p.genres.length) parts.push(p.genres.slice(0, 2).join(', '));
-    meta.textContent = parts.join(' · ');
+    const year = (p.release_date || p.first_air_date || '').toString().slice(0, 4);
+    meta.textContent = year || (p.media_type ? String(p.media_type).toUpperCase() : '');
     info.appendChild(title);
     info.appendChild(meta);
     a.appendChild(img);
@@ -283,8 +279,17 @@
 #category-nav .chip{min-height:52px;border-radius:999px;display:flex;align-items:center;justify-content:center;padding:10px 12px;background:#101010;border:1px solid rgba(255,255,255,.12);color:#ddd}
 #category-nav .chip.active{background:linear-gradient(130deg,#d8b36a,#f0d9a2);color:#18120a;border-color:transparent;box-shadow:0 8px 22px rgba(216,179,106,.22)}
 #catalog-grid .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important}
-.badge-cat{background:linear-gradient(130deg,#d8b36a,#f0d9a2)!important;color:#18120a!important;font-weight:800}
 #catalog-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:14px!important}
 @media(max-width:440px){ #category-nav{gap:8px!important}#category-nav .chip{min-height:46px;padding:8px;font-size:13px}#catalog-grid{gap:10px!important}}
 </style>
 <script>document.addEventListener('DOMContentLoaded',()=>{const search=document.querySelector('.search-bar');const nav=document.getElementById('category-nav');const hero=document.getElementById('homeHero');const head=document.getElementById('catalog');if(hero)hero.remove();if(search&&nav&&head){head.parentNode.insertBefore(nav,head);head.parentNode.insertBefore(search,nav);}});</script>
+
+<style>
+/* Reference UI badges bottom-left on landscape cards */
+.home-badges{top:auto!important;bottom:10px!important;left:10px!important;right:auto!important;justify-content:flex-start!important;gap:6px!important}
+.badge-quality{background:rgba(0,0,0,.75)!important;color:#fff!important;border:1px solid rgba(255,255,255,.2)!important;border-radius:6px!important;font-size:11px!important;font-weight:800!important;padding:4px 8px!important}
+.badge-genre{background:linear-gradient(130deg,#d8b36a,#f0d9a2)!important;color:#18120a!important;border:0!important;border-radius:6px!important;font-size:11px!important;font-weight:800!important;padding:4px 8px!important}
+.poster-card .info{padding:10px 4px 4px}
+.poster-card .title{font-size:14px;font-weight:700;line-height:1.25}
+.poster-card .meta{font-size:12px;color:var(--muted);margin-top:2px}
+</style>

@@ -1486,15 +1486,6 @@ def register_handlers(bot):
         # admin text-input state here, in order, before falling through to t.me link
         # parsing. Two handlers registered on the same (overlapping) filter would mean
         # only the first ever fires — see _maybe_handle_bot_token_input's docstring.
-        # FIX: /fspanel replies (addfsub/delfsub/setfsub/addadmin/etc.) were being
-        # silently swallowed here because this handler never checked
-        # _awaiting_fspanel before falling through to the t.me-link parser below,
-        # which returns without replying on anything that isn't a t.me link. Admins
-        # sending a channel ID / @username / t.me link for FSub never reached
-        # fspanel_text_input because only the first matching handler on an
-        # overlapping filter runs. Delegate to it explicitly before anything else.
-        if raw_override is None and user.id in _awaiting_fspanel and _is_admin_user(user.id):
-            return await _fspanel_text_input_impl(client, message, user)
         if raw_override is None and await _maybe_handle_bot_token_input(client, message, user):
             return
         raw = (raw_override if raw_override is not None else (message.text or "")).strip()
@@ -2508,9 +2499,6 @@ def register_handlers(bot):
         if not _is_admin_user(user.id):
             _awaiting_fspanel.pop(user.id, None)
             return
-        return await _fspanel_text_input_impl(client, message, user)
-
-    async def _fspanel_text_input_impl(client, message: Message, user):
         state = _awaiting_fspanel.pop(user.id, None)
         raw = (message.text or "").strip()
         if raw.lower() in ("/cancel", "cancel"):
