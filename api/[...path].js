@@ -426,46 +426,66 @@ async function ensureTmdbBackdrops(db, tmdbKeyOverride) {
   try {
     const missing = await db.collection('catalog_pages').find(
       {
-        tmdb_id: { $exists: true, $nin: [null, '', 0] },
         $or: [
           { backdrop_path: { $exists: false } },
           { backdrop_path: null },
           { backdrop_path: '' },
         ],
       },
-      { projection: { tmdb_id: 1, media_type: 1, title: 1 } }
-    ).limit(50).toArray();
+      { projection: { slug: 1, tmdb_id: 1, media_type: 1, title: 1, poster_path: 1 } }
+    ).limit(60).toArray();
     if (!missing.length) return;
     for (const row of missing) {
-      const tid = row.tmdb_id;
-      if (!tid) continue;
+      let tid = row.tmdb_id;
+      const slug = row.slug || '';
+      const rawTitle = String(row.title || '').trim();
       const mt = String(row.media_type || 'movie').toLowerCase();
       let mediaType = (mt === 'tv' || mt === 'series' || mt === 'web-series') ? 'tv' : 'movie';
       try {
-        let r = await fetch(
-          'https://api.themoviedb.org/3/' + mediaType + '/' + tid + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
-          { signal: AbortSignal.timeout(8000) }
-        );
-        if (!r.ok) {
-          mediaType = mediaType === 'tv' ? 'movie' : 'tv';
-          r = await fetch(
+        let data = null;
+        if (tid) {
+          let r = await fetch(
             'https://api.themoviedb.org/3/' + mediaType + '/' + tid + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
             { signal: AbortSignal.timeout(8000) }
           );
+          if (!r.ok) {
+            mediaType = mediaType === 'tv' ? 'movie' : 'tv';
+            r = await fetch(
+              'https://api.themoviedb.org/3/' + mediaType + '/' + tid + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
+              { signal: AbortSignal.timeout(8000) }
+            );
+          }
+          if (r.ok) data = await r.json();
+        } else if (rawTitle) {
+          const cleanTitle = rawTitle.replace(/\s*[\(\[](?:19|20)\d{2}[\)\]]/g, '').trim();
+          const sr = await fetch(
+            'https://api.themoviedb.org/3/search/multi?api_key=' + encodeURIComponent(tmdbKey) + '&query=' + encodeURIComponent(cleanTitle || rawTitle) + '&language=en-US',
+            { signal: AbortSignal.timeout(8000) }
+          );
+          if (sr.ok) {
+            const sj = await sr.json();
+            const results = (Array.isArray(sj.results) ? sj.results : []).filter(x => x && (x.media_type === 'movie' || x.media_type === 'tv'));
+            const hit = results.find(x => x.backdrop_path) || results[0];
+            if (hit) { data = hit; tid = hit.id; }
+          }
         }
-        if (!r.ok) continue;
-        const data = await r.json();
+        if (!data) continue;
         const backdrop = data.backdrop_path || '';
         const poster = data.poster_path || '';
         if (!backdrop && !poster) continue;
         const patch = { updated_at: new Date() };
         if (backdrop) patch.backdrop_path = backdrop;
-        if (poster) patch.poster_path = poster;
-        const tidNum = Number(tid);
-        const tidQuery = Number.isFinite(tidNum)
-          ? { $or: [{ tmdb_id: tidNum }, { tmdb_id: String(tidNum) }, { tmdb_id: tid }] }
-          : { tmdb_id: tid };
-        await db.collection('catalog_pages').updateMany(tidQuery, { $set: patch }).catch(() => {});
+        if (tid && !row.tmdb_id) patch.tmdb_id = Number(tid) || tid;
+        if (poster && !row.poster_path) patch.poster_path = poster;
+        if (slug) {
+          await db.collection('catalog_pages').updateOne({ slug }, { $set: patch }).catch(() => {});
+        } else if (tid) {
+          const tidNum = Number(tid);
+          const tidQuery = Number.isFinite(tidNum)
+            ? { $or: [{ tmdb_id: tidNum }, { tmdb_id: String(tidNum) }, { tmdb_id: tid }] }
+            : { tmdb_id: tid };
+          await db.collection('catalog_pages').updateMany(tidQuery, { $set: patch }).catch(() => {});
+        }
       } catch (_) {}
     }
   } catch (_) {}
@@ -635,171 +655,109 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#0a0a0c">
+  <meta name="theme-color" content="#07090e">
   <meta name="description" content="HITLER YT — discover anime, movies and series.">
   <meta name="color-scheme" content="dark">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Outfit:wght@500;600;700;800;900&display=swap" rel="stylesheet">
   <title>${escapeHtml(title)}</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <style>
     :root{
       color-scheme:dark;
-      --bg:#0a0a0c;--bg-elevated:#121214;--bg-card:#16161a;--bg-card-hover:#1e1e24;
-      --line:rgba(255,255,255,.06);--line-strong:rgba(255,255,255,.12);
-      --text:#f5f5f7;--muted:#8e8e98;--accent:#a78bfa;--accent-2:#22d3ee;
-      --accent-soft:rgba(167,139,250,.14);--cyan:#22d3ee;--prime:#f5c518;--danger:#ff5c5c;
-      --radius:12px;--radius-sm:8px;--shadow:0 24px 60px rgba(0,0,0,.55);
-      --font:"Outfit",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      --font-display:"Syne","Outfit",system-ui,sans-serif;--max:1400px;--pad:4vw;
+      --bg:#07090e;--bg-elevated:#0e121b;--bg-card:#121722;--bg-card-hover:#181f2e;
+      --line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.16);
+      --text:#f5f6fa;--muted:#9aa3b5;--accent:#8b5cf6;--accent-2:#22d3ee;
+      --gold:#e4bd82;--accent-soft:rgba(139,92,246,.16);--cyan:#22d3ee;--prime:#f5c518;--danger:#fb7185;
+      --radius:16px;--radius-sm:10px;--shadow:0 20px 50px rgba(0,0,0,.48);
+      --font:"DM Sans",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --font-display:"Outfit","DM Sans",system-ui,sans-serif;--max:1340px;--pad:4vw;
     }
     *{box-sizing:border-box;margin:0;padding:0}
     html{scroll-behavior:smooth}
     body{margin:0;min-height:100vh;color:var(--text);font:500 15px/1.55 var(--font);
-      background:radial-gradient(ellipse 80% 50% at 15% -15%,rgba(167,139,250,.12),transparent 55%),
-        radial-gradient(ellipse 50% 40% at 90% 10%,rgba(34,211,238,.06),transparent 50%),var(--bg);
-      letter-spacing:.01em;-webkit-font-smoothing:antialiased}
+      background:radial-gradient(ellipse 70% 40% at 12% -10%,rgba(139,92,246,.14),transparent 58%),
+        radial-gradient(ellipse 55% 35% at 92% 0%,rgba(34,211,238,.09),transparent 55%),var(--bg);
+      -webkit-font-smoothing:antialiased}
     h1,h2,h3,h4,.brand-word{font-family:var(--font-display);font-weight:800;letter-spacing:-.02em}
     a{color:inherit;text-decoration:none} button,input,select{font:inherit} img{max-width:100%;display:block}
     .wrap{width:min(100% - 28px,var(--max));margin-inline:auto}
-    .topbar{position:sticky;top:0;z-index:80;backdrop-filter:blur(18px) saturate(1.2);-webkit-backdrop-filter:blur(18px) saturate(1.2);
-      background:rgba(9,9,13,.88);border-bottom:1px solid var(--line)}
-    .topbar-inner{width:min(100% - 28px,var(--max));margin:auto;min-height:64px;display:flex;flex-wrap:wrap;
-      align-items:center;justify-content:space-between;gap:14px;padding:10px 0}
-    .topbar-logo{display:inline-flex;align-items:center;gap:12px;transition:transform .2s ease}
+    .topbar{position:sticky;top:0;z-index:80;backdrop-filter:blur(20px) saturate(1.3);-webkit-backdrop-filter:blur(20px) saturate(1.3);
+      background:rgba(7,9,14,.84);border-bottom:1px solid var(--line)}
+    .topbar-inner{width:min(100% - 28px,var(--max));margin:auto;min-height:68px;display:flex;flex-wrap:wrap;
+      align-items:center;justify-content:space-between;gap:12px;padding:8px 0}
+    .topbar-logo{display:inline-flex;align-items:center;gap:10px;transition:transform .2s ease}
     .topbar-logo:hover{transform:translateY(-1px)}
-    .topbar-logo img{width:42px;height:42px;border-radius:12px;object-fit:cover;border:1px solid var(--line-strong);
-      box-shadow:0 8px 24px rgba(255,106,0,.2)}
-    .brand-lockup{display:flex;align-items:center;gap:10px}
-    .brand-mark{position:relative;width:28px;height:42px;display:grid;place-items:center}
-    .brand-mark span{position:absolute;font-family:var(--font-display);font-weight:800;font-size:11px;letter-spacing:.18em;
+    .topbar-logo img{display:none!important}
+    .brand-lockup{display:inline-flex;align-items:center;gap:10px;max-width:6cm;min-height:1.1cm;max-height:2cm}
+    .brand-mark{position:relative;width:32px;height:40px;display:grid;place-items:center;flex:0 0 auto}
+    .brand-mark::before{content:"";position:absolute;inset:3px 10px;border-left:2px solid var(--accent);border-right:2px solid var(--accent-2);transform:skewY(-12deg);opacity:.9}
+    .brand-mark span{position:relative;font-family:var(--font-display);font-weight:900;font-size:10px;letter-spacing:.16em;
       writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);
-      background:linear-gradient(180deg,var(--accent),var(--accent-2));-webkit-background-clip:text;background-clip:text;color:transparent}
-    .brand-mark::before{content:"";position:absolute;inset:4px 12px;border-left:2px solid var(--accent);
-      border-right:2px solid rgba(255,155,66,.75);transform:skewY(-12deg);opacity:.85}
-    .brand-word{font-size:clamp(1.15rem,2.4vw,1.45rem);line-height:1;
-      background:linear-gradient(105deg,#fff 20%,var(--accent) 55%,var(--accent-2) 100%);
-      -webkit-background-clip:text;background-clip:text;color:transparent}
-    .brand-word em{font-style:normal;font-weight:800;color:var(--cyan);background:none;-webkit-background-clip:unset;
-      background-clip:unset;margin-left:4px;letter-spacing:.08em}
+      background:linear-gradient(180deg,var(--accent-2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
+    .brand-word{font-family:var(--font-display);font-size:clamp(.9rem,2.1vw,1.25rem);line-height:1.1;letter-spacing:.20em;font-weight:800;text-transform:uppercase;
+      background:linear-gradient(100deg,#fff 8%,#dcd2ff 50%,#22d3ee 92%);-webkit-background-clip:text;background-clip:text;color:transparent;white-space:nowrap}
     .topbar-links{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-    .topbar-links a{padding:8px 14px;border-radius:999px;font-size:13px;font-weight:600;color:var(--muted);
+    .topbar-links a{padding:8px 15px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
       border:1px solid transparent;transition:color .18s,background .18s,border-color .18s,transform .18s}
-    .topbar-links a:hover{color:var(--text);background:rgba(255,255,255,.04);border-color:var(--line);transform:translateY(-1px)}
-    .search-bar{display:flex;align-items:center;gap:10px;background:var(--bg-card);border:1px solid var(--line);
-      border-radius:999px;padding:6px 6px 6px 16px;margin:18px 0 14px;transition:border-color .2s,box-shadow .2s}
-    .search-bar:focus-within{border-color:rgba(245,197,24,.45);box-shadow:0 0 0 4px var(--accent-soft)}
-    .search-bar i{color:var(--muted);font-size:14px}
-    .search-bar input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--text);font-size:14px;padding:10px 0;font-weight:500}
-    .search-bar input::placeholder{color:#6b7280}
-    .search-bar button{border:0;border-radius:999px;cursor:pointer;padding:10px 18px;font-weight:800;font-size:13px;
-      background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#0b0c10;transition:filter .15s,transform .15s}
-    .search-bar button:hover{filter:brightness(1.06);transform:translateY(-1px)}
-    .announce{border-radius:var(--radius-sm);padding:12px 14px;margin:8px 0;font-size:13px;line-height:1.45;font-weight:500;border:1px solid var(--line)}
-    .announce-red{background:linear-gradient(135deg,rgba(255,92,92,.12),rgba(255,92,92,.04));border-color:rgba(255,92,92,.28);color:#ffc9c9}
-    .announce-dark{background:var(--bg-card);color:var(--muted)}
-    .announce a{color:var(--accent);font-weight:700}
-    .section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:28px 0 14px}
-    .section-head h2{font-size:clamp(1.05rem,2vw,1.25rem);display:flex;align-items:center;gap:10px}
-    .section-head h2::before{content:"";width:4px;height:1.05em;border-radius:4px;background:linear-gradient(180deg,var(--accent),var(--cyan))}
-    .chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg-card);border:1px solid var(--line);
-      border-radius:999px;padding:7px 13px;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;
-      transition:border-color .15s,color .15s,background .15s}
-    .chip:hover,.chip.active{color:var(--accent);border-color:rgba(255,106,0,.5);background:var(--accent-soft)}
-    .cat-nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
-    
-    .poster-card .badge-row{position:absolute;top:8px;left:8px;right:8px;display:flex;justify-content:space-between;gap:6px;z-index:2;pointer-events:none}
-    .poster-card .badge{font-size:10px;font-weight:800;padding:4px 8px;border-radius:6px;backdrop-filter:blur(8px)}
-    .poster-card .badge-rating{background:rgba(0,0,0,.72);color:var(--prime);border:1px solid rgba(245,197,24,.25)}
-    .poster-card .badge-year{background:rgba(0,0,0,.55);color:#e5e7eb;border:1px solid rgba(255,255,255,.1);margin-left:auto}
-    .poster-card .play-hint{position:absolute;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.35);opacity:0;transition:opacity .25s;z-index:1}
+    .topbar-links a:hover{color:var(--text);background:rgba(255,255,255,.06);border-color:var(--line)}
+    .search-bar{display:flex;align-items:center;gap:12px;background:linear-gradient(160deg,rgba(19,25,38,.94),rgba(12,16,25,.94));
+      border:1px solid var(--line-strong);border-radius:18px;padding:6px 8px 6px 18px;margin:18px 0 16px;
+      box-shadow:0 12px 32px rgba(0,0,0,.32);transition:border-color .2s,box-shadow .2s}
+    .search-bar:focus-within{border-color:rgba(34,211,238,.55);box-shadow:0 0 0 4px rgba(34,211,238,.12),0 12px 32px rgba(0,0,0,.36)}
+    .search-bar i{color:var(--accent-2);font-size:16px}
+    .search-bar input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--text);font-size:15px;padding:11px 0;font-weight:500}
+    .search-bar input::placeholder{color:#6d768a}
+    .search-bar button{border:0;border-radius:13px;cursor:pointer;padding:10px 18px;font-weight:800;font-size:13px;
+      background:linear-gradient(125deg,var(--accent),var(--accent-2));color:#061019;transition:filter .15s,transform .15s}
+    .search-bar button:hover{filter:brightness(1.08);transform:translateY(-1px)}
+    .section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:22px 0 14px}
+    .section-head h2{font-size:clamp(1.1rem,2.2vw,1.38rem);display:flex;align-items:center;gap:10px;font-weight:900}
+    .section-head h2::before{content:"";width:4px;height:1.05em;border-radius:4px;background:linear-gradient(180deg,var(--accent),var(--accent-2))}
+    .chip,.cat-nav .chip,select.chip{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--bg-card);border:1px solid var(--line);
+      border-radius:999px;padding:9px 16px;font-size:12px;font-weight:700;color:var(--muted);cursor:pointer;
+      transition:border-color .15s,color .15s,background .15s,transform .15s}
+    .chip:hover,select.chip:hover{color:var(--text);border-color:var(--line-strong);transform:translateY(-1px)}
+    .chip.active,.cat-nav .chip.active{color:#061019;border-color:transparent;background:linear-gradient(125deg,var(--accent),var(--accent-2));box-shadow:0 6px 20px rgba(34,211,238,.2)}
+    .cat-nav{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 18px}
+    .poster-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:8px}
+    @media(min-width:680px){.poster-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}}
+    @media(min-width:1080px){.poster-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:18px}}
+    .poster-card{position:relative;overflow:hidden;border-radius:14px;background:var(--bg-card);border:1px solid var(--line);
+      box-shadow:0 10px 26px rgba(0,0,0,.32);transition:transform .22s cubic-bezier(.2,.8,.2,1),border-color .22s,box-shadow .22s;display:flex;flex-direction:column}
+    .poster-card:hover{transform:translateY(-4px);border-color:rgba(34,211,238,.45);box-shadow:0 18px 38px rgba(0,0,0,.48),0 0 22px rgba(139,92,246,.16)}
+    .poster-card .card-media{position:relative;overflow:hidden;aspect-ratio:16/9;background:#0e131e}
+    .poster-card img{width:100%;height:100%;aspect-ratio:16/9;object-fit:cover;background:#0e131e;transition:transform .35s ease}
+    .poster-card:hover img{transform:scale(1.05)}
+    .poster-card .play-hint{position:absolute;inset:0;display:grid;place-items:center;background:linear-gradient(180deg,transparent 35%,rgba(7,9,14,.55));opacity:0;transition:opacity .22s;z-index:1}
     .poster-card:hover .play-hint{opacity:1}
-    .poster-card .play-hint span{width:48px;height:48px;border-radius:50%;background:rgba(167,139,250,.95);display:grid;place-items:center;color:#0a0a0c;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
-    .hero-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 14px}
-    .hero-meta .pill{font-size:11px;font-weight:800;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#e5e7eb}
-    .hero-meta .pill.gold{color:var(--prime);border-color:rgba(245,197,24,.35);background:rgba(245,197,24,.1)}
-    .poster-card{position:relative}
-
-    .poster-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:16px;margin-top:8px}
-    .poster-card{background:var(--bg-card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
-      transition:transform .22s cubic-bezier(.2,.8,.2,1),border-color .2s,box-shadow .22s}
-    .poster-card:hover{transform:translateY(-6px);border-color:rgba(255,106,0,.45);box-shadow:var(--shadow);background:var(--bg-card-hover)}
-    .poster-card img{width:100%;aspect-ratio:2/3;object-fit:cover;background:#1a1d28;transition:transform .35s ease}
-    .poster-card:hover img{transform:scale(1.04)}
-    .poster-card .info{padding:12px 12px 14px}
-    .poster-card .title{font-family:var(--font-display);font-weight:700;font-size:13px;line-height:1.3;
-      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:5px}
-    .poster-card .meta{font-size:11px;color:var(--muted);line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-    .trending-row{display:flex;gap:12px;overflow-x:auto;padding:6px 0 14px;scroll-snap-type:x mandatory;scrollbar-width:thin;scrollbar-color:#333 transparent}
-    .trending-item{flex:0 0 118px;scroll-snap-align:start;border-radius:12px;overflow:hidden;border:1px solid var(--line);background:var(--bg-card);transition:transform .2s,border-color .2s}
-    .trending-item:hover{transform:translateY(-3px);border-color:rgba(255,106,0,.45)}
-    .trending-item img{width:100%;aspect-ratio:2/3;object-fit:cover}
-    main{padding:8px 0 96px}
-    .footer{text-align:center;color:#5c6378;font-size:12px;padding:28px 0 48px;border-top:1px solid var(--line)}
+    .poster-card .play-hint span{width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent-2));display:grid;place-items:center;color:#061019;font-size:15px;box-shadow:0 8px 22px rgba(0,0,0,.45)}
+    .poster-card .badge-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+    .poster-card .badge{font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;letter-spacing:.03em}
+    .poster-card .badge-genre{background:linear-gradient(130deg,var(--accent),var(--accent-2));color:#061019}
+    .poster-card .badge-rating{background:rgba(228,189,130,.14);color:var(--gold);border:1px solid rgba(228,189,130,.28)}
+    .poster-card .info{padding:11px 12px 13px;display:flex;flex-direction:column;gap:3px;flex:1}
+    .poster-card .title{font-family:var(--font-display);font-weight:700;font-size:clamp(13px,2.2vw,15px);line-height:1.28;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .poster-card .meta{font-size:12px;color:var(--muted);line-height:1.3}
+    main{padding:8px 0 88px}
+    .footer{text-align:center;color:#6f788c;font-size:12px;padding:24px 0 44px;border-top:1px solid var(--line);margin-top:32px}
     .footer strong{color:var(--muted);font-family:var(--font-display)}
     .muted{color:var(--muted)}
-    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:0 16px;border-radius:var(--radius-sm);
-      border:1px solid var(--line);background:var(--bg-card);color:var(--text);cursor:pointer;font-weight:700;font-size:13px}
-    .btn:hover{border-color:rgba(255,106,0,.5);color:var(--accent)}
-    .btn-yellow{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#0b0c10;border:0;font-weight:800;border-radius:999px;padding:10px 16px}
-    .page-hero{margin:10px 0 18px;padding:18px 0 6px}
-    .page-hero h1{font-size:clamp(1.4rem,3.5vw,2rem);background:linear-gradient(100deg,#fff,var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
-    .page-hero p{color:var(--muted);font-size:14px;max-width:42ch}
-    @media(max-width:640px){
-      body{font-size:14px}.wrap,.topbar-inner{width:min(100% - 20px,var(--max))}
-      .poster-grid{grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:12px}
-      .topbar-links a{padding:7px 10px;font-size:12px}.brand-word{font-size:1.1rem}.brand-mark{display:none}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:0 16px;border-radius:11px;
+      border:1px solid var(--line-strong);background:var(--bg-card);color:var(--text);cursor:pointer;font-weight:700;font-size:13px}
+    .btn:hover{border-color:rgba(34,211,238,.5);transform:translateY(-1px)}
+    .btn-yellow,.btn.accent{background:linear-gradient(125deg,var(--accent),var(--accent-2));color:#061019;border:0;font-weight:800;border-radius:11px;padding:10px 16px}
+    .card{background:linear-gradient(165deg,rgba(19,24,36,.95),rgba(11,15,23,.95));border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 14px 36px rgba(0,0,0,.3)}
+    .related-pager{display:flex;align-items:center;justify-content:center;gap:8px;margin:22px 0;flex-wrap:wrap}
+    .related-pager[hidden]{display:none!important}
+    .related-pager button{background:var(--bg-card);border:1px solid var(--line-strong);color:var(--text);border-radius:10px;padding:8px 13px;font:700 13px var(--font);cursor:pointer}
+    .related-pager button:disabled{opacity:.4;cursor:not-allowed}
+    .related-pager button.active{background:linear-gradient(125deg,var(--accent),var(--accent-2));color:#061019;border-color:transparent}
+    @media(max-width:600px){
+      .wrap,.topbar-inner{width:min(100% - 20px,var(--max))}
+      .topbar-links a{padding:7px 11px;font-size:11px}.brand-word{font-size:.82rem;letter-spacing:.14em}.brand-mark{width:24px;height:32px}
     }
-    @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-    .fade-up{animation:fadeUp .45s ease both}
-
-    /* HITLER YT anime-cinema theme */
-    body{background:radial-gradient(ellipse 75% 38% at 5% -8%,rgba(139,92,246,.16),transparent 62%),radial-gradient(ellipse 65% 42% at 100% 5%,rgba(111,48,151,.13),transparent 60%),linear-gradient(180deg,#09090d,#0b0a10 52%,#09090d)}
-    .topbar{border-bottom-color:rgba(139,92,246,.18)}
-    .topbar-logo img{display:none!important}
-    .brand-word{font-family:var(--font-display);font-weight:900;letter-spacing:-.055em;background:linear-gradient(100deg,#fff 8%,#c4b5fd 43%,#8b5cf6 83%,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
-    .brand-mark span{background:linear-gradient(180deg,#22d3ee,#7c3aed);-webkit-background-clip:text;background-clip:text}
-    .brand-mark::before{border-left-color:#8b5cf6;border-right-color:rgba(255,155,66,.75)}
-    .topbar-links a:hover{background:rgba(139,92,246,.08);border-color:rgba(139,92,246,.28)}
-    .search-bar{background:rgba(22,21,28,.94);border-color:rgba(255,255,255,.1)}
-    .search-bar:focus-within{border-color:rgba(139,92,246,.7);box-shadow:0 0 0 4px rgba(139,92,246,.12)}
-    .page-hero{position:relative;overflow:hidden;margin:18px 0 20px;padding:clamp(24px,5vw,48px);min-height:155px;border:1px solid rgba(139,92,246,.22);border-radius:22px;background:linear-gradient(105deg,rgba(139,92,246,.18),rgba(28,17,35,.72) 54%,rgba(13,13,19,.96));box-shadow:0 20px 60px rgba(0,0,0,.25)}
-    .page-hero h1{font-size:clamp(1.8rem,5vw,3.1rem);background:linear-gradient(100deg,#fff 15%,#ffd1ad 55%,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
-    .poster-card{border-radius:13px;background:linear-gradient(180deg,#1b1921,#111116);border-color:rgba(255,255,255,.07);box-shadow:0 8px 24px rgba(0,0,0,.24)}
-    .poster-card:hover{transform:translateY(-6px) scale(1.012);border-color:rgba(139,92,246,.58);box-shadow:0 18px 38px rgba(0,0,0,.45),0 0 24px rgba(139,92,246,.12)}
-    .poster-card img{transition:transform .4s ease}.poster-card:hover img{transform:scale(1.045)}
-    .section-head h2::before{background:linear-gradient(#22d3ee,#7c3aed)}
-    .chip:hover,.chip.active{color:#ffad70;border-color:rgba(139,92,246,.55);background:rgba(139,92,246,.16)}
-    .footer{border-top-color:rgba(139,92,246,.16)}
-    @media(max-width:640px){.page-hero{padding:22px 18px;min-height:135px}.brand-mark{display:grid;width:25px}}
-
-    /* 
-    /* Landscape catalog cards — clean & compact */
-    .poster-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important}
-    .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important;width:100%}
-    .poster-card .info{padding:8px 4px 2px}
-    .poster-card .title{font-size:13px;font-weight:700;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-    .poster-card .meta{font-size:11px;color:var(--muted);margin-top:2px}
-    .cat-nav{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px!important;margin:0 0 16px!important;max-width:640px}
-    .cat-nav .chip{min-height:44px!important;border-radius:999px!important;font-size:13px!important;font-weight:700!important;padding:8px 10px!important}
-    .search-bar{border-radius:20px!important;min-height:56px!important;margin:12px 0 14px!important}
-
-    Homepage reference: search top, 3-col pills, landscape cards, gold active */
-    .search-bar{border-radius:24px!important;min-height:68px!important;padding:8px 12px 8px 22px!important;margin:16px 0 18px!important;border-color:rgba(216,179,106,.22)!important;background:linear-gradient(145deg,#171717,#101010)!important;box-shadow:0 14px 34px rgba(0,0,0,.32)!important}
-    .search-bar i{color:#d8b36a!important;font-size:22px!important}
-    .search-bar input{font-size:17px!important;padding:13px 0!important}
-    .search-bar button{display:none!important}
-    .cat-nav{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px!important;margin:0 0 24px!important;max-width:720px}
-    .cat-nav .chip{border-radius:999px!important;min-height:52px!important;display:flex;align-items:center;justify-content:center;text-align:center;padding:10px 12px!important;background:#101010!important;border:1px solid rgba(255,255,255,.12)!important;color:#ddd!important;font-weight:700!important}
-    .cat-nav .chip.active{background:linear-gradient(130deg,#d8b36a,#f0d9a2)!important;color:#18120a!important;border-color:transparent!important;box-shadow:0 8px 22px rgba(216,179,106,.22)!important}
-    .poster-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:14px!important}
-    .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important}
-    .home-badges{top:auto!important;bottom:10px!important;left:10px!important;right:auto!important;justify-content:flex-start!important;gap:6px!important}
-    .badge-quality{background:rgba(0,0,0,.75)!important;color:#fff!important;border:1px solid rgba(255,255,255,.2)!important;border-radius:6px!important;font-size:11px!important;font-weight:800!important;padding:4px 8px!important}
-    .badge-genre{background:linear-gradient(130deg,#d8b36a,#f0d9a2)!important;color:#18120a!important;border:0!important;border-radius:6px!important;font-size:11px!important;font-weight:800!important;padding:4px 8px!important}
-    @media(max-width:440px){.cat-nav{gap:8px!important}.cat-nav .chip{min-height:46px;padding:8px;font-size:13px}.poster-grid{gap:10px!important}}
-
   </style>
   ${headExtra}
 </head>
@@ -820,7 +778,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     </nav>
   </div>
 </header>
-<main class="wrap fade-up">${content}</main>
+<main class="wrap">${content}</main>
 <footer class="footer wrap"><strong>HITLER YT</strong> · Stream &amp; download with speed and clarity</footer>
 </body>
 </html>`;
@@ -915,25 +873,36 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
   }
 
   
-  // Fill missing landscape backdrops from TMDB for home grid cards
+  // Fill missing landscape backdrops from TMDB for all published home grid cards
   async function fillMissingBackdrops() {
-    const imgs = document.querySelectorAll('#catalog-grid img[data-tmdb-id]');
+    const imgs = Array.from(document.querySelectorAll('#catalog-grid img[data-needs-backdrop="1"]'));
     if (!imgs.length) return;
-    const queue = Math.min(imgs.length, 12);
-    for (let i = 0; i < queue; i++) {
-      const img = imgs[i];
-      const id = img.dataset.tmdbId;
-      const mt = (img.dataset.mediaType || 'movie').toLowerCase() === 'tv' ? 'tv' : 'movie';
-      try {
-        const r = await fetch('/api/tmdb-backdrop?id=' + encodeURIComponent(id) + '&type=' + mt, { cache: 'force-cache' });
-        if (!r.ok) continue;
-        const d = await r.json();
-        if (d && d.backdrop_path) {
-          const src = d.backdrop_path.startsWith('http') ? d.backdrop_path : ('https://image.tmdb.org/t/p/w1280' + d.backdrop_path);
-          img.src = src;
-          img.removeAttribute('data-tmdb-id');
-        }
-      } catch (e) {}
+    const BATCH = 6;
+    for (let i = 0; i < imgs.length; i += BATCH) {
+      await Promise.all(imgs.slice(i, i + BATCH).map(async (img) => {
+        const id = img.dataset.tmdbId || '';
+        const title = img.dataset.title || '';
+        const slug = img.dataset.slug || '';
+        const mt = (img.dataset.mediaType || 'movie').toLowerCase() === 'tv' ? 'tv' : 'movie';
+        if (!id && !title) return;
+        try {
+          const qs = new URLSearchParams({ type: mt });
+          if (id) qs.set('id', id);
+          if (title) qs.set('title', title);
+          if (slug) qs.set('slug', slug);
+          const r = await fetch('/api/tmdb-backdrop?' + qs.toString(), { cache: 'force-cache' });
+          if (!r.ok) return;
+          const d = await r.json();
+          if (d && d.backdrop_path) {
+            img.src = d.backdrop_path.startsWith('http') ? d.backdrop_path : ('https://image.tmdb.org/t/p/w1280' + d.backdrop_path);
+            img.removeAttribute('data-needs-backdrop');
+            if (Array.isArray(window.__INITIAL_CATALOG__)) {
+              const hit = window.__INITIAL_CATALOG__.find(x => x && x.slug === slug);
+              if (hit) hit.backdrop_path = d.backdrop_path;
+            }
+          }
+        } catch (e) {}
+      }));
     }
   }
 
@@ -969,23 +938,30 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
         return 'https://image.tmdb.org/t/p/' + size + path;
       }
       let homeSrc = tmdbImg(p.backdrop_path, 'w1280');
-      if (!homeSrc && p.tmdb_id) {
-        // Mark for async TMDB backdrop fill
-        img.dataset.tmdbId = String(p.tmdb_id);
+      if (!homeSrc && (p.tmdb_id || p.title)) {
+        img.dataset.needsBackdrop = '1';
+        if (p.tmdb_id) img.dataset.tmdbId = String(p.tmdb_id);
+        if (p.title) img.dataset.title = String(p.title);
+        if (p.slug) img.dataset.slug = String(p.slug);
         img.dataset.mediaType = String(p.media_type || 'movie');
       }
       if (!homeSrc) homeSrc = tmdbImg(p.poster_path, 'w780') || '/static/images/poster.jpg';
       img.src = homeSrc;
       img.alt = p.title || 'Poster';
+      const media = document.createElement('div');
+      media.className = 'card-media';
+      const play = document.createElement('div'); play.className = 'play-hint'; play.innerHTML = '<span>▶</span>';
+      media.append(img, play);
       const badges = document.createElement('div');
-      badges.className = 'badge-row home-badges';
-      let genreLabel = '';
-      if (Array.isArray(p.genres) && p.genres.length) genreLabel = String(p.genres[0]).toUpperCase();
-      if (genreLabel) {
-        const g = document.createElement('span'); g.className = 'badge badge-genre'; g.textContent = genreLabel;
+      badges.className = 'badge-row';
+      if (Array.isArray(p.genres) && p.genres.length) {
+        const g = document.createElement('span'); g.className = 'badge badge-genre'; g.textContent = String(p.genres[0]).toUpperCase();
         badges.appendChild(g);
       }
-      const play = document.createElement('div'); play.className = 'play-hint'; play.innerHTML = '<span>▶</span>';
+      if (p.rating != null && Number(p.rating) > 0) {
+        const rt = document.createElement('span'); rt.className = 'badge badge-rating'; rt.textContent = '★ ' + Number(p.rating).toFixed(1);
+        badges.appendChild(rt);
+      }
       const info = document.createElement('div');
       info.className = 'info';
       const t = document.createElement('div');
@@ -994,9 +970,11 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
       const m = document.createElement('div');
       m.className = 'meta';
       const year = (p.release_date || p.first_air_date || '').toString().slice(0, 4);
-      m.textContent = year || (p.media_type ? String(p.media_type).toUpperCase() : '');
+      const mt = p.media_type ? String(p.media_type).toUpperCase() : '';
+      m.textContent = [year, mt].filter(Boolean).join(' · ');
       info.append(t, m);
-      a.append(img, badges, play, info);
+      if (badges.childElementCount) info.append(badges);
+      a.append(media, info);
       el.append(a);
       }
       if (pager) {
@@ -1100,15 +1078,22 @@ function renderSearchHtml({ results, query, typeFilter, yearFilter, genreFilter,
   const cardsHtml = results.length
     ? results
         .map((p) => {
-          const poster = pagePosterPath(p.poster_path);
-          const year = p.release_date ? ` (${String(p.release_date).slice(0, 4)})` : '';
-          const mediaType = p.media_type ? `${escapeHtml(String(p.media_type).toUpperCase())} · ` : '';
-          const genreText = Array.isArray(p.genres) && p.genres.length ? escapeHtml(p.genres.slice(0, 2).join(', ')) : 'WEB-DL · 1080p 720p &amp; 480p';
+          const imgUrl = p.backdrop_path
+            ? (String(p.backdrop_path).startsWith('http') ? p.backdrop_path : `https://image.tmdb.org/t/p/w1280${p.backdrop_path}`)
+            : pagePosterPath(p.poster_path);
+          const year = p.release_date ? String(p.release_date).slice(0, 4) : '';
+          const mediaType = p.media_type ? escapeHtml(String(p.media_type).toUpperCase()) : '';
+          const metaLine = [year, mediaType].filter(Boolean).join(' · ');
+          const genreBadge = Array.isArray(p.genres) && p.genres.length ? `<span class="badge badge-genre">${escapeHtml(String(p.genres[0]).toUpperCase())}</span>` : '';
           return `<a class="poster-card" href="/title/${encodeURIComponent(p.slug)}">
-            <img src="${escapeHtml(poster)}" alt="${escapeHtml(p.title)}" loading="lazy">
+            <div class="card-media">
+              <img src="${escapeHtml(imgUrl)}" alt="${escapeHtml(p.title)}" loading="lazy">
+              <div class="play-hint"><span>▶</span></div>
+            </div>
             <div class="info">
-              <div class="title">${escapeHtml(p.title)}${escapeHtml(year)}</div>
-              <div class="meta">${mediaType}${genreText}</div>
+              <div class="title">${escapeHtml(p.title)}</div>
+              <div class="meta">${metaLine}</div>
+              ${genreBadge ? `<div class="badge-row">${genreBadge}</div>` : ''}
             </div>
           </a>`;
         })
@@ -4106,44 +4091,70 @@ export default async function handler(req, res) {
       
       if (pathname === '/api/tmdb-backdrop' && req.method === 'GET') {
         const id = String(url.searchParams.get('id') || '').trim();
+        const titleParam = String(url.searchParams.get('title') || '').trim();
+        const slugParam = String(url.searchParams.get('slug') || '').trim();
         const mediaType = String(url.searchParams.get('type') || 'movie').toLowerCase() === 'tv' ? 'tv' : 'movie';
-        if (!id || !/^\d+$/.test(id)) return json(res, 400, { error: 'id required' });
+        if ((!id || !/^\d+$/.test(id)) && !titleParam) return json(res, 400, { error: 'id or title required' });
         const tmdbKey = String(process.env.TMDB_API_KEY || state._raw_map?.tmdb_api_key || '').trim();
         if (!tmdbKey) return json(res, 503, { error: 'TMDB not configured' });
         try {
-          const idNum = Number(id);
-          const idQuery = Number.isFinite(idNum)
-            ? { $or: [{ tmdb_id: idNum }, { tmdb_id: String(idNum) }, { tmdb_id: id }] }
-            : { tmdb_id: id };
-          const page = await db.collection('catalog_pages').findOne(
-            idQuery,
-            { projection: { backdrop_path: 1, poster_path: 1 } }
-          );
-          if (page && page.backdrop_path) {
-            return json(res, 200, { backdrop_path: page.backdrop_path, poster_path: page.poster_path || '' });
+          if (slugParam) {
+            const bySlug = await db.collection('catalog_pages').findOne({ slug: slugParam }, { projection: { backdrop_path: 1, poster_path: 1, tmdb_id: 1 } });
+            if (bySlug && bySlug.backdrop_path) {
+              return json(res, 200, { backdrop_path: bySlug.backdrop_path, poster_path: bySlug.poster_path || '', tmdb_id: bySlug.tmdb_id || null });
+            }
           }
-          let r = await fetch(
-            'https://api.themoviedb.org/3/' + mediaType + '/' + id + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
-            { signal: AbortSignal.timeout(10000) }
-          );
-          if (!r.ok) {
-            const other = mediaType === 'tv' ? 'movie' : 'tv';
-            r = await fetch(
-              'https://api.themoviedb.org/3/' + other + '/' + id + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
+          if (id && /^\d+$/.test(id)) {
+            const idNum = Number(id);
+            const idQuery = { $or: [{ tmdb_id: idNum }, { tmdb_id: String(idNum) }, { tmdb_id: id }] };
+            const page = await db.collection('catalog_pages').findOne(idQuery, { projection: { backdrop_path: 1, poster_path: 1 } });
+            if (page && page.backdrop_path) {
+              return json(res, 200, { backdrop_path: page.backdrop_path, poster_path: page.poster_path || '', tmdb_id: idNum });
+            }
+          }
+          let data = null;
+          let resolvedId = (id && /^\d+$/.test(id)) ? Number(id) : null;
+          if (resolvedId) {
+            let r = await fetch(
+              'https://api.themoviedb.org/3/' + mediaType + '/' + resolvedId + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
               { signal: AbortSignal.timeout(10000) }
             );
+            if (!r.ok) {
+              const other = mediaType === 'tv' ? 'movie' : 'tv';
+              r = await fetch(
+                'https://api.themoviedb.org/3/' + other + '/' + resolvedId + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
+                { signal: AbortSignal.timeout(10000) }
+              );
+            }
+            if (r.ok) data = await r.json();
+          } else if (titleParam) {
+            const cleanTitle = titleParam.replace(/\s*[\(\[](?:19|20)\d{2}[\)\]]/g, '').trim();
+            const sr = await fetch(
+              'https://api.themoviedb.org/3/search/multi?api_key=' + encodeURIComponent(tmdbKey) + '&query=' + encodeURIComponent(cleanTitle || titleParam) + '&language=en-US',
+              { signal: AbortSignal.timeout(10000) }
+            );
+            if (sr.ok) {
+              const sj = await sr.json();
+              const results = (Array.isArray(sj.results) ? sj.results : []).filter(x => x && (x.media_type === 'movie' || x.media_type === 'tv'));
+              const hit = results.find(x => x.backdrop_path) || results[0];
+              if (hit) { data = hit; resolvedId = hit.id || null; }
+            }
           }
-          if (!r.ok) return json(res, 502, { error: 'TMDB fetch failed' });
-          const data = await r.json();
+          if (!data) return json(res, 502, { error: 'TMDB fetch failed' });
           const backdrop = data.backdrop_path || '';
           const poster = data.poster_path || '';
-          if (backdrop || poster) {
+          if (backdrop || poster || resolvedId) {
             const patch = { updated_at: new Date() };
             if (backdrop) patch.backdrop_path = backdrop;
             if (poster) patch.poster_path = poster;
-            await db.collection('catalog_pages').updateMany(idQuery, { $set: patch }).catch(() => {});
+            if (resolvedId) patch.tmdb_id = resolvedId;
+            if (slugParam) {
+              await db.collection('catalog_pages').updateOne({ slug: slugParam }, { $set: patch }).catch(() => {});
+            } else if (resolvedId) {
+              await db.collection('catalog_pages').updateMany({ $or: [{ tmdb_id: resolvedId }, { tmdb_id: String(resolvedId) }] }, { $set: patch }).catch(() => {});
+            }
           }
-          return json(res, 200, { backdrop_path: backdrop, poster_path: poster });
+          return json(res, 200, { backdrop_path: backdrop, poster_path: poster, tmdb_id: resolvedId });
         } catch (e) {
           return json(res, 502, { error: 'TMDB error' });
         }

@@ -2,50 +2,41 @@
 {% block title %}{% if query %}Search: {{ query }}{% else %}Search{% endif %} · HITLER YT{% endblock %}
 {% block nav_search %}active{% endblock %}
 {% block head %}
-<style>
-  .filters select.chip{appearance:none;-webkit-appearance:none;padding-right:30px;
+  .filters select.chip{
+    appearance:none;-webkit-appearance:none;padding-right:30px;
     background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
     background-position:calc(100% - 16px) calc(50% - 2px),calc(100% - 11px) calc(50% - 2px);
-    background-size:5px 5px,5px 5px;background-repeat:no-repeat}
-</style>
+    background-size:5px 5px,5px 5px;background-repeat:no-repeat;
+  }
 {% endblock %}
 {% block content %}
-<div class="page-hero" style="min-height:120px;padding:24px clamp(20px,4vw,40px)">
-  <div>
-    <h1 style="font-size:clamp(1.4rem,3.6vw,2.1rem)">{% if query %}Results for "{{ query }}"{% else %}Browse the catalog{% endif %}</h1>
-    <p>Find anime, movies and series by title, year, genre or category.</p>
-  </div>
+<div class="page-hero">
+  <h1>{% if query %}Results for "{{ query }}"{% else %}Browse the catalog{% endif %}</h1>
+  <p>Find anime, movies and series by title, year, genre or category.</p>
 </div>
 
-<form class="search-bar" action="/search" method="get" role="search" style="margin-top:0">
+<form class="search-bar" action="/search" method="get" role="search">
   <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
   <input name="q" value="{{ query }}" placeholder="Search here…" autocomplete="off" maxlength="100" aria-label="Search">
   <button type="submit">Search</button>
 </form>
 
-<div class="announce announce-red">
-  <strong>Notice:</strong> Links are refreshed automatically. Use HITLER YT for the latest watch and download links.
-</div>
-<div class="announce announce-dark">
-  Avoid unofficial copies. Always use <a href="/">HITLER YT</a> and follow trusted update channels for the official domain.
-</div>
-
-<form action="/search" method="get" class="filters" style="margin:16px 0 8px">
+<form action="/search" method="get" class="filters" style="margin:8px 0">
   {% if query %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
-  <div class="cat-nav" style="margin-bottom:12px">
-    <select name="type" class="chip" style="cursor:pointer" onchange="this.form.submit()" aria-label="Type">
+  <div class="cat-nav">
+    <select name="type" class="chip" onchange="this.form.submit()" aria-label="Type">
       <option value="">All types</option>
       <option value="movie" {% if type_filter == 'movie' %}selected{% endif %}>Movies</option>
       <option value="tv" {% if type_filter == 'tv' %}selected{% endif %}>Web series</option>
     </select>
-    <select name="year" class="chip" style="cursor:pointer" onchange="this.form.submit()" aria-label="Year">
+    <select name="year" class="chip" onchange="this.form.submit()" aria-label="Year">
       <option value="">All years</option>
       {% for y in range(2026, 1990, -1) %}
       <option value="{{ y }}" {% if year_filter == y|string %}selected{% endif %}>{{ y }}</option>
       {% endfor %}
     </select>
     {% if genres %}
-    <select name="genre" class="chip" style="cursor:pointer" onchange="this.form.submit()" aria-label="Genre">
+    <select name="genre" class="chip" onchange="this.form.submit()" aria-label="Genre">
       <option value="">All genres</option>
       {% for g in genres %}
       <option value="{{ g }}" {% if genre_filter == g %}selected{% endif %}>{{ g }}</option>
@@ -53,7 +44,7 @@
     </select>
     {% endif %}
     {% if categories %}
-    <select name="category" class="chip" style="cursor:pointer" onchange="this.form.submit()" aria-label="Category">
+    <select name="category" class="chip" onchange="this.form.submit()" aria-label="Category">
       <option value="">All categories</option>
       {% for c in categories %}
       <option value="{{ c.slug }}" {% if category_filter == c.slug %}selected{% endif %}>{{ c.name }}</option>
@@ -68,31 +59,65 @@
   <span class="chip">{{ results|length if results is defined else 0 }} titles</span>
 </div>
 
-<div class="poster-grid">
+<div class="poster-grid" id="search-grid">
   {% if results %}
     {% for p in results %}
+    {% set _img = '' %}
+    {% if p.backdrop_path %}
+      {% set _img = p.backdrop_path if p.backdrop_path.startswith('http') else 'https://image.tmdb.org/t/p/w1280' + p.backdrop_path %}
+    {% elif p.poster_path %}
+      {% set _img = p.poster_path if p.poster_path.startswith('http') else 'https://image.tmdb.org/t/p/w780' + p.poster_path %}
+    {% else %}
+      {% set _img = '/static/images/poster.jpg' %}
+    {% endif %}
     <a class="poster-card" href="/title/{{ p.slug }}">
-      <img src="{% if p.poster_path and p.poster_path.startswith('http') %}{{ p.poster_path }}{% elif p.poster_path %}https://image.tmdb.org/t/p/w500{{ p.poster_path }}{% else %}/static/images/poster.jpg{% endif %}" alt="{{ p.title }} poster" loading="lazy">
+      <div class="card-media">
+        <img src="{{ _img }}"
+             {% if not p.backdrop_path and (p.tmdb_id or p.title) %}
+             data-needs-backdrop="1"
+             data-tmdb-id="{{ p.tmdb_id or '' }}"
+             data-title="{{ p.title|e }}"
+             data-slug="{{ p.slug|e }}"
+             data-media-type="{{ p.media_type or 'movie' }}"
+             {% endif %}
+             alt="{{ p.title }} backdrop" loading="lazy" decoding="async">
+        <div class="play-hint"><span>▶</span></div>
+      </div>
       <div class="info">
-        <div class="title">{{ p.title }}{% if p.release_date %} ({{ p.release_date[:4] }}){% endif %}</div>
-        <div class="meta">{% if p.media_type %}{{ p.media_type }}{% endif %}{% if p.rating is not none %} · ★ {{ p.rating }}{% endif %}</div>
+        <div class="title">{{ p.title }}</div>
+        <div class="meta">{% if p.release_date %}{{ p.release_date[:4] }}{% endif %}{% if p.media_type %} · {{ p.media_type|upper }}{% endif %}</div>
+        <div class="badge-row">
+          {% if p.genres %}<span class="badge badge-genre">{{ p.genres[0]|upper }}</span>{% endif %}
+          {% if p.rating is not none %}<span class="badge badge-rating">★ {{ p.rating }}</span>{% endif %}
+        </div>
       </div>
     </a>
     {% endfor %}
   {% else %}
     <p class="muted" style="grid-column:1/-1;padding:48px 0;text-align:center">
-      No titles match your filters.<br>
-      Try another keyword or clear the filters.
+      No titles match your filters.<br>Try another keyword or clear the filters.
     </p>
   {% endif %}
 </div>
+<script>
+(async () => {
+  const imgs = Array.from(document.querySelectorAll('#search-grid img[data-needs-backdrop="1"]'));
+  for (let i = 0; i < imgs.length; i += 6) {
+    await Promise.all(imgs.slice(i, i + 6).map(async (img) => {
+      const qs = new URLSearchParams({ type: (img.dataset.mediaType || 'movie').toLowerCase() === 'tv' ? 'tv' : 'movie' });
+      if (img.dataset.tmdbId) qs.set('id', img.dataset.tmdbId);
+      if (img.dataset.title) qs.set('title', img.dataset.title);
+      if (img.dataset.slug) qs.set('slug', img.dataset.slug);
+      try {
+        const r = await fetch('/api/tmdb-backdrop?' + qs.toString(), { cache: 'force-cache' });
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d && d.backdrop_path) {
+          img.src = d.backdrop_path.startsWith('http') ? d.backdrop_path : ('https://image.tmdb.org/t/p/w1280' + d.backdrop_path);
+        }
+      } catch (_) {}
+    }));
+  }
+})();
+</script>
 {% endblock %}
-
-<style>
-/* Search catalog uses the same landscape card geometry as home. */
-.poster-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:14px!important}
-.poster-grid .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important}
-.poster-grid .poster-card{overflow:hidden;border-radius:14px}
-.poster-grid .poster-card .info{padding:9px 3px 5px!important;background:transparent!important}
-@media(max-width:440px){.poster-grid{gap:10px!important}}
-</style>

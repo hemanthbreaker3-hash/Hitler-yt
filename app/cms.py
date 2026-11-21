@@ -192,14 +192,13 @@ async def backfill_tmdb_backdrops(limit: int = 80) -> int:
     try:
         cursor = pages.find(
             {
-                'tmdb_id': {'$exists': True, '$ne': None},
                 '$or': [
                     {'backdrop_path': {'$exists': False}},
                     {'backdrop_path': None},
                     {'backdrop_path': ''},
                 ],
             },
-            {'tmdb_id': 1, 'media_type': 1, 'title': 1},
+            {'tmdb_id': 1, 'media_type': 1, 'title': 1, 'slug': 1},
         ).limit(limit)
         rows = await cursor.to_list(limit)
     except Exception:
@@ -213,25 +212,39 @@ async def backfill_tmdb_backdrops(limit: int = 80) -> int:
         async with httpx.AsyncClient(timeout=10.0) as client:
             for row in rows:
                 tid = row.get('tmdb_id')
-                if not tid:
-                    continue
+                slug = row.get('slug') or ''
+                title = (row.get('title') or '').strip()
                 mt = str(row.get('media_type') or 'movie').lower()
                 media_type = 'tv' if mt in ('tv', 'series', 'web-series') else 'movie'
                 try:
-                    r = await client.get(
-                        f'https://api.themoviedb.org/3/{media_type}/{int(tid)}',
-                        params={'api_key': key, 'language': 'en-US'},
-                    )
-                    if r.status_code != 200:
-                        # try the other type once
-                        other = 'movie' if media_type == 'tv' else 'tv'
+                    data = None
+                    if tid:
                         r = await client.get(
-                            f'https://api.themoviedb.org/3/{other}/{int(tid)}',
+                            f'https://api.themoviedb.org/3/{media_type}/{int(tid)}',
                             params={'api_key': key, 'language': 'en-US'},
                         )
-                    if r.status_code != 200:
+                        if r.status_code != 200:
+                            other = 'movie' if media_type == 'tv' else 'tv'
+                            r = await client.get(
+                                f'https://api.themoviedb.org/3/{other}/{int(tid)}',
+                                params={'api_key': key, 'language': 'en-US'},
+                            )
+                        if r.status_code == 200:
+                            data = r.json()
+                    elif title:
+                        clean_title = re.sub(r'\s*[\(\[](?:19|20)\d{2}[\)\]]', '', title).strip()
+                        sr = await client.get(
+                            'https://api.themoviedb.org/3/search/multi',
+                            params={'api_key': key, 'query': clean_title or title, 'language': 'en-US'},
+                        )
+                        if sr.status_code == 200:
+                            results = [x for x in (sr.json().get('results') or []) if x.get('media_type') in ('movie', 'tv')]
+                            hit = next((x for x in results if x.get('backdrop_path')), results[0] if results else None)
+                            if hit:
+                                data = hit
+                                tid = hit.get('id')
+                    if not data:
                         continue
-                    data = r.json()
                     backdrop = data.get('backdrop_path') or ''
                     poster = data.get('poster_path') or ''
                     if not backdrop and not poster:
@@ -239,12 +252,17 @@ async def backfill_tmdb_backdrops(limit: int = 80) -> int:
                     patch = {'updated_at': datetime.now(timezone.utc)}
                     if backdrop:
                         patch['backdrop_path'] = backdrop
+                    if tid and not row.get('tmdb_id'):
+                        patch['tmdb_id'] = int(tid)
                     if poster:
-                        # only fill poster if missing
-                        existing = await pages.find_one({'tmdb_id': tid}, {'poster_path': 1})
+                        q_match = {'slug': slug} if slug else {'tmdb_id': tid}
+                        existing = await pages.find_one(q_match, {'poster_path': 1})
                         if not (existing or {}).get('poster_path'):
                             patch['poster_path'] = poster
-                    await pages.update_many({'tmdb_id': tid}, {'$set': patch})
+                    if slug:
+                        await pages.update_one({'slug': slug}, {'$set': patch})
+                    elif tid:
+                        await pages.update_many({'tmdb_id': tid}, {'$set': patch})
                     updated += 1
                 except Exception as e:
                     log.debug('backdrop backfill %s: %s', tid, e)
@@ -593,14 +611,20 @@ async def remove_category(slug: str, _: bool = Depends(admin_auth)):
 
 
 @router.get('/api/tmdb-backdrop')
-async def tmdb_backdrop(id: int, type: str = 'movie'):
+async def tmdb_backdrop(id: Optional[int] = None, title: str = '', slug: str = '', type: str = 'movie'):
     """Return TMDB backdrop for home landscape cards; persist onto matching catalog pages."""
     media_type = 'tv' if str(type).lower() == 'tv' else 'movie'
-    # Prefer already stored
-    id_query = {'$or': [{'tmdb_id': id}, {'tmdb_id': str(id)}, {'tmdb_id': int(id) if str(id).isdigit() else id}]}
-    page = await pages.find_one(id_query, {'backdrop_path': 1, 'poster_path': 1})
-    if page and page.get('backdrop_path'):
-        return {'backdrop_path': page['backdrop_path'], 'poster_path': page.get('poster_path') or ''}
+    if slug:
+        page = await pages.find_one({'slug': slug}, {'backdrop_path': 1, 'poster_path': 1, 'tmdb_id': 1})
+        if page and page.get('backdrop_path'):
+            return {'backdrop_path': page['backdrop_path'], 'poster_path': page.get('poster_path') or '', 'tmdb_id': page.get('tmdb_id')}
+    if id:
+        id_query = {'$or': [{'tmdb_id': id}, {'tmdb_id': str(id)}]}
+        page = await pages.find_one(id_query, {'backdrop_path': 1, 'poster_path': 1})
+        if page and page.get('backdrop_path'):
+            return {'backdrop_path': page['backdrop_path'], 'poster_path': page.get('poster_path') or '', 'tmdb_id': id}
+    if not id and not title.strip():
+        raise HTTPException(400, 'id or title required')
     key = settings.TMDB_API_KEY
     if not key:
         doc = await settings_col.find_one({'key': 'tmdb_api_key'}, {'value': 1})
@@ -608,28 +632,49 @@ async def tmdb_backdrop(id: int, type: str = 'movie'):
     if not key:
         raise HTTPException(503, 'TMDB_API_KEY is not configured')
     try:
+        data = None
+        resolved_id = id
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(
-                f'https://api.themoviedb.org/3/{media_type}/{id}',
-                params={'api_key': key, 'language': 'en-US'},
-            )
-            if r.status_code != 200:
-                other = 'movie' if media_type == 'tv' else 'tv'
+            if id:
                 r = await client.get(
-                    f'https://api.themoviedb.org/3/{other}/{id}',
+                    f'https://api.themoviedb.org/3/{media_type}/{id}',
                     params={'api_key': key, 'language': 'en-US'},
                 )
-        if r.status_code != 200:
+                if r.status_code != 200:
+                    other = 'movie' if media_type == 'tv' else 'tv'
+                    r = await client.get(
+                        f'https://api.themoviedb.org/3/{other}/{id}',
+                        params={'api_key': key, 'language': 'en-US'},
+                    )
+                if r.status_code == 200:
+                    data = r.json()
+            elif title.strip():
+                clean_title = re.sub(r'\s*[\(\[](?:19|20)\d{2}[\)\]]', '', title.strip()).strip()
+                sr = await client.get(
+                    'https://api.themoviedb.org/3/search/multi',
+                    params={'api_key': key, 'query': clean_title or title.strip(), 'language': 'en-US'},
+                )
+                if sr.status_code == 200:
+                    results = [x for x in (sr.json().get('results') or []) if x.get('media_type') in ('movie', 'tv')]
+                    hit = next((x for x in results if x.get('backdrop_path')), results[0] if results else None)
+                    if hit:
+                        data = hit
+                        resolved_id = hit.get('id')
+        if not data:
             raise HTTPException(502, 'TMDB fetch failed')
-        data = r.json()
         backdrop = data.get('backdrop_path') or ''
         poster = data.get('poster_path') or ''
+        patch = {'updated_at': datetime.now(timezone.utc)}
         if backdrop:
-            await pages.update_many(
-                id_query,
-                {'$set': {'backdrop_path': backdrop, 'updated_at': datetime.now(timezone.utc)}},
-            )
-        return {'backdrop_path': backdrop, 'poster_path': poster}
+            patch['backdrop_path'] = backdrop
+        if resolved_id:
+            patch['tmdb_id'] = int(resolved_id)
+        if len(patch) > 1:
+            if slug:
+                await pages.update_one({'slug': slug}, {'$set': patch})
+            elif resolved_id:
+                await pages.update_many({'$or': [{'tmdb_id': resolved_id}, {'tmdb_id': str(resolved_id)}]}, {'$set': patch})
+        return {'backdrop_path': backdrop, 'poster_path': poster, 'tmdb_id': resolved_id}
     except HTTPException:
         raise
     except Exception:

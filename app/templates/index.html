@@ -1,41 +1,37 @@
 {% extends "base.html" %}
 {% block title %}{{ BRANDING }} · Movies & Series{% endblock %}
 {% block nav_home %}active{% endblock %}
+{% block head %}
+  .pager-bar{display:flex;align-items:center;justify-content:center;gap:8px;margin:24px 0;flex-wrap:wrap}
+  .pager-bar[hidden]{display:none!important}
+  .pager-bar button{background:var(--bg-card);border:1px solid var(--line-strong);color:var(--text);border-radius:10px;padding:8px 13px;cursor:pointer;font-weight:700;font-size:13px}
+  .pager-bar button:disabled{opacity:.4;cursor:not-allowed}
+  .pager-bar button.active{background:linear-gradient(125deg,var(--accent),var(--accent-2));color:#061019;border-color:transparent}
+{% endblock %}
 {% block content %}
-<style>#catalog-pagination[hidden]{display:none!important}#catalog-pagination button{background:var(--bg-card);border:1px solid var(--line-strong);color:var(--text);border-radius:9px;padding:8px 12px;cursor:pointer;font-weight:700}#catalog-pagination button:disabled{opacity:.4;cursor:not-allowed}#catalog-pagination button.active{background:linear-gradient(125deg,var(--accent),var(--accent-2));color:#180b02;border-color:transparent}</style>
-<style>
-.home-cinema{position:relative;margin:22px 0 28px;min-height:clamp(300px,42vw,500px);border:1px solid rgba(255,255,255,.09);border-radius:24px;overflow:hidden;background:#101116;box-shadow:0 28px 80px rgba(0,0,0,.48)}
-.home-cinema .backdrop-img{filter:saturate(.86);transform:scale(1.015)}
-.home-cinema .backdrop-scrim{background:linear-gradient(90deg,rgba(4,5,8,.94) 0%,rgba(4,5,8,.68) 48%,rgba(4,5,8,.08) 100%),linear-gradient(0deg,rgba(4,5,8,.68),transparent 52%)}
-.home-cinema .backdrop-content{padding:clamp(22px,5vw,54px);max-width:760px}
-.home-cinema #homeHeroTitle{font-size:clamp(2rem,5.2vw,4rem)!important;letter-spacing:-.045em!important;background:linear-gradient(100deg,#fff 10%,#f2dfb7 65%,#d8b36a)!important;-webkit-background-clip:text!important;background-clip:text!important;color:transparent!important}
-.home-cinema .hero-eyebrow{letter-spacing:.24em!important;color:#60a5fa!important}
-#trending-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(142px,1fr));gap:16px}
-@media(max-width:600px){.home-cinema{min-height:330px;border-radius:18px}.home-cinema .backdrop-scrim{background:linear-gradient(0deg,rgba(4,5,8,.94),rgba(4,5,8,.2) 100%)}#trending-row{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}}
-</style>
 <form class="search-bar" action="/search" method="get" role="search">
   <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
-  <input name="q" placeholder="Search your favourite content…" autocomplete="off" maxlength="100" aria-label="Search catalog">
+  <input name="q" placeholder="Search movies, series, or anime…" autocomplete="off" maxlength="100" aria-label="Search catalog">
   <button type="submit">Search</button>
 </form>
 
+<div class="cat-nav" id="category-nav"></div>
 
 <div class="section-head" id="catalog">
   <h2>Now Showing</h2>
   <span class="chip" id="result-count">Loading…</span>
 </div>
-<div class="cat-nav" id="category-nav"></div>
+
 <div class="poster-grid" id="catalog-grid">
   <p class="muted" style="grid-column:1/-1;padding:48px 0;text-align:center">Loading titles…</p>
 </div>
-<div id="catalog-pagination" class="related-pager" hidden aria-label="Catalog pagination" style="display:flex;align-items:center;justify-content:center;gap:8px;margin:20px 0;flex-wrap:wrap"></div>
+<div id="catalog-pagination" class="pager-bar" hidden aria-label="Catalog pagination"></div>
 
 <script>
 (async () => {
   const grid = document.getElementById('catalog-grid');
   const nav = document.getElementById('category-nav');
   const countEl = document.getElementById('result-count');
-  const trend = null;
   let catalogPage = 1;
   const CATALOG_PER_PAGE = 24;
   let catalogItems = [];
@@ -43,80 +39,44 @@
   let category = params.get('category') || '';
   let q = params.get('q') || '';
 
-  function posterUrl(p) {
-    if (!p) return '/static/images/poster.jpg';
-    if (String(p).startsWith('http')) return p;
-    return 'https://image.tmdb.org/t/p/w780' + p;
-  }
-
-  function backdropUrl(p) {
-    if (!p) return '';
-    if (String(p).startsWith('http')) return p;
-    return 'https://image.tmdb.org/t/p/w1280' + p;
+  function tmdbUrl(path, size) {
+    if (!path) return '';
+    if (String(path).startsWith('http')) return path;
+    return 'https://image.tmdb.org/t/p/' + size + path;
   }
 
   function homeImageUrl(p) {
-    // Landscape from TMDB backdrop on home; portrait only as last fallback
-    if (p && p.backdrop_path) return backdropUrl(p.backdrop_path);
-    return posterUrl(p && p.poster_path);
+    if (p && p.backdrop_path) return tmdbUrl(p.backdrop_path, 'w1280');
+    return tmdbUrl(p && p.poster_path, 'w780') || '/static/images/poster.jpg';
   }
 
   async function fillMissingBackdrops() {
-    const imgs = document.querySelectorAll('#catalog-grid img[data-tmdb-id]');
+    const imgs = Array.from(document.querySelectorAll('#catalog-grid img[data-needs-backdrop="1"]'));
     if (!imgs.length) return;
-    const queue = Math.min(imgs.length, 12);
-    for (let i = 0; i < queue; i++) {
-      const img = imgs[i];
-      const id = img.dataset.tmdbId;
-      const mt = (img.dataset.mediaType || 'movie').toLowerCase() === 'tv' ? 'tv' : 'movie';
-      try {
-        const r = await fetch('/api/tmdb-backdrop?id=' + encodeURIComponent(id) + '&type=' + mt, { cache: 'force-cache' });
-        if (!r.ok) continue;
-        const d = await r.json();
-        if (d && d.backdrop_path) {
-          img.src = d.backdrop_path.startsWith('http') ? d.backdrop_path : ('https://image.tmdb.org/t/p/w1280' + d.backdrop_path);
-          img.removeAttribute('data-tmdb-id');
-        }
-      } catch (e) {}
-    }
-  }
-
-  function applyHero(list) {
-    const pick = list.find(x => x.backdrop_path) || list[0];
-    if (!pick) return;
-    const heroImg = document.getElementById('homeHeroImg');
-    const heroTitle = document.getElementById('homeHeroTitle');
-    const heroOverview = document.getElementById('homeHeroOverview');
-    const heroActions = document.getElementById('homeHeroActions');
-    const bg = backdropUrl(pick.backdrop_path) || posterUrl(pick.poster_path);
-    if (heroImg && bg) heroImg.style.backgroundImage = 'url("' + bg.replace(/"/g, '\\"') + '")';
-    if (heroTitle) heroTitle.textContent = pick.title || 'Discover Your Next Favourite';
-    if (heroOverview) heroOverview.textContent = pick.overview || 'Explore the worlds you love. Discover your next movie, anime or series.';
-    if (heroActions) {
-      heroActions.innerHTML = '';
-      const meta = document.createElement('div');
-      meta.className = 'hero-meta';
-      const year = (pick.release_date || pick.first_air_date || '').toString().slice(0, 4);
-      if (year) { const pill = document.createElement('span'); pill.className = 'pill'; pill.textContent = year; meta.appendChild(pill); }
-      if (pick.rating != null && Number(pick.rating) > 0) {
-        const pill = document.createElement('span'); pill.className = 'pill gold';
-        pill.textContent = '★ ' + Number(pick.rating).toFixed(1); meta.appendChild(pill);
-      }
-      if (pick.media_type) { const pill = document.createElement('span'); pill.className = 'pill'; pill.textContent = String(pick.media_type).toUpperCase(); meta.appendChild(pill); }
-      if ((pick.genres || []).length) { const pill = document.createElement('span'); pill.className = 'pill'; pill.textContent = pick.genres.slice(0, 2).join(' · '); meta.appendChild(pill); }
-      heroActions.appendChild(meta);
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap';
-      const watchBtn = document.createElement('a');
-      watchBtn.className = 'btn btn-yellow';
-      watchBtn.href = '/title/' + encodeURIComponent(pick.slug);
-      watchBtn.textContent = '▶ Play';
-      const infoBtn = document.createElement('a');
-      infoBtn.className = 'btn';
-      infoBtn.href = '/title/' + encodeURIComponent(pick.slug);
-      infoBtn.textContent = 'More info';
-      row.appendChild(watchBtn); row.appendChild(infoBtn);
-      heroActions.appendChild(row);
+    const BATCH = 6;
+    for (let i = 0; i < imgs.length; i += BATCH) {
+      await Promise.all(imgs.slice(i, i + BATCH).map(async (img) => {
+        const id = img.dataset.tmdbId || '';
+        const title = img.dataset.title || '';
+        const slug = img.dataset.slug || '';
+        const mt = (img.dataset.mediaType || 'movie').toLowerCase() === 'tv' ? 'tv' : 'movie';
+        if (!id && !title) return;
+        try {
+          const qs = new URLSearchParams({ type: mt });
+          if (id) qs.set('id', id);
+          if (title) qs.set('title', title);
+          if (slug) qs.set('slug', slug);
+          const r = await fetch('/api/tmdb-backdrop?' + qs.toString(), { cache: 'force-cache' });
+          if (!r.ok) return;
+          const d = await r.json();
+          if (d && d.backdrop_path) {
+            img.src = tmdbUrl(d.backdrop_path, 'w1280');
+            img.removeAttribute('data-needs-backdrop');
+            const hit = catalogItems.find(x => x.slug === slug);
+            if (hit) hit.backdrop_path = d.backdrop_path;
+          }
+        } catch (_) {}
+      }));
     }
   }
 
@@ -124,44 +84,57 @@
     const a = document.createElement('a');
     a.className = 'poster-card';
     a.href = '/title/' + encodeURIComponent(p.slug);
+
+    const media = document.createElement('div');
+    media.className = 'card-media';
     const img = document.createElement('img');
     img.src = homeImageUrl(p);
-    if (!(p && p.backdrop_path) && p && p.tmdb_id) {
-      img.dataset.tmdbId = String(p.tmdb_id);
+    if (!(p && p.backdrop_path) && p && (p.tmdb_id || p.title)) {
+      img.dataset.needsBackdrop = '1';
+      if (p.tmdb_id) img.dataset.tmdbId = String(p.tmdb_id);
+      if (p.title) img.dataset.title = String(p.title);
+      if (p.slug) img.dataset.slug = String(p.slug);
       img.dataset.mediaType = String(p.media_type || 'movie');
     }
-    img.alt = (p.title || 'Poster') + ' poster';
+    img.alt = (p.title || 'Poster') + ' backdrop';
     img.loading = 'lazy';
     img.decoding = 'async';
-    // Clean cards: no quality/1080P badge (user request)
-    const badges = document.createElement('div');
-    badges.className = 'badge-row home-badges';
-    let genreLabel = '';
-    if (Array.isArray(p.genres) && p.genres.length) genreLabel = String(p.genres[0]).toUpperCase();
-    if (genreLabel) {
-      const g = document.createElement('span');
-      g.className = 'badge badge-genre';
-      g.textContent = genreLabel;
-      badges.appendChild(g);
-    }
+
     const play = document.createElement('div');
     play.className = 'play-hint';
     play.innerHTML = '<span>▶</span>';
+    media.append(img, play);
+
     const info = document.createElement('div');
     info.className = 'info';
     const title = document.createElement('div');
     title.className = 'title';
     title.textContent = p.title || 'Untitled';
+
     const meta = document.createElement('div');
     meta.className = 'meta';
     const year = (p.release_date || p.first_air_date || '').toString().slice(0, 4);
-    meta.textContent = year || (p.media_type ? String(p.media_type).toUpperCase() : '');
-    info.appendChild(title);
-    info.appendChild(meta);
-    if (badges.childElementCount) info.appendChild(badges);
-    a.appendChild(img);
-    a.appendChild(play);
-    a.appendChild(info);
+    const mt = p.media_type ? String(p.media_type).toUpperCase() : '';
+    meta.textContent = [year, mt].filter(Boolean).join(' · ');
+
+    const badges = document.createElement('div');
+    badges.className = 'badge-row';
+    if (Array.isArray(p.genres) && p.genres.length) {
+      const g = document.createElement('span');
+      g.className = 'badge badge-genre';
+      g.textContent = String(p.genres[0]).toUpperCase();
+      badges.appendChild(g);
+    }
+    if (p.rating != null && Number(p.rating) > 0) {
+      const rt = document.createElement('span');
+      rt.className = 'badge badge-rating';
+      rt.textContent = '★ ' + Number(p.rating).toFixed(1);
+      badges.appendChild(rt);
+    }
+
+    info.append(title, meta);
+    if (badges.childElementCount) info.append(badges);
+    a.append(media, info);
     return a;
   }
 
@@ -170,15 +143,16 @@
     catalogPage = Math.min(Math.max(1, catalogPage), pages);
     grid.innerHTML = '';
     catalogItems.slice((catalogPage - 1) * CATALOG_PER_PAGE, catalogPage * CATALOG_PER_PAGE).forEach(p => grid.appendChild(card(p)));
-    try { fillMissingBackdrops(); } catch (e) {}
+    fillMissingBackdrops();
     const pager = document.getElementById('catalog-pagination');
     if (!pager) return;
     pager.hidden = pages <= 1;
     pager.innerHTML = '';
     if (pages <= 1) return;
     const make = (label, page, disabled = false, active = false) => {
-      const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
-      b.disabled = disabled; if (active) b.classList.add('active');
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = label; b.disabled = disabled;
+      if (active) b.classList.add('active');
       b.setAttribute('aria-label', label === '‹' ? 'Previous page' : label === '›' ? 'Next page' : 'Page ' + label);
       b.onclick = () => { catalogPage = page; renderCatalogPage(); document.getElementById('catalog')?.scrollIntoView({behavior:'smooth',block:'start'}); };
       pager.appendChild(b);
@@ -218,16 +192,19 @@
       const data = await r.json();
       const list = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
       let cats = Array.isArray(data.categories) ? data.categories : [];
-      if (!cats.length) { try { const cr = await fetch('/api/categories', {cache:'no-store'}); if (cr.ok) { const cd = await cr.json(); cats = Array.isArray(cd.items) ? cd.items : []; } } catch (_) {} }
-
-      countEl.textContent = list.length ? list.length + ' titles' : '0 titles';
+      if (!cats.length) {
+        try {
+          const cr = await fetch('/api/categories', { cache: 'no-store' });
+          if (cr.ok) { const cd = await cr.json(); cats = Array.isArray(cd.items) ? cd.items : []; }
+        } catch (_) {}
+      }
+      countEl.textContent = list.length + (list.length === 1 ? ' title' : ' titles');
       nav.innerHTML = '';
       nav.appendChild(chip('All', '', !category));
       cats.forEach(c => nav.appendChild(chip(c.name || c.slug, c.slug, category === c.slug)));
-
-      grid.innerHTML = '';
       if (!list.length) {
-        grid.innerHTML = '<p class="muted" style="grid-column:1/-1;padding:48px 0;text-align:center">No titles found. Publish movies or series from the bot or the panel.</p>';
+        grid.innerHTML = '<p class="muted" style="grid-column:1/-1;padding:48px 0;text-align:center">No titles found. Publish movies or series from the bot or panel.</p>';
+        document.getElementById('catalog-pagination').hidden = true;
         return;
       }
       catalogItems = list;
@@ -236,8 +213,7 @@
     } catch (err) {
       const safeMessage = String(err && err.message ? err.message : err).replace(/[<>&]/g, '');
       grid.innerHTML = '<div style="grid-column:1/-1;padding:40px 16px;text-align:center;background:var(--bg-card);border:1px solid var(--line);border-radius:var(--radius)"><strong style="display:block;font-size:17px;margin-bottom:8px">Catalog temporarily unavailable</strong><p class="muted" style="margin-bottom:14px">' + safeMessage + '</p><button class="btn btn-yellow" type="button" id="catalog-retry">Try again</button></div>';
-      const btn = document.getElementById('catalog-retry');
-      if (btn) btn.onclick = load;
+      document.getElementById('catalog-retry')?.addEventListener('click', load);
       countEl.textContent = 'Error';
     }
   }
@@ -246,47 +222,3 @@
 })();
 </script>
 {% endblock %}
-
-<style>
-/* Reference-inspired cinematic catalogue */
-.home-cinema{border-radius:22px;background:#090909;box-shadow:0 24px 70px rgba(0,0,0,.55);border-color:rgba(216,179,106,.18)}
-.poster-card{border-radius:16px;background:#101010;border-color:rgba(255,255,255,.08)}
-.poster-card:hover{border-color:rgba(216,179,106,.55);box-shadow:0 20px 42px rgba(0,0,0,.55),0 0 22px rgba(216,179,106,.10)}
-.section-head h2::before{background:linear-gradient(180deg,#f2dfb7,#b98a3e)}
-.search-bar:focus-within{border-color:rgba(216,179,106,.55);box-shadow:0 0 0 4px rgba(216,179,106,.10),0 10px 30px rgba(0,0,0,.3)}
-</style>
-
-<style>
-/* Search-first, landscape home catalogue */
-#homeHero{display:none!important}
-.search-bar{margin:16px 0 18px!important;min-height:68px!important;border-radius:24px!important}
-#category-nav{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px!important;margin:0 0 24px!important}
-#category-nav .chip{min-height:52px;border-radius:999px;display:flex;align-items:center;justify-content:center;padding:10px 12px;background:#101010;border:1px solid rgba(255,255,255,.12);color:#ddd}
-#category-nav .chip.active{background:linear-gradient(130deg,#2563eb,#60a5fa);color:#07111f;border-color:transparent;box-shadow:0 8px 22px rgba(37,99,235,.25)}
-#catalog-grid .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important}
-#catalog-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:14px!important}
-@media(max-width:440px){ #category-nav{gap:8px!important}#category-nav .chip{min-height:46px;padding:8px;font-size:13px}#catalog-grid{gap:10px!important}}
-</style>
-<script>document.addEventListener('DOMContentLoaded',()=>{const search=document.querySelector('.search-bar');const nav=document.getElementById('category-nav');const head=document.getElementById('catalog');if(search&&nav&&head){head.parentNode.insertBefore(nav,head);head.parentNode.insertBefore(search,nav);}});</script>
-
-<style>
-/* Genre badges are a separate row below title and year */
-.home-badges{position:static!important;display:flex!important;flex-wrap:wrap!important;justify-content:flex-start!important;gap:6px!important;margin-top:6px!important;max-width:100%!important}
-.badge-quality{background:rgba(0,0,0,.75)!important;color:#fff!important;border:1px solid rgba(255,255,255,.2)!important;border-radius:6px!important;font-size:11px!important;font-weight:800!important;padding:4px 8px!important}
-.badge-genre{background:linear-gradient(130deg,#2563eb,#60a5fa)!important;color:#07111f!important;border:0!important;border-radius:6px!important;font-size:11px!important;font-weight:800!important;padding:4px 8px!important}
-.poster-card .info{padding:10px 4px 4px}
-.poster-card .title{font-size:14px;font-weight:700;line-height:1.25}
-.poster-card .meta{font-size:12px;color:var(--muted);margin-top:2px}
-</style>
-
-<style>
-/* Clean landscape home + compact categories */
-#catalog-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important}
-#catalog-grid .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important}
-#category-nav{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px!important;margin:0 0 16px!important;max-width:640px}
-#category-nav .chip{min-height:44px!important;border-radius:999px!important;font-size:13px!important;font-weight:700}
-.search-bar{border-radius:20px!important;min-height:56px!important;margin:12px 0 14px!important}
-.poster-card .title{font-size:13px!important}.poster-card .meta{font-size:11px!important}
- .home-badges{position:static!important;bottom:auto!important;left:auto!important;margin-top:6px!important}
-.badge-genre{font-size:10px!important;padding:3px 7px!important}
-</style>
