@@ -2329,6 +2329,8 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .player-box{background:#000;border-radius:18px;overflow:hidden;position:relative;z-index:1}
     .player-wrapper{width:100%;aspect-ratio:16/9;position:relative;background:#000}
     .player-wrapper movi-player{width:100%;height:100%;background:#000;object-fit:contain;display:block}
+    movi-player.player-fit-cover::part(video){object-fit:cover!important}
+    movi-player.player-fit-contain::part(video){object-fit:contain!important}
     movi-player{--movi-primary:#8b5cf6;--movi-primary-light:#a78bfa;--movi-accent:#22d3ee;--movi-brand-fill:linear-gradient(135deg,#8b5cf6,#22d3ee);--movi-glass-bg:rgba(10,10,20,.88);--movi-chrome-bg:rgba(10,10,20,.88);--movi-bar-bg:rgba(10,10,20,.88);--movi-chrome-fg:#f5f5f5;--movi-surface:#12122a}
     
     
@@ -2527,9 +2529,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
 .player-chrome-btn{position:absolute;z-index:50;pointer-events:auto!important;touch-action:manipulation;width:40px;height:40px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(6,6,12,.82);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px);padding:0;line-height:0}
     .player-chrome-btn:hover{background:rgba(255,106,0,.25);border-color:rgba(139,92,246,.55)}
     .player-chrome-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-    .pc-switch{top:12px;left:12px}.pc-laptop{top:12px;right:56px}.pc-download{top:12px;right:12px}
-    .pc-fit{top:60px;right:12px;font:800 10px system-ui;letter-spacing:.04em}
-    .pc-fullscreen{top:108px;right:12px;font-size:22px}
+
     .player-wrapper.controls-hidden .player-chrome-btn{opacity:0;pointer-events:none;transition:opacity .18s ease}
     .player-wrapper.controls-hidden movi-player::part(chrome),.player-wrapper.controls-hidden movi-player::part(controls),.player-wrapper.controls-hidden movi-player::part(bottom-controls),.player-wrapper.controls-hidden movi-player::part(progress-container),.player-wrapper.controls-hidden movi-player::part(progress),.player-wrapper.controls-hidden movi-player::part(seek),.player-wrapper.controls-hidden movi-player::part(control-bar),.player-wrapper.controls-hidden movi-player::part(bottom-bar){opacity:0!important;visibility:hidden!important;pointer-events:none!important}
     .player-wrapper .controls-toggle{position:absolute;z-index:2147483002;top:12px;right:12px;opacity:0!important;pointer-events:auto!important;visibility:visible!important;width:150px;height:44px;padding:8px 12px;border:0;background:transparent;color:transparent;font:600 13px system-ui;cursor:pointer}
@@ -2549,16 +2549,18 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
       opacity:0!important;visibility:hidden!important;pointer-events:none!important
     }
     .player-wrapper .controls-toggle{
-      position:absolute!important;z-index:80!important;top:10px!important;right:10px!important;
-      opacity:0.02!important;width:130px!important;height:40px!important;border:0!important;
-      background:transparent!important;color:transparent!important;cursor:pointer!important;
-      pointer-events:auto!important;visibility:visible!important
+      position:absolute!important;z-index:80!important;top:10px!important;right:10px!important;left:auto!important;bottom:auto!important;
+      display:none!important;pointer-events:none!important;border:0!important;transform:none!important;
+      background:transparent!important;color:transparent!important;cursor:pointer!important;width:auto!important;height:auto!important
     }
     .player-wrapper.controls-hidden .controls-toggle{
-      opacity:1!important;color:#fff!important;background:rgba(8,8,14,.88)!important;
-      border:1px solid rgba(255,255,255,.22)!important;border-radius:10px!important;
-      font:700 12px system-ui!important;padding:8px 12px!important;width:auto!important;height:auto!important
+      display:inline-flex!important;align-items:center!important;justify-content:center!important;
+      opacity:1!important;visibility:visible!important;pointer-events:auto!important;
+      color:#fff!important;background:rgba(8,8,14,.92)!important;
+      border:1px solid rgba(255,255,255,.25)!important;border-radius:999px!important;
+      font:700 12px system-ui!important;padding:8px 14px!important;width:auto!important;height:auto!important
     }
+    .player-pop{z-index:2147483005!important;max-height:calc(100% - 58px)!important;overflow-y:auto!important}
 
     .player-wrapper.controls-hidden .player-pop{display:none!important}
     .player-wrapper .player-chrome-btn{transition:opacity .18s ease}
@@ -3014,8 +3016,11 @@ addPlayer('mobile-grid', 'Download', DL_URL);
 function extractWatchCode(url) {
   if (!url) return null;
   try {
-    const m = String(url).match(/(?:^|\\/)watch\\/([A-Za-z0-9_-]{3,64})(?:\\/|$|\\?|#)/i);
-    return m ? m[1] : null;
+    const s = String(url);
+    const m = s.match(/(?:^|\\/)watch\\/([A-Za-z0-9_-]{3,64})(?:\\/|$|\\?|#)/i);
+    if (m) return m[1];
+    const q = s.match(/[?&]path=([A-Za-z0-9_-]{3,64})(?:&|$|#)/i);
+    return q ? q[1] : null;
   } catch (_) { return null; }
 }
 function watchHrefFor(groupIdx, buttonIdx) {
@@ -3080,26 +3085,60 @@ document.addEventListener('click', (e) => {
     const swList = document.getElementById('switchPopList');
     if (sw && swPop && swList && !sw.dataset.bound) {
       sw.dataset.bound = '1';
-      const g = (typeof WATCH_GROUPS !== 'undefined' && WATCH_GROUPS[typeof GROUP_INDEX !== 'undefined' ? GROUP_INDEX : 0]) || null;
-      if (g && g.buttons && g.buttons.length) {
+      const giCur = typeof GROUP_INDEX !== 'undefined' ? GROUP_INDEX : 0;
+      const biCur = typeof BUTTON_INDEX !== 'undefined' ? BUTTON_INDEX : 0;
+      const g = (typeof WATCH_GROUPS !== 'undefined' && WATCH_GROUPS[giCur]) || null;
+      const curButtons = (g && Array.isArray(g.buttons)) ? g.buttons : [];
+      const hasOtherGroups = typeof WATCH_GROUPS !== 'undefined' && Array.isArray(WATCH_GROUPS) && WATCH_GROUPS.length > 1;
+      let swCount = 0;
+      if (!curButtons.length && !hasOtherGroups) {
+        sw.style.display = 'none';
+      } else {
         swList.innerHTML = '';
-        g.buttons.forEach((b, i) => {
+        curButtons.forEach((b, i) => {
           const btn = document.createElement('button');
           btn.type = 'button';
-          btn.textContent = (b.name || ('Source ' + (i + 1))) + (i === (typeof BUTTON_INDEX !== 'undefined' ? BUTTON_INDEX : 0) ? ' ✓' : '');
+          btn.textContent = (b.name || ('Source ' + (i + 1))) + (i === biCur ? ' ✓' : '');
           btn.addEventListener('click', (ev) => {
             ev.preventDefault(); ev.stopPropagation();
             swPop.classList.remove('open');
-            if (typeof goToGroupButton === 'function' && i !== (typeof BUTTON_INDEX !== 'undefined' ? BUTTON_INDEX : 0)) {
-              goToGroupButton(typeof GROUP_INDEX !== 'undefined' ? GROUP_INDEX : 0, i);
+            if (typeof goToGroupButton === 'function' && i !== biCur) {
+              goToGroupButton(giCur, i);
             }
           });
           swList.appendChild(btn);
+          swCount += 1;
         });
+        if (hasOtherGroups) {
+          const hdr = document.createElement('div');
+          hdr.className = 'pop-title';
+          hdr.textContent = 'Episodes / Groups';
+          swList.appendChild(hdr);
+          WATCH_GROUPS.forEach((grp, gi) => {
+            if (!grp || !Array.isArray(grp.buttons) || !grp.buttons.length) return;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = (grp.name || ('Group ' + (gi + 1))) + (gi === giCur ? ' ✓' : '');
+            btn.addEventListener('click', (ev) => {
+              ev.preventDefault(); ev.stopPropagation();
+              swPop.classList.remove('open');
+              if (typeof goToGroupButton === 'function' && gi !== giCur) {
+                const targetBi = biCur < grp.buttons.length ? biCur : 0;
+                goToGroupButton(gi, targetBi);
+              }
+            });
+            swList.appendChild(btn);
+            swCount += 1;
+          });
+        }
       }
       sw.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
         document.getElementById('laptopPop')?.classList.remove('open');
+        if (swCount <= 1) {
+          if (typeof showToast === 'function') showToast('Only 1 source available');
+          return;
+        }
         const open = !swPop.classList.contains('open');
         swPop.classList.toggle('open', open);
       });
@@ -3153,8 +3192,10 @@ document.addEventListener('click', (e) => {
         if (mp) {
           mp.classList.toggle('player-fit-cover', mode === 'cover');
           mp.classList.toggle('player-fit-contain', mode === 'contain');
+          try { mp.style.setProperty('--movi-object-fit', mode); } catch(_){}
         }
         fit.setAttribute('data-fit', mode);
+        fit.setAttribute('aria-pressed', String(mode === 'cover'));
         if (typeof showToast === 'function') showToast(mode === 'cover' ? 'Fill' : 'Fit');
       });
     }
@@ -3192,6 +3233,76 @@ document.addEventListener('click', (e) => {
       });
     }
   } catch (err) { console.warn('[controls]', err); }
+})();
+
+(function keepChromeInFullscreen(){
+  const wrapper = document.getElementById('playerWrapper');
+  const player = document.getElementById('moviPlayer');
+  if (!wrapper || !player) return;
+  const nativeReq = Element.prototype.requestFullscreen;
+  if (nativeReq && !Element.prototype.__moviWrapperFullscreenPatched) {
+    const patched = function(options) {
+      let node = this;
+      while (node) {
+        if (node === player) return nativeReq.call(wrapper, options);
+        const root = node.getRootNode && node.getRootNode();
+        node = (root && root.host) ? root.host : null;
+      }
+      return nativeReq.call(this, options);
+    };
+    try {
+      Object.defineProperty(Element.prototype, 'requestFullscreen', { value: patched, writable: true, configurable: true });
+      Object.defineProperty(Element.prototype, '__moviWrapperFullscreenPatched', { value: true, configurable: true });
+    } catch(_){}
+  }
+  const ids = ['pcSwitchBtn','pcLaptopBtn','pcDownloadBtn','pcFitBtn','pcRetryBtn','pcFullscreenBtn','switchPop','laptopPop'];
+  function sync() {
+    const fs = document.fullscreenElement || document.webkitFullscreenElement;
+    const target = (fs === player) ? player : wrapper;
+    ids.forEach(id => {
+      const node = document.getElementById(id);
+      if (node && node.parentElement !== target) target.appendChild(node);
+    });
+    const fsBtn = document.getElementById('pcFullscreenBtn');
+    if (fsBtn) {
+      const isFull = !!fs;
+      fsBtn.setAttribute('aria-pressed', String(isFull));
+      fsBtn.title = isFull ? 'Exit fullscreen' : 'Fullscreen';
+    }
+  }
+  document.addEventListener('fullscreenchange', sync);
+  document.addEventListener('webkitfullscreenchange', sync);
+  sync();
+})();
+
+(function wirePlayerKeyboardShortcuts(){
+  document.addEventListener('keydown', (event) => {
+    const wrapper = document.getElementById('playerWrapper');
+    const mp = document.getElementById('moviPlayer');
+    if (!wrapper || !mp || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    const target = event.target;
+    if (target && (target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(target.tagName))) return;
+    if (!wrapper.contains(target) && !wrapper.matches(':fullscreen')) return;
+    const key = event.key.toLowerCase();
+    if (key === ' ' || key === 'k') {
+      event.preventDefault();
+      if (mp.paused) { const p = mp.play(); if (p && p.catch) p.catch(() => {}); }
+      else mp.pause();
+    } else if (key === 'arrowleft' || key === 'arrowright') {
+      event.preventDefault();
+      const duration = Number(mp.duration) || 0;
+      const next = Math.max(0, Math.min(duration || Infinity, (Number(mp.currentTime) || 0) + (key === 'arrowleft' ? -10 : 10)));
+      try { mp.currentTime = next; } catch(_){}
+    } else if (key === 'm') {
+      mp.muted = !mp.muted;
+      if (typeof showToast === 'function') showToast(mp.muted ? 'Muted' : 'Sound on');
+    } else if (key === 'f') {
+      event.preventDefault();
+      const fs = document.fullscreenElement || document.webkitFullscreenElement;
+      if (!fs) { const req = wrapper.requestFullscreen || wrapper.webkitRequestFullscreen; if (req) req.call(wrapper).catch(() => {}); }
+      else { const exit = document.exitFullscreen || document.webkitExitFullscreen; if (exit) exit.call(document); }
+    }
+  });
 })();
 
 (function setupRelated() {

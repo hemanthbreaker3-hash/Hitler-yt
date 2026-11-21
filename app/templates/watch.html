@@ -186,8 +186,8 @@
   #playerWrapper:fullscreen .player-pop{z-index:2147483001}
   movi-player:fullscreen{position:relative!important;width:100vw!important;height:100vh!important;background:#000!important}
   movi-player:fullscreen .player-chrome-btn{z-index:2147483000}
-  @media(max-width:700px){.player-chrome-btn{width:38px;height:38px}.pc-laptop{right:52px}.player-pop{max-width:min(280px,88vw)}}
-  .player-brand-float{left:12px!important;top:12px!important;max-width:70%;font-family:var(--font-display);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#f0e8ff;background:rgba(5,6,10,.58);border-color:rgba(228,189,130,.28);text-shadow:none}
+  @media(max-width:700px){.player-chrome-btn{width:38px;height:38px}.player-pop{max-width:min(280px,88vw)}}
+  .player-brand-float{left:54px!important;top:12px!important;max-width:70%;font-family:var(--font-display);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#f0e8ff;background:rgba(5,6,10,.58);border-color:rgba(228,189,130,.28);text-shadow:none}
   .player-shell{background:#101116;box-shadow:0 20px 60px rgba(0,0,0,.48),0 0 0 1px rgba(255,255,255,.06)}
   .player-shell .neon-ribbon{background:conic-gradient(from 0deg,#b7a0ff,#e4bd82,#b7a0ff);opacity:.72}
   .player-chrome-btn{background:rgba(7,8,12,.78);border-color:rgba(255,255,255,.18)}
@@ -295,7 +295,7 @@
   .player-loading{background:rgba(0,0,0,.28)!important;color:#e4bd82!important}
   .spinner{border-color:rgba(255,255,255,.16)!important;border-top-color:#e4bd82!important}
   .player-pop .pop-title{color:#e4bd82!important}
-  .player-brand-float{left:12px!important;top:12px!important;max-width:70%;font-family:var(--font-display);font-size:10px;letter-spacing:.17em;text-transform:uppercase;color:#f0e8ff;background:rgba(5,6,10,.58);border-color:rgba(228,189,130,.28);text-shadow:none}
+  .player-brand-float{left:54px!important;top:12px!important;max-width:70%;font-family:var(--font-display);font-size:10px;letter-spacing:.17em;text-transform:uppercase;color:#f0e8ff;background:rgba(5,6,10,.58);border-color:rgba(228,189,130,.28);text-shadow:none}
   .player-shell .neon-ribbon{background:conic-gradient(from 0deg,#b7a0ff,#e4bd82,#b7a0ff);opacity:.72}
 
 
@@ -316,11 +316,11 @@
   #playerWrapper.controls-hidden .player-shortcut-hint {
     opacity:0!important; visibility:hidden!important; pointer-events:none!important;
   }
-  #playerWrapper .controls-toggle {position:absolute;z-index:2147483002;right:12px;top:12px;opacity:0;
-    pointer-events:auto;border:0;border-radius:999px;padding:8px 12px;background:transparent;color:transparent;
-    font:600 13px sans-serif;cursor:pointer;width:150px;height:44px}
-  #playerWrapper.controls-hidden .controls-toggle{opacity:0!important;visibility:visible!important;pointer-events:auto!important}
-  #playerWrapper:not(.controls-hidden) .controls-toggle{opacity:0!important;color:transparent!important;background:transparent!important;border-color:transparent!important}
+  #playerWrapper .controls-toggle {position:absolute;z-index:2147483002;right:12px;top:12px;
+    border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:8px 14px;background:rgba(8,8,14,.92);color:#fff;
+    font:700 12px system-ui,sans-serif;cursor:pointer;display:none;align-items:center;justify-content:center}
+  #playerWrapper.controls-hidden .controls-toggle{display:inline-flex!important;opacity:1!important;visibility:visible!important;pointer-events:auto!important}
+  #playerWrapper:not(.controls-hidden) .controls-toggle{display:none!important;pointer-events:none!important}
 
 </style>
 
@@ -373,23 +373,7 @@
   }
 })();
 
-/* Controls stay available; user explicitly toggles the complete chrome. */
-(function syncPlayerChromeIdle() {
-  const wrapper=document.getElementById('playerWrapper'); const player=document.getElementById('moviPlayer');
-  const toggle=document.getElementById('controlsToggle'); if(!wrapper||!player||!toggle)return;
-  let hidden=false;
-  const setHidden=(value)=>{hidden=!!value;wrapper.classList.toggle('controls-hidden',hidden);
-    wrapper.setAttribute('data-controls-visible',hidden?'false':'true');
-    toggle.textContent='{{ BRANDING }}';
-    toggle.setAttribute('aria-label',hidden?'Show all player controls':'Hide all player controls');};
-  toggle.addEventListener('click',(e)=>{e.stopPropagation();setHidden(!hidden);});
-  // Do not auto-reveal or auto-hide on playback, taps, pause, or fullscreen changes.
-  // The toggle button is the sole visibility control; player interactions remain independent.
-  wrapper.addEventListener('pointerdown', (e) => {
-    if (hidden && e.target !== toggle && !e.target.closest('.controls-toggle')) e.stopPropagation();
-  }, {capture:true});
-  setHidden(false);
-})();;
+
 </script>
 {% endblock %}
 
@@ -791,8 +775,11 @@ const FILESTORE_USER = {{ (_fs if _fs is defined else '')|tojson }};
 function extractWatchCode(url) {
   if (!url) return null;
   try {
-    const m = String(url).match(/(?:^|\/)watch\/([A-Za-z0-9_-]{3,64})(?:\/|$|\?|#)/i);
-    return m ? m[1] : null;
+    const s = String(url);
+    const m = s.match(/(?:^|\/)watch\/([A-Za-z0-9_-]{3,64})(?:\/|$|\?|#)/i);
+    if (m) return m[1];
+    const q = s.match(/[?&]path=([A-Za-z0-9_-]{3,64})(?:&|$|#)/i);
+    return q ? q[1] : null;
   } catch (_) { return null; }
 }
 // Keep the user's selected source slot when moving between episode groups.
@@ -819,14 +806,16 @@ function goToGroupButton(groupIdx, buttonIdx) {
   if (href) window.location.href = href;
 }
 
-/* Switch pop: all buttons in current group */
+/* Switch pop: all buttons in current group + other groups if available */
 (function setupSwitchPop() {
   const btn = document.getElementById('pcSwitchBtn');
   const pop = document.getElementById('switchPop');
   const list = document.getElementById('switchPopList');
   if (!btn || !pop || !list) return;
   const g = WATCH_GROUPS[GROUP_INDEX];
-  if (!g || !g.buttons || !g.buttons.length) {
+  const currentButtons = (g && Array.isArray(g.buttons)) ? g.buttons : [];
+  const hasOtherGroups = Array.isArray(WATCH_GROUPS) && WATCH_GROUPS.length > 1;
+  if (!currentButtons.length && !hasOtherGroups) {
     btn.style.display = 'none';
     return;
   }
@@ -834,25 +823,57 @@ function goToGroupButton(groupIdx, buttonIdx) {
   list.style.display = 'flex';
   list.style.flexDirection = 'column';
   list.style.minHeight = '0';
-  list.style.maxHeight = 'calc(100dvh - 132px)';
+  list.style.maxHeight = 'min(46vh, 240px)';
   list.style.overflowY = 'auto';
   list.style.overflowX = 'hidden';
   list.style.webkitOverflowScrolling = 'touch';
   list.style.touchAction = 'pan-y';
   list.style.overscrollBehavior = 'contain';
-  g.buttons.forEach((b, i) => {
+  let itemCount = 0;
+  currentButtons.forEach((b, i) => {
     const a = document.createElement('button');
     a.type = 'button';
     a.textContent = (b.name || ('Source ' + (i + 1))) + (i === BUTTON_INDEX ? ' ✓' : '');
-    a.addEventListener('click', () => {
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
       pop.classList.remove('open');
-      if (i !== BUTTON_INDEX) goToGroupButton(GROUP_INDEX, i);
+      if (i !== BUTTON_INDEX) {
+        if (typeof savePosition === 'function') savePosition();
+        goToGroupButton(GROUP_INDEX, i);
+      }
     });
     list.appendChild(a);
+    itemCount += 1;
   });
+  if (hasOtherGroups) {
+    const titleEl = document.createElement('div');
+    titleEl.className = 'pop-title';
+    titleEl.textContent = 'Episodes / Groups';
+    list.appendChild(titleEl);
+    WATCH_GROUPS.forEach((grp, gi) => {
+      if (!grp || !Array.isArray(grp.buttons) || !grp.buttons.length) return;
+      const a = document.createElement('button');
+      a.type = 'button';
+      a.textContent = (grp.name || ('Group ' + (gi + 1))) + (gi === GROUP_INDEX ? ' ✓' : '');
+      a.addEventListener('click', (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        pop.classList.remove('open');
+        if (gi !== GROUP_INDEX) {
+          if (typeof savePosition === 'function') savePosition();
+          goToGroupButton(gi, preferredButtonForGroup(gi));
+        }
+      });
+      list.appendChild(a);
+      itemCount += 1;
+    });
+  }
   btn.addEventListener('click', (e) => {
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
     document.getElementById('laptopPop')?.classList.remove('open');
+    if (itemCount <= 1) {
+      showToast('Only 1 source available');
+      return;
+    }
     pop.classList.toggle('open');
   });
 })();
@@ -863,13 +884,14 @@ function goToGroupButton(groupIdx, buttonIdx) {
   const pop = document.getElementById('laptopPop');
   const list = document.getElementById('laptopPopList');
   if (!btn || !pop || !list) return;
+  const extStream = (typeof EXTERNAL_STREAM_URL !== 'undefined' && EXTERNAL_STREAM_URL) ? EXTERNAL_STREAM_URL : STREAM_URL;
   const items = [
-    ['MX Player', androidIntent(STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME)],
+    ['MX Player', androidIntent(extStream, 'com.mxtech.videoplayer.ad', INTENT_MIME)],
     ['PLAYit', androidIntent(REMUX_URL + '?audio=0&aac=1', 'com.playit.videoplayer', 'video/mp4')],
-    ['VLC', androidIntent(STREAM_URL, 'org.videolan.vlc', INTENT_MIME)],
+    ['VLC', androidIntent(extStream, 'org.videolan.vlc', INTENT_MIME)],
   ];
   list.innerHTML = '';
-  list.style.maxHeight = 'calc(100dvh - 132px)';
+  list.style.maxHeight = 'min(46vh, 240px)';
   list.style.overflowY = 'auto';
   list.style.overscrollBehavior = 'contain';
   items.forEach(([label, href]) => {
@@ -879,7 +901,7 @@ function goToGroupButton(groupIdx, buttonIdx) {
     list.appendChild(a);
   });
   btn.addEventListener('click', (e) => {
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
     document.getElementById('switchPop')?.classList.remove('open');
     pop.classList.toggle('open');
   });
@@ -889,17 +911,48 @@ function goToGroupButton(groupIdx, buttonIdx) {
 (function setupDownloadBtn() {
   const btn = document.getElementById('pcDownloadBtn');
   if (!btn) return;
-  btn.addEventListener('click', () => {
-    // Prefer site /dl/ so Vercel/backend can serve or proxy the file
+  btn.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
     const a = document.createElement('a');
     a.href = DL_URL;
-    a.setAttribute('download', '');
+    if (DOWNLOADS_ENABLED) a.setAttribute('download', '');
+    else a.target = '_blank';
     a.rel = 'noopener';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    showToast('Download started');
+    showToast(DOWNLOADS_ENABLED ? 'Download started' : 'Opening Telegram bot…');
   });
+})();
+
+/* Controls visibility toggle (placed in body after DOM exists) */
+(function syncPlayerChromeIdle() {
+  const wrapper = document.getElementById('playerWrapper');
+  const player = document.getElementById('moviPlayer');
+  const toggle = document.getElementById('controlsToggle');
+  if (!wrapper || !player) return;
+  let hidden = false;
+  const setHidden = (value) => {
+    hidden = !!value;
+    wrapper.classList.toggle('controls-hidden', hidden);
+    wrapper.setAttribute('data-controls-visible', hidden ? 'false' : 'true');
+    if (toggle) {
+      toggle.textContent = hidden ? 'Show controls' : 'Hide controls';
+      toggle.setAttribute('aria-label', hidden ? 'Show all player controls' : 'Hide all player controls');
+    }
+    if (hidden) {
+      document.getElementById('switchPop')?.classList.remove('open');
+      document.getElementById('laptopPop')?.classList.remove('open');
+    }
+  };
+  if (toggle) {
+    toggle.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+      setHidden(!hidden);
+    });
+  }
+  setHidden(false);
+  window.__setPlayerControlsVisible = setHidden;
 })();
 
 document.addEventListener('click', (e) => {
@@ -1302,7 +1355,9 @@ function recoverMoviAfterStall() {
       clearRecoveryWatch();
       try {
         const t = Number(moviPlayer.currentTime)||0;
+        showLoading();
         moviPlayer.src = STREAM_URL;
+        if (typeof moviPlayer.load === 'function') moviPlayer.load();
         moviPlayer.addEventListener('loadedmetadata', function once(){
           moviPlayer.removeEventListener('loadedmetadata', once);
           try { moviPlayer.currentTime = t; } catch(_){}
@@ -1537,27 +1592,21 @@ initWasm();
     visibility: visible !important;
     pointer-events: auto !important;
   }
-  #playerWrapper .player-chrome-btn,
-  #playerWrapper .player-pop:not(.open) {
+  #playerWrapper .player-chrome-btn {
     opacity: 1 !important;
     visibility: visible !important;
     pointer-events: auto !important;
     transform: none !important;
   }
   #playerWrapper .player-chrome-btn { z-index: 2147483000 !important; }
-  #playerWrapper .player-pop { z-index: 2147483001 !important; }
+  #playerWrapper .player-pop { z-index: 2147483005 !important; max-height: calc(100% - 58px) !important; overflow-y: auto !important; }
   @media (orientation: landscape) and (max-height: 600px) {
     #playerWrapper:fullscreen .player-chrome-btn,
     #playerWrapper:-webkit-full-screen .player-chrome-btn {
       width: 36px !important;
       height: 36px !important;
     }
-    #playerWrapper:fullscreen .pc-switch,
-    #playerWrapper:-webkit-full-screen .pc-switch { top: 8px !important; left: 8px !important; }
-    #playerWrapper:fullscreen .pc-laptop,
-    #playerWrapper:-webkit-full-screen .pc-laptop { top: 8px !important; right: 50px !important; }
-    #playerWrapper:fullscreen .pc-download,
-    #playerWrapper:-webkit-full-screen .pc-download { top: 8px !important; right: 8px !important; }
+
   }
 </style>
 
