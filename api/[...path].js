@@ -1476,12 +1476,12 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
     function parseEpisode(name){
       name=String(name||'').trim();
       var patterns=[
-        /\bS0*(\d{1,3})\s*[-_. ]*E0*(\d{1,4})\b/i,
-        /\bSeason\s*0*(\d{1,3})\s*(?:[-_. ]*)?(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
-        /\b0*(\d{1,3})\s*[xX]\s*0*(\d{1,4})\b/i,
-        /\bS0*(\d{1,3})[ ._-]+(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
-        /\bSeason\s*0*(\d{1,3})\b.*?\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i,
-        /\b(?:S|Season)\s*0*(\d{1,3})\b.*?\b(?:E|Episode|Ep)\s*0*(\d{1,4})\b/i
+        new RegExp('\\bS0*(\\d{1,3})\\s*[-_. ]*E0*(\\d{1,4})\\b', 'i'),
+        new RegExp('\\bSeason\\s*0*(\\d{1,3})\\s*(?:[-_. ]*)?(?:Episode|Ep)\\s*0*(\\d{1,4})\\b', 'i'),
+        new RegExp('\\b0*(\\d{1,3})\\s*[xX]\\s*0*(\\d{1,4})\\b', 'i'),
+        new RegExp('\\bS0*(\\d{1,3})[ ._-]+(?:Episode|Ep)\\s*0*(\\d{1,4})\\b', 'i'),
+        new RegExp('\\bSeason\\s*0*(\\d{1,3})\\b.*?\\b(?:Episode|Ep|E)\\s*0*(\\d{1,4})\\b', 'i'),
+        new RegExp('\\b(?:S|Season)\\s*0*(\\d{1,3})\\b.*?\\b(?:E|Episode|Ep)\\s*0*(\\d{1,4})\\b', 'i')
       ];
       for(var i=0;i<patterns.length;i++){var m=name.match(patterns[i]);if(m)return {season:Number(m[1]),episode:Number(m[2])};}
       return null;
@@ -2383,6 +2383,9 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .related-pager span{color:#9ca3af;font-size:13px}
     .related-pager button.active{background:linear-gradient(125deg,#7c3aed,#22d3ee);border-color:transparent;color:#071018;font-weight:900}
     .episode-tools{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}.episode-tools input,.episode-tools select{min-height:40px;border:1px solid #2a2a3a;border-radius:10px;background:#0d0d16;color:#fff;padding:8px 12px;outline:none} .season-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 14px}.season-tabs button{border:1px solid rgba(148,163,184,.18);background:#111722;color:#9ca3af;border-radius:999px;padding:7px 13px;font-size:12px;font-weight:800;cursor:pointer}.season-tabs button.active{background:rgba(139,92,246,.14);border-color:rgba(139,92,246,.4);color:#c4b5fd}
+    .side{display:block!important;width:100%}
+    .side-ep-list{max-height:min(55vh,420px)!important}
+    /* side-eps mobile always visible */
     .side-eps{max-height:min(70vh,560px);display:flex;flex-direction:column;gap:10px}
     .side-season-bar{display:flex;flex-wrap:wrap;gap:6px}
     .side-season-bar button{border:1px solid rgba(148,163,184,.2);background:#111722;color:#9ca3af;border-radius:999px;padding:6px 11px;font-size:11px;font-weight:800;cursor:pointer}
@@ -2432,7 +2435,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
             subtitleedge="outline"
             style="display:none;width:100%;height:100%"
             tabindex="0"></movi-player>
-          <div id="playerLoading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000;z-index:2">
+          <div id="playerLoading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.3);z-index:2;pointer-events:none">
             <div style="width:42px;height:42px;border-radius:50%;border:3px solid rgba(255,255,255,.18);border-top-color:#8b5cf6;animation:ddspin .8s linear infinite"></div>
           </div>
           <style>@keyframes ddspin{to{transform:rotate(360deg)}} movi-player{width:100%;height:100%;--movi-primary:#8b5cf6}</style>
@@ -2663,7 +2666,7 @@ function scheduleMoviStallRecovery() {
   moviStallTimer = setTimeout(() => {
     moviStallTimer = null;
     if (!moviPlayer || moviPlayer.paused) return;
-    if (Date.now() - moviLastProgressAt < 17000) { scheduleMoviStallRecovery(); return; }
+    if (Date.now() - moviLastProgressAt < 40000) { scheduleMoviStallRecovery(); return; }
     if (moviStallRetries >= 2) {
       showToast('Stream is still buffering. Check your connection and tap Play to retry.');
       return;
@@ -2681,7 +2684,7 @@ function scheduleMoviStallRecovery() {
       moviPlayer.addEventListener('loadedmetadata', restore, { once: true });
       setTimeout(() => { if (moviPlayer && moviPlayer.readyState >= 1) restore(); }, 1800);
     } catch (err) { console.warn('[player] Movi buffering recovery failed', err); }
-  }, 18000);
+  }, 40000);
 }
 function startWasm() {
   if (!moviPlayer) { hideLoading(); showToast('Movi Player element is missing'); return; }
@@ -2883,22 +2886,24 @@ document.addEventListener('click', (e) => {
     if (card) card.style.display = 'none';
     return;
   }
-  if (card) card.style.display = '';
+  if (card) { card.style.display = ''; card.hidden = false; card.removeAttribute('hidden'); }
 
   function parseEpisode(name) {
     const text = String(name || '').replace(/[._]+/g, ' ').trim();
     const patterns = [
-      /\bS(?:eason\s*)?0*(\d{1,3})\s*[-_. ]*E(?:p(?:isode)?\s*)?0*(\d{1,4})\b/i,
-      /\bSeason\s*0*(\d{1,3})\s*[-_. ]*(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
-      /\b0*(\d{1,3})\s*[xX]\s*0*(\d{1,4})\b/i,
-      /\bS0*(\d{1,3})[ ._-]+(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
-      /\bSeason\s*0*(\d{1,3})\b.*?\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i,
-      /\b(?:S|Season)\s*0*(\d{1,3})\b.*?\b(?:E|Episode|Ep)\s*0*(\d{1,4})\b/i,
+      new RegExp('\\bS(?:eason\\s*)?0*(\\d{1,3})\\s*[-_. ]*E(?:p(?:isode)?\\s*)?0*(\\d{1,4})\\b', 'i'),
+      new RegExp('\\bSeason\\s*0*(\\d{1,3})\\s*[-_. ]*(?:Episode|Ep)\\s*0*(\\d{1,4})\\b', 'i'),
+      new RegExp('\\b0*(\\d{1,3})\\s*[xX]\\s*0*(\\d{1,4})\\b', 'i'),
+      new RegExp('\\bS0*(\\d{1,3})[ ._-]+(?:Episode|Ep)\\s*0*(\\d{1,4})\\b', 'i'),
+      new RegExp('\\bSeason\\s*0*(\\d{1,3})\\b.*?\\b(?:Episode|Ep|E)\\s*0*(\\d{1,4})\\b', 'i'),
+      new RegExp('\\b(?:S|Season)\\s*0*(\\d{1,3})\\b.*?\\b(?:E|Episode|Ep)\\s*0*(\\d{1,4})\\b', 'i'),
     ];
     for (let i = 0; i < patterns.length; i++) {
       const m = text.match(patterns[i]);
       if (m) return { season: Number(m[1]), episode: Number(m[2]) };
     }
+    const simple = text.match(/S0*([0-9]{1,3})\s*E0*([0-9]{1,4})/i) || text.match(/([0-9]{1,3})\s*[xX]\s*([0-9]{1,4})/);
+    if (simple) return { season: Number(simple[1]), episode: Number(simple[2]) };
     const seasonOnly = text.match(/\bSeason\s*0*(\d{1,3})\b|\bS0*(\d{1,3})(?!\s*[-_. ]*E)/i);
     if (seasonOnly) return null;
     const epOnly = text.match(/\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i);

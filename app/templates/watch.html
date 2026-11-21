@@ -1168,8 +1168,8 @@ const STALL_TIMEOUT_MS = (() => {
   const type = String(connection && connection.effectiveType || '').toLowerCase();
   if (connection && connection.saveData) return 40000;
   if (type === 'slow-2g' || type === '2g') return 45000;
-  if (type === '3g') return 30000;
-  return 20000;
+  if (type === '3g') return 45000;
+  return 45000;
 })();
 const RECOVERY_COOLDOWN_MS = 30000;
 
