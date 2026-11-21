@@ -638,15 +638,23 @@ async def refresh_runtime_admin_cache() -> None:
 
 
 def extract_filename_from_caption(caption: str | None, fallback: str) -> str:
-    """Extract real filename from caption: first letter through extension, ignore emojis/metadata."""
+    """Extract filename from caption: from first letter/digit through .mkv (or media ext),
+    keeping everything in between (including emojis, {}, [], ()) while ignoring text before
+    the first letter/digit and after the extension."""
     if not caption:
         return fallback
-    # Prefer .mkv then common video/audio extensions
-    m = re.search(
-        r"([A-Za-z0-9][\w\s.\-()\[\],+@]*?\.(?:mkv|mp4|avi|mov|webm|m4v|ts|m2ts|mpg|mpeg|wmv|flv|3gp|mp3|m4a|flac|wav|aac|ogg))",
-        caption,
-        re.I,
-    )
+    text = re.sub(r"[\r\n\t]+", " ", str(caption)).strip()
+    # Priority 1: .mkv (keep everything from first letter/digit through .mkv)
+    m = re.search(r"([A-Za-z0-9].*?\.mkv)(?=\s|$|[^A-Za-z0-9])", text, re.I)
+    if not m:
+        m = re.search(r"([A-Za-z0-9].*?\.mkv)", text, re.I)
+    if not m:
+        # Priority 2: other common video/audio extensions
+        m = re.search(
+            r"([A-Za-z0-9].*?\.(?:mp4|avi|mov|webm|m4v|ts|m2ts|mpg|mpeg|wmv|flv|3gp|mp3|m4a|flac|wav|aac|ogg))(?=\s|$|[^A-Za-z0-9])",
+            text,
+            re.I,
+        )
     if m:
         return m.group(1).strip()
     return fallback
@@ -3412,46 +3420,56 @@ def register_handlers(bot):
             errors: list[str] = []
             idx = 0
             total = end_id - start_id + 1
+            chunk_ranges = [
+                list(range(cs, min(cs + 200, end_id + 1)))
+                for cs in range(start_id, end_id + 1, 200)
+            ]
+            sem = asyncio.Semaphore(4)
 
-            async def iter_range_messages():
-                """Fetch message IDs in bounded chunks for speed without loading huge ranges at once."""
-                position = 0
-                for chunk_start in range(start_id, end_id + 1, 100):
-                    chunk_ids = list(range(chunk_start, min(chunk_start + 100, end_id + 1)))
+            async def fetch_chunk(chunk_ids: list[int]):
+                async with sem:
                     try:
                         fetched = await client.get_messages(resolved_chat_id, chunk_ids)
                         if not isinstance(fetched, list):
                             fetched = [fetched]
                         by_id = {getattr(item, "id", None): item for item in fetched if item is not None}
-                        for msg_id in chunk_ids:
-                            yield position, msg_id, by_id.get(msg_id)
-                            position += 1
+                        return [(mid, by_id.get(mid)) for mid in chunk_ids]
                     except Exception as batch_error:
-                        logger.warning("batch chunk %s-%s failed, falling back to individual fetches: %s", chunk_ids[0], chunk_ids[-1], batch_error)
-                        for msg_id in chunk_ids:
+                        logger.warning("batch chunk %s-%s failed, falling back: %s", chunk_ids[0], chunk_ids[-1], batch_error)
+                        out = []
+                        for mid in chunk_ids:
                             try:
-                                item = await client.get_messages(resolved_chat_id, msg_id)
+                                item = await client.get_messages(resolved_chat_id, mid)
                                 if isinstance(item, list):
                                     item = item[0] if item else None
                             except Exception as item_error:
-                                logger.warning("batch msg %s fetch failed: %s", msg_id, item_error)
+                                logger.warning("batch msg %s fetch failed: %s", mid, item_error)
                                 item = None
-                            yield position, msg_id, item
-                            position += 1
+                            out.append((mid, item))
+                        return out
 
-            async for i, msg_id, source_msg in iter_range_messages():
-                if i > 0 and i % 100 == 0:
+            # Fetch chunks concurrently in waves of 4 (up to 800 messages per wave)
+            all_items = []
+            for wave_start in range(0, len(chunk_ranges), 4):
+                wave = chunk_ranges[wave_start : wave_start + 4]
+                wave_results = await asyncio.gather(*(fetch_chunk(c) for c in wave))
+                for chunk_pairs in wave_results:
+                    all_items.extend(chunk_pairs)
+                if len(chunk_ranges) > 4:
                     try:
                         await status.edit_text(
-                            f"🔄 Batch processing… {i}/{total} (found {idx} matching media)",
+                            f"⚡ Fast batch fetching… {min(len(all_items), total)}/{total}",
                             parse_mode=ParseMode.HTML,
                         )
                     except Exception:
                         pass
+
+            # Extract media metadata in memory first
+            prepared = []
+            for msg_id, source_msg in all_items:
                 try:
                     if not source_msg or getattr(source_msg, "empty", False) or not _is_media_message(source_msg):
                         continue
-
                     media = (
                         source_msg.document or source_msg.video or source_msg.audio
                         or source_msg.animation or source_msg.photo or source_msg.voice
@@ -3486,9 +3504,6 @@ def register_handlers(bot):
 
                     caption = getattr(source_msg, "caption", None) or getattr(source_msg, "text", None) or ""
                     file_name = extract_filename_from_caption(caption, file_name)
-
-                    # Match against both the caption text and the extracted filename.
-                    # This handles captions that contain a title even without an extension.
                     searchable_name = f"{file_name}\n{caption}".casefold()
                     if filter_key and filter_key not in searchable_name:
                         continue
@@ -3497,31 +3512,72 @@ def register_handlers(bot):
                     if not file_id:
                         continue
 
-                    # Prefer source chat + message (no storage channel needed)
                     src_chat_id = source_msg.chat.id if source_msg.chat else resolved_chat_id
-                    existing = await files_col.find_one({
+                    prepared.append({
+                        "msg_id": source_msg.id,
                         "chat_id": src_chat_id,
-                        "message_id": source_msg.id,
+                        "file_id": file_id,
+                        "file_unique_id": str(getattr(media, "file_unique_id", source_msg.id)),
+                        "filename": file_name,
+                        "mime_type": mime_type,
+                        "file_size": file_size or 0,
                     })
-                    if existing and existing.get("short_code"):
-                        short_code = existing["short_code"]
-                    else:
-                        short_code = generate_short_code()
-                        file_meta = FileMetadata(
-                            file_id=file_id,
-                            file_unique_id=str(getattr(media, "file_unique_id", source_msg.id)),
-                            filename=file_name,
-                            mime_type=mime_type,
-                            file_size=file_size or 0,
-                            uploader_id=user.id,
-                            short_code=short_code,
-                            chat_id=src_chat_id,
-                            message_id=source_msg.id,
-                            expiry_time=None,
-                        )
-                        await files_col.insert_one(file_meta.dict())
+                except Exception as e:
+                    err_txt = f"{type(e).__name__}: {e}"
+                    logger.warning("batch msg %s failed: %s", msg_id, err_txt)
+                    if len(errors) < 6:
+                        errors.append(f"• msg {msg_id}: {html.escape(err_txt[:140])}")
 
+            # Bulk MongoDB lookup + bulk insert (2 DB round-trips total instead of 2*N)
+            if prepared:
+                by_chat: dict[int, list[int]] = {}
+                for item in prepared:
+                    by_chat.setdefault(item["chat_id"], []).append(item["msg_id"])
+                existing_map: dict[tuple[int, int], dict] = {}
+                for cid, mids in by_chat.items():
+                    async for doc in files_col.find(
+                        {"chat_id": cid, "message_id": {"$in": mids}},
+                        {"chat_id": 1, "message_id": 1, "short_code": 1, "filename": 1},
+                    ):
+                        if doc.get("short_code"):
+                            existing_map[(doc["chat_id"], doc["message_id"])] = doc
+
+                new_docs = []
+                for item in prepared:
+                    key = (item["chat_id"], item["msg_id"])
+                    ex = existing_map.get(key)
+                    if ex:
+                        item["short_code"] = ex["short_code"]
+                        if ex.get("filename") != item["filename"]:
+                            await files_col.update_one(
+                                {"_id": ex["_id"]},
+                                {"$set": {"filename": item["filename"]}},
+                            )
+                    else:
+                        sc = generate_short_code()
+                        item["short_code"] = sc
+                        new_docs.append(
+                            FileMetadata(
+                                file_id=item["file_id"],
+                                file_unique_id=item["file_unique_id"],
+                                filename=item["filename"],
+                                mime_type=item["mime_type"],
+                                file_size=item["file_size"],
+                                uploader_id=user.id,
+                                short_code=sc,
+                                chat_id=item["chat_id"],
+                                message_id=item["msg_id"],
+                                expiry_time=None,
+                            ).dict()
+                        )
+                if new_docs:
+                    await files_col.insert_many(new_docs, ordered=False)
+
+                for item in prepared:
                     idx += 1
+                    short_code = item["short_code"]
+                    file_name = item["filename"]
+                    file_size = item["file_size"]
                     size_str = format_bytes(file_size) if file_size else "—"
                     block = (
                         f"{idx}. 📁 File: {html.escape(file_name)}\n\n"
@@ -3538,12 +3594,6 @@ def register_handlers(bot):
                         watch = f"{base_url}/watch/{short_code}"
                         block += f"▶️ Watch / Stream: <code>{html.escape(watch)}</code>\n"
                     results.append(block)
-                except Exception as e:
-                    err_txt = f"{type(e).__name__}: {e}"
-                    logger.warning("batch msg %s failed: %s", msg_id, err_txt)
-                    if len(errors) < 6:
-                        errors.append(f"• msg {msg_id}: {html.escape(err_txt[:140])}")
-                    continue
 
             if not results:
                 err_block = ("\n\n" + "\n".join(errors)) if errors else ""
