@@ -818,6 +818,7 @@ async def setup_bot_commands(bot):
             BotCommand("unban", "Unban a user (admin)"),
             BotCommand("autodel", "Auto-delete settings (admin)"),
             BotCommand("addgroups", "Add download/watch groups to a page (admin)"),
+            BotCommand("done", "Save collected /addgroups items to page (admin)"),
             BotCommand("del", "Delete a website page by link, title, or slug (admin)"),
             BotCommand("save", "Backup or restore full project data (admin)"),
             BotCommand("batch", "Generate links for a message ID range (admin)"),
@@ -1533,7 +1534,7 @@ def register_handlers(bot):
                 _awaiting_shortener.pop(user.id, None)
                 return await _show_shortener_settings(message)
 
-        # /addgroups text input (groups + buttons)
+        # /addgroups text input (collect multiple messages until /done)
         if raw_override is None and user.id in _awaiting_addgroups and _is_admin_user(user.id):
             state = _awaiting_addgroups.get(user.id) or {}
             page_slug = state.get("page_slug")
@@ -1541,69 +1542,25 @@ def register_handlers(bot):
             if not page_slug:
                 _awaiting_addgroups.pop(user.id, None)
                 return await message.reply("Session expired. Reply to a page link with /addgroups again.")
-            page = await find_catalog_page(page_slug)
-            if not page:
-                _awaiting_addgroups.pop(user.id, None)
-                return await message.reply(
-                    f"Catalog page `{page_slug}` not found in bot DB.\n"
-                    "Confirm `DATABASE_NAME` matches the database used by the Vercel website."
-                )
-            page_slug = page.get("slug") or page_slug
-            target_db_name = page.get("_db_name") or getattr(settings, "DATABASE_NAME", None) or "tg_media_bot"
             new_groups = parse_groups_text(raw, box=box)
             if not new_groups:
                 return await message.reply(
-                    "❌ Could not parse any groups/buttons.\n\n"
+                    "❌ Could not parse any groups/buttons from this message.\n\n"
                     "Use this format:\n\n"
                     "`1. Group Name`\n"
                     "`Button Name: https://example.com`\n\n"
                     "`2. Another Group`\n"
-                    "`Watch Now: https://...`"
+                    "`Watch Now: https://...`\n\n"
+                    "Or send `/done` to save already collected groups, or `/cancel` to stop."
                 )
-            existing = list(page.get("groups") or [])
-            # /addgroups is append-only: preserve every previously saved group.
-            # Skip only exact duplicates (same box, normalized name, and buttons/URLs).
-            merged = list(existing)
-            def _group_signature(group):
-                group_box = (group.get("box") or "watch").strip().lower()
-                group_name = (group.get("name") or "").strip().casefold()
-                buttons = tuple(
-                    ((button.get("name") or button.get("text") or "").strip().casefold(),
-                     (button.get("url") or button.get("link") or "").strip())
-                    for button in (group.get("buttons") or [])
-                )
-                return group_box, group_name, buttons
-            existing_signatures = {_group_signature(group) for group in existing}
-            added_groups = []
-            for group in new_groups:
-                signature = _group_signature(group)
-                if signature in existing_signatures:
-                    continue
-                merged.append(group)
-                existing_signatures.add(signature)
-                added_groups.append(group)
-            # Rewrite URLs to active Cloudflare base if configured
-            cf = await get_active_cloudflare_url()
-            if cf:
-                from app.utils.helpers import rewrite_page_groups_to_cloudflare
-                merged = rewrite_page_groups_to_cloudflare(merged, cf)
-            from app.database.connection import client as mongo_client
-            target_coll = mongo_client[target_db_name]["catalog_pages"]
-            await target_coll.update_one(
-                {"slug": page_slug},
-                {"$set": {"groups": merged, "updated_at": datetime.datetime.now(datetime.timezone.utc)}},
-            )
-            _awaiting_addgroups.pop(user.id, None)
-            total_btns = sum(len(g.get("buttons") or []) for g in added_groups)
+            collected = state.setdefault("groups", [])
+            collected.extend(new_groups)
+            msg_btns = sum(len(g.get("buttons") or []) for g in new_groups)
+            total_btns = sum(len(g.get("buttons") or []) for g in collected)
             return await message.reply(
-                f"✅ **Groups saved** for `/{page_slug}`\n\n"
-                f"> Box: **{box.upper()}**\n"
-                f"> Groups added: `{len(added_groups)}`\n"
-                f"> Existing groups kept: `{len(existing)}`\n"
-                f"> Buttons added: `{total_btns}`\n"
-                f"> Duplicate groups skipped: `{len(new_groups) - len(added_groups)}`\n"
-                f"> DB: `{target_db_name}`\n\n"
-                f"They are now live on the page Watch/Download section."
+                f"📥 **Collected** `+{len(new_groups)}` group(s) (`+{msg_btns}` button(s)) for `/{page_slug}` (**{box.upper()}**)\n"
+                f"📦 Total queued: `{len(collected)}` group(s) · `{total_btns}` button(s)\n\n"
+                f"Send more messages, or send `/done` to save all to the page."
             )
 
         match = re.search(r"https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))(?:\?.*)?$", raw)
@@ -2500,7 +2457,7 @@ def register_handlers(bot):
         & ~filters.command([
             "start", "fspanel", "panel", "filestore",
             "batch", "ss", "sv", "mi", "stats", "broadcast", "ban", "unban",
-            "autodel", "del", "addgroups", "save", "link", "addbots", "shorteners",
+            "autodel", "del", "addgroups", "done", "save", "link", "addbots", "shorteners",
             "search", "username", "password", "backendurl", "baseurl",
             "categories", "edit", "manage",
         ])
@@ -2975,19 +2932,20 @@ def register_handlers(bot):
         if not page:
             return await callback.answer("Page not found in bot DB", show_alert=True)
         page_slug = page.get("slug") or page_slug
-        _awaiting_addgroups[user.id] = {"page_slug": page_slug, "box": box}
-        # Escape for HTML; long names OK in message text (4096 limit)
+        _awaiting_addgroups[user.id] = {"page_slug": page_slug, "box": box, "groups": []}
+        # Escape for HTML; long names OK across multiple messages until /done
         safe_slug = html.escape(page_slug)
         try:
             await callback.message.edit_text(
                 f"✏️ <b>Configure {box.upper()} groups</b> for <code>{safe_slug}</code>\n\n"
-                f"Send groups and buttons in this format (unlimited length):\n\n"
+                f"Send groups and buttons in this format (you can send <b>multiple messages</b>):\n\n"
                 f"<code>1. Group Name</code>\n"
                 f"<code>Button Name: https://example.com/link</code>\n\n"
                 f"<code>2. Another Group</code>\n"
                 f"<code>Stream: https://...</code>\n"
                 f"<code>Mirror: https://...</code>\n\n"
-                f"Send everything in <b>one message</b>. After saving, buttons appear in the {box} section of the page.",
+                f"📥 Bot will collect every message you send.\n"
+                f"✅ When finished, send <b>/done</b> to add all collected groups to the page (or /cancel to abort).",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -2996,6 +2954,77 @@ def register_handlers(bot):
                 parse_mode=ParseMode.HTML,
             )
         await callback.answer()
+
+    @bot.on_message(filters.command("done") & filters.private)
+    async def addgroups_done_command(client, message: Message):
+        user = message.from_user
+        if not user or not _is_admin_user(user.id):
+            return await message.reply("🚫 Admins only.")
+        state = _awaiting_addgroups.get(user.id)
+        if not state:
+            return await message.reply("ℹ️ No active `/addgroups` session. Start one with `/addgroups <slug or link>`.")
+        page_slug = state.get("page_slug")
+        box = state.get("box") or "watch"
+        new_groups = list(state.get("groups") or [])
+        if not page_slug:
+            _awaiting_addgroups.pop(user.id, None)
+            return await message.reply("Session expired. Start `/addgroups` again.")
+        if not new_groups:
+            return await message.reply("⚠️ No groups collected yet. Send at least one group message first, or `/cancel` to exit.")
+        page = await find_catalog_page(page_slug)
+        if not page:
+            _awaiting_addgroups.pop(user.id, None)
+            return await message.reply(
+                f"Catalog page `{page_slug}` not found in bot DB.\n"
+                "Confirm `DATABASE_NAME` matches the database used by the Vercel website."
+            )
+        page_slug = page.get("slug") or page_slug
+        target_db_name = page.get("_db_name") or getattr(settings, "DATABASE_NAME", None) or "tg_media_bot"
+        existing = list(page.get("groups") or [])
+        merged = list(existing)
+
+        def _group_signature(group):
+            group_box = (group.get("box") or "watch").strip().lower()
+            group_name = (group.get("name") or "").strip().casefold()
+            buttons = tuple(
+                ((button.get("name") or button.get("text") or "").strip().casefold(),
+                 (button.get("url") or button.get("link") or "").strip())
+                for button in (group.get("buttons") or [])
+            )
+            return group_box, group_name, buttons
+
+        existing_signatures = {_group_signature(group) for group in existing}
+        added_groups = []
+        for group in new_groups:
+            signature = _group_signature(group)
+            if signature in existing_signatures:
+                continue
+            merged.append(group)
+            existing_signatures.add(signature)
+            added_groups.append(group)
+
+        cf = await get_active_cloudflare_url()
+        if cf:
+            from app.utils.helpers import rewrite_page_groups_to_cloudflare
+            merged = rewrite_page_groups_to_cloudflare(merged, cf)
+        from app.database.connection import client as mongo_client
+        target_coll = mongo_client[target_db_name]["catalog_pages"]
+        await target_coll.update_one(
+            {"slug": page_slug},
+            {"$set": {"groups": merged, "updated_at": datetime.datetime.now(datetime.timezone.utc)}},
+        )
+        _awaiting_addgroups.pop(user.id, None)
+        total_btns = sum(len(g.get("buttons") or []) for g in added_groups)
+        return await message.reply(
+            f"✅ **All collected groups saved** for `/{page_slug}`\n\n"
+            f"> Box: **{box.upper()}**\n"
+            f"> Groups added: `{len(added_groups)}`\n"
+            f"> Existing groups kept: `{len(existing)}`\n"
+            f"> Buttons added: `{total_btns}`\n"
+            f"> Duplicate groups skipped: `{len(new_groups) - len(added_groups)}`\n"
+            f"> DB: `{target_db_name}`\n\n"
+            f"They are now live on the page Watch/Download section."
+        )
 
     @bot.on_message(filters.command("save") & filters.private)
     async def save_command(client, message: Message):
