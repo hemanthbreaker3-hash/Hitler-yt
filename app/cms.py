@@ -178,7 +178,7 @@ async def get_settings():
 
 
 
-async def backfill_tmdb_backdrops(limit: int = 80) -> int:
+async def backfill_tmdb_backdrops(limit: int = 500) -> int:
     """On startup: fetch TMDB landscape backdrops for catalog pages missing them."""
     key = getattr(settings, 'TMDB_API_KEY', None) or ''
     if not key:
