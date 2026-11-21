@@ -13,24 +13,12 @@
 #trending-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(142px,1fr));gap:16px}
 @media(max-width:600px){.home-cinema{min-height:330px;border-radius:18px}.home-cinema .backdrop-scrim{background:linear-gradient(0deg,rgba(4,5,8,.94),rgba(4,5,8,.2) 100%)}#trending-row{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}}
 </style>
-<section class="backdrop-hero home-cinema" id="homeHero" hidden style="min-height:clamp(300px,42vw,500px)">
-  <div class="backdrop-img" id="homeHeroImg"></div>
-  <div class="backdrop-scrim"></div>
-  <div class="backdrop-content" style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-height:clamp(300px,42vw,500px)">
-    <div class="hero-eyebrow" style="color:var(--accent-2);font-weight:800;font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:10px;font-family:var(--font-display)">{{ BRANDING }}</div>
-    <h1 id="homeHeroTitle" style="font-size:clamp(1.6rem,5vw,3rem);margin:0 0 10px;line-height:1.08;background:linear-gradient(100deg,#fff 15%,#c4b5fd 55%,var(--accent-2));-webkit-background-clip:text;background-clip:text;color:transparent">Discover Your Next Favourite</h1>
-    <p id="homeHeroOverview" class="muted" style="max-width:60ch;margin-bottom:16px">Explore the worlds you love. Discover your next movie, anime or series.</p>
-    <div id="homeHeroActions" style="display:flex;gap:10px;flex-wrap:wrap"></div>
-  </div>
-</section>
-
 <form class="search-bar" action="/search" method="get" role="search">
   <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
   <input name="q" placeholder="Search your favourite content…" autocomplete="off" maxlength="100" aria-label="Search catalog">
   <button type="submit">Search</button>
 </form>
 
-<div id="trending-row" class="trending-row" style="display:none" aria-label="Trending"></div>
 
 <div class="section-head" id="catalog">
   <h2>Now Showing</h2>
@@ -47,7 +35,7 @@
   const grid = document.getElementById('catalog-grid');
   const nav = document.getElementById('category-nav');
   const countEl = document.getElementById('result-count');
-  const trend = document.getElementById('trending-row');
+  const trend = null;
   let catalogPage = 1;
   const CATALOG_PER_PAGE = 24;
   let catalogItems = [];
@@ -239,34 +227,12 @@
 
       grid.innerHTML = '';
       if (!list.length) {
-        trend.style.display = 'none';
         grid.innerHTML = '<p class="muted" style="grid-column:1/-1;padding:48px 0;text-align:center">No titles found. Publish movies or series from the bot or the panel.</p>';
         return;
       }
       catalogItems = list;
       catalogPage = 1;
       renderCatalogPage();
-      applyHero(list);
-
-      const top = list.slice(0, 12);
-      if (top.length) {
-        trend.style.display = 'flex';
-        trend.innerHTML = '';
-        top.forEach(p => {
-          const a = document.createElement('a');
-          a.className = 'trending-item';
-          a.href = '/title/' + encodeURIComponent(p.slug);
-          a.title = p.title || '';
-          const img = document.createElement('img');
-          img.src = posterUrl(p.poster_path);
-          img.alt = p.title || 'Poster';
-          img.loading = 'lazy';
-          a.appendChild(img);
-          trend.appendChild(a);
-        });
-      } else {
-        trend.style.display = 'none';
-      }
     } catch (err) {
       const safeMessage = String(err && err.message ? err.message : err).replace(/[<>&]/g, '');
       grid.innerHTML = '<div style="grid-column:1/-1;padding:40px 16px;text-align:center;background:var(--bg-card);border:1px solid var(--line);border-radius:var(--radius)"><strong style="display:block;font-size:17px;margin-bottom:8px">Catalog temporarily unavailable</strong><p class="muted" style="margin-bottom:14px">' + safeMessage + '</p><button class="btn btn-yellow" type="button" id="catalog-retry">Try again</button></div>';
@@ -301,7 +267,7 @@
 #catalog-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:14px!important}
 @media(max-width:440px){ #category-nav{gap:8px!important}#category-nav .chip{min-height:46px;padding:8px;font-size:13px}#catalog-grid{gap:10px!important}}
 </style>
-<script>document.addEventListener('DOMContentLoaded',()=>{const search=document.querySelector('.search-bar');const nav=document.getElementById('category-nav');const hero=document.getElementById('homeHero');const head=document.getElementById('catalog');if(hero)hero.remove();if(search&&nav&&head){head.parentNode.insertBefore(nav,head);head.parentNode.insertBefore(search,nav);}});</script>
+<script>document.addEventListener('DOMContentLoaded',()=>{const search=document.querySelector('.search-bar');const nav=document.getElementById('category-nav');const head=document.getElementById('catalog');if(search&&nav&&head){head.parentNode.insertBefore(nav,head);head.parentNode.insertBefore(search,nav);}});</script>
 
 <style>
 /* Reference UI badges bottom-left on landscape cards */
@@ -311,4 +277,16 @@
 .poster-card .info{padding:10px 4px 4px}
 .poster-card .title{font-size:14px;font-weight:700;line-height:1.25}
 .poster-card .meta{font-size:12px;color:var(--muted);margin-top:2px}
+</style>
+
+<style>
+/* Clean landscape home + compact categories */
+#catalog-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important}
+#catalog-grid .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important}
+#category-nav{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px!important;margin:0 0 16px!important;max-width:640px}
+#category-nav .chip{min-height:44px!important;border-radius:999px!important;font-size:13px!important;font-weight:700}
+.search-bar{border-radius:20px!important;min-height:56px!important;margin:12px 0 14px!important}
+.poster-card .title{font-size:13px!important}.poster-card .meta{font-size:11px!important}
+.home-badges{bottom:8px!important;left:8px!important}
+.badge-genre{font-size:10px!important;padding:3px 7px!important}
 </style>

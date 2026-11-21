@@ -283,39 +283,63 @@ async def watch_page(request: Request, short_code: str):
 
     watch_groups = []
     title_page = None
-    if title_slug:
-        try:
+    try:
+        raw_page = None
+        if title_slug:
             raw_page = await db.catalog_pages.find_one(
                 {"slug": title_slug, "published": True}, {"_id": 0}
             )
-            if raw_page:
-                title_page = serialize_catalog_doc(raw_page, cf_base)
-                all_groups = title_page.get("groups") or []
-                for g in all_groups:
-                    box = str((g or {}).get("box") or "watch").strip().lower()
-                    if box not in ("watch", ""):
+        if not raw_page and short_code:
+            # Resolve title page by matching this short code in any watch button URL
+            import re as _re
+            code_re = _re.escape(short_code)
+            raw_page = await db.catalog_pages.find_one(
+                {"published": True, "groups.buttons.url": {"$regex": code_re, "$options": "i"}},
+                {"_id": 0},
+            )
+            if not raw_page:
+                async for cand in db.catalog_pages.find(
+                    {"published": True, "groups.0": {"$exists": True}},
+                    {"_id": 0, "slug": 1, "groups": 1, "poster_path": 1, "title": 1, "name": 1},
+                ).limit(200):
+                    groups = cand.get("groups") or []
+                    hit = any(
+                        short_code in str((b or {}).get("url") or (b or {}).get("link") or "")
+                        for g in groups for b in ((g or {}).get("buttons") or [])
+                    )
+                    if hit:
+                        raw_page = cand
+                        break
+        if raw_page:
+            title_page = serialize_catalog_doc(raw_page, cf_base)
+            if not title_slug:
+                title_slug = str(title_page.get("slug") or "")
+            all_groups = title_page.get("groups") or []
+            for g in all_groups:
+                box = str((g or {}).get("box") or "watch").strip().lower()
+                if box not in ("watch", ""):
+                    continue
+                buttons = []
+                for btn in (g.get("buttons") or []):
+                    if not isinstance(btn, dict):
                         continue
-                    buttons = []
-                    for btn in (g.get("buttons") or []):
-                        if not isinstance(btn, dict):
-                            continue
-                        url = (btn.get("url") or "").strip()
-                        name = (btn.get("name") or "Watch").strip() or "Watch"
-                        if url:
-                            buttons.append({"name": name, "url": url})
-                    if buttons:
-                        watch_groups.append({
-                            "name": (g.get("name") or "Watch Group").strip() or "Watch Group",
-                            "buttons": buttons,
-                        })
-                if group_index >= len(watch_groups):
-                    group_index = 0
-                if watch_groups:
-                    btns = watch_groups[group_index].get("buttons") or []
-                    if button_index >= len(btns):
-                        button_index = 0
-        except Exception as exc:
-            logger.warning("watch title context load failed: %s", exc)
+                    url = (btn.get("url") or btn.get("link") or "").strip()
+                    name = (btn.get("name") or btn.get("text") or "Watch").strip() or "Watch"
+                    if url:
+                        buttons.append({"name": name, "url": url})
+                if buttons:
+                    watch_groups.append({
+                        "name": (g.get("name") or "Watch Group").strip() or "Watch Group",
+                        "buttons": buttons,
+                    })
+            if group_index >= len(watch_groups):
+                group_index = 0
+            if watch_groups:
+                btns = watch_groups[group_index].get("buttons") or []
+                if button_index >= len(btns):
+                    button_index = 0
+    except Exception as exc:
+        logger.warning("watch title context load failed: %s", exc)
 
     fs_user = (player_settings.get("filestore_bot_username") or "").strip().lstrip("@")
 

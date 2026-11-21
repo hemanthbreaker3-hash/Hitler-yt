@@ -411,24 +411,30 @@ async function syncVercelWebsiteUrls(req, db) {
 
 /** Fill missing landscape backdrop_path from TMDB for existing catalog pages (throttled). */
 let _backdropBackfillAt = 0;
-async function ensureTmdbBackdrops(db) {
+async function ensureTmdbBackdrops(db, tmdbKeyOverride) {
   const now = Date.now();
   if (now - _backdropBackfillAt < 10 * 60 * 1000) return; // at most every 10 minutes
   _backdropBackfillAt = now;
-  const tmdbKey = String(process.env.TMDB_API_KEY || '').trim();
+  let tmdbKey = String(tmdbKeyOverride || process.env.TMDB_API_KEY || '').trim();
+  if (!tmdbKey) {
+    try {
+      const doc = await db.collection('settings').findOne({ key: 'tmdb_api_key' });
+      tmdbKey = String((doc && doc.value) || '').trim();
+    } catch (_) {}
+  }
   if (!tmdbKey) return;
   try {
     const missing = await db.collection('catalog_pages').find(
       {
-        tmdb_id: { $exists: true, $ne: null },
+        tmdb_id: { $exists: true, $nin: [null, '', 0] },
         $or: [
           { backdrop_path: { $exists: false } },
           { backdrop_path: null },
           { backdrop_path: '' },
         ],
       },
-      { projection: { tmdb_id: 1, media_type: 1 } }
-    ).limit(40).toArray();
+      { projection: { tmdb_id: 1, media_type: 1, title: 1 } }
+    ).limit(50).toArray();
     if (!missing.length) return;
     for (const row of missing) {
       const tid = row.tmdb_id;
@@ -455,7 +461,11 @@ async function ensureTmdbBackdrops(db) {
         const patch = { updated_at: new Date() };
         if (backdrop) patch.backdrop_path = backdrop;
         if (poster) patch.poster_path = poster;
-        await db.collection('catalog_pages').updateMany({ tmdb_id: Number(tid) }, { $set: patch }).catch(() => {});
+        const tidNum = Number(tid);
+        const tidQuery = Number.isFinite(tidNum)
+          ? { $or: [{ tmdb_id: tidNum }, { tmdb_id: String(tidNum) }, { tmdb_id: tid }] }
+          : { tmdb_id: tid };
+        await db.collection('catalog_pages').updateMany(tidQuery, { $set: patch }).catch(() => {});
       } catch (_) {}
     }
   } catch (_) {}
@@ -764,7 +774,18 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     .footer{border-top-color:rgba(139,92,246,.16)}
     @media(max-width:640px){.page-hero{padding:22px 18px;min-height:135px}.brand-mark{display:grid;width:25px}}
 
-    /* Homepage reference: search top, 3-col pills, landscape cards, gold active */
+    /* 
+    /* Landscape catalog cards — clean & compact */
+    .poster-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important}
+    .poster-card img{aspect-ratio:16/9!important;object-fit:cover!important;width:100%}
+    .poster-card .info{padding:8px 4px 2px}
+    .poster-card .title{font-size:13px;font-weight:700;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .poster-card .meta{font-size:11px;color:var(--muted);margin-top:2px}
+    .cat-nav{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px!important;margin:0 0 16px!important;max-width:640px}
+    .cat-nav .chip{min-height:44px!important;border-radius:999px!important;font-size:13px!important;font-weight:700!important;padding:8px 10px!important}
+    .search-bar{border-radius:20px!important;min-height:56px!important;margin:12px 0 14px!important}
+
+    Homepage reference: search top, 3-col pills, landscape cards, gold active */
     .search-bar{border-radius:24px!important;min-height:68px!important;padding:8px 12px 8px 22px!important;margin:16px 0 18px!important;border-color:rgba(216,179,106,.22)!important;background:linear-gradient(145deg,#171717,#101010)!important;box-shadow:0 14px 34px rgba(0,0,0,.32)!important}
     .search-bar i{color:#d8b36a!important;font-size:22px!important}
     .search-bar input{font-size:17px!important;padding:13px 0!important}
@@ -812,14 +833,6 @@ function pagePosterPath(p) {
 
 function renderIndexHtml(initialItems, initialCategories, queryStr = '') {
   const content = `
-<div class="page-hero">
-  <div>
-    <h1>Discover media</h1>
-    <p>Browse the catalog, open a title, then stream or get files in Telegram.</p>
-  </div>
-</div>
-<div id="trending-row" class="trending-row" style="display:none"></div>
-
 <form class="search-bar" action="/search" method="get">
   <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
   <input name="q" value="${escapeHtml(queryStr)}" placeholder="Search movies, series, or keywords…" autocomplete="off">
@@ -931,29 +944,9 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
     const list = Array.isArray(items) ? items : [];
     countEl.textContent = list.length ? list.length + ' titles' : '0 titles';
 
-    const trend = document.getElementById('trending-row');
     if (!list.length) {
-      trend.style.display = 'none';
       el.innerHTML = '<p class="muted" style="grid-column:1/-1;padding:40px 0;text-align:center">No titles found. Publish movies or series from the bot or the panel.</p>';
       return;
-    }
-
-    if (!q && list.length) {
-      trend.style.display = 'flex';
-      trend.innerHTML = '';
-      list.slice(0, 10).forEach(p => {
-        const a = document.createElement('a');
-        a.className = 'trending-item';
-        a.href = '/title/' + encodeURIComponent(p.slug);
-        const img = document.createElement('img');
-        img.loading = 'lazy';
-        img.src = p.poster_path?.startsWith('http') ? p.poster_path : (p.poster_path ? 'https://image.tmdb.org/t/p/w300' + p.poster_path : '/static/images/poster.jpg');
-        img.alt = p.title || 'Poster';
-        a.append(img);
-        trend.append(a);
-      });
-    } else {
-      trend.style.display = 'none';
     }
 
     const pager = document.getElementById('catalogPager');
@@ -2334,7 +2327,13 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .player-wrapper{width:100%;aspect-ratio:16/9;position:relative;background:#000;contain:paint}
     .player-wrapper movi-player{width:100%;height:100%;background:#000;object-fit:contain;display:block}
     movi-player{--movi-primary:#8b5cf6;--movi-primary-light:#a78bfa;--movi-accent:#22d3ee;--movi-brand-fill:linear-gradient(135deg,#8b5cf6,#22d3ee);--movi-glass-bg:rgba(10,10,20,.88);--movi-chrome-bg:rgba(10,10,20,.88);--movi-bar-bg:rgba(10,10,20,.88);--movi-chrome-fg:#f5f5f5;--movi-surface:#12122a}
-    .player-chrome-btn{position:absolute;z-index:9;width:40px;height:40px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(6,6,12,.82);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px);padding:0;line-height:0}
+    
+    .player-chrome-left{position:absolute;z-index:50;top:10px;left:10px;display:flex;gap:6px;align-items:center}
+    .player-chrome-right{position:absolute;z-index:50;top:10px;right:10px;display:flex;gap:6px;align-items:center}
+    .player-chrome-btn{position:relative!important;top:auto!important;left:auto!important;right:auto!important;width:36px!important;height:36px!important;z-index:50!important;pointer-events:auto!important}
+    .player-pop.switch-pop{top:48px!important;left:10px!important}
+    .player-pop.laptop-pop{top:48px!important;right:10px!important}
+.player-chrome-btn{position:absolute;z-index:50;pointer-events:auto!important;touch-action:manipulation;width:40px;height:40px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(6,6,12,.82);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px);padding:0;line-height:0}
     .player-chrome-btn:hover{background:rgba(255,106,0,.25);border-color:rgba(139,92,246,.55)}
     .player-chrome-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
     .pc-switch{top:12px;left:12px}.pc-laptop{top:12px;right:56px}.pc-download{top:12px;right:12px}
@@ -2437,17 +2436,28 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
             <div style="width:42px;height:42px;border-radius:50%;border:3px solid rgba(255,255,255,.18);border-top-color:#8b5cf6;animation:ddspin .8s linear infinite"></div>
           </div>
           <style>@keyframes ddspin{to{transform:rotate(360deg)}} movi-player{width:100%;height:100%;--movi-primary:#8b5cf6}</style>
-          <button type="button" class="player-chrome-btn pc-switch" id="pcSwitchBtn" title="Switch quality / source" aria-label="Switch source">
-            <svg viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
-          </button>
-          <button type="button" class="player-chrome-btn pc-laptop" id="pcLaptopBtn" title="Open in external player" aria-label="External players">
-            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/><path d="M8 20v-2h8v2"/></svg>
-          </button>
-          <button type="button" class="player-chrome-btn pc-download" id="pcDownloadBtn" title="Download" aria-label="Download">
-            <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
-          </button>
-          <button type="button" class="player-chrome-btn pc-fit" id="pcFitBtn" title="Fit video" aria-label="Fit video">FIT</button>
-          <button type="button" class="player-chrome-btn pc-fullscreen" id="pcFullscreenBtn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+          <div class="player-chrome-left">
+            <button type="button" class="player-chrome-btn pc-switch" id="pcSwitchBtn" title="Switch source" aria-label="Switch source">
+              <svg viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+            </button>
+          </div>
+          <div class="player-chrome-right">
+            <button type="button" class="player-chrome-btn pc-laptop" id="pcLaptopBtn" title="External player" aria-label="External player">
+              <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/><path d="M8 20v-2h8v2"/></svg>
+            </button>
+            <button type="button" class="player-chrome-btn pc-download" id="pcDownloadBtn" title="Download" aria-label="Download">
+              <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+            </button>
+            <button type="button" class="player-chrome-btn pc-fit" id="pcFitBtn" title="Fit / Fill" aria-label="Fit video">
+              <svg viewBox="0 0 24 24"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><path d="M8 8h8v8H8z"/></svg>
+            </button>
+            <button type="button" class="player-chrome-btn pc-retry" id="pcRetryBtn" title="Retry" aria-label="Retry">
+              <svg viewBox="0 0 24 24"><path d="M20 7v5h-5"/><path d="M4.8 9a8 8 0 0 1 13.4-2L20 12M4 17v-5h5"/><path d="M19.2 15a8 8 0 0 1-13.4 2L4 12"/></svg>
+            </button>
+            <button type="button" class="player-chrome-btn pc-fullscreen" id="pcFullscreenBtn" title="Fullscreen" aria-label="Fullscreen">
+              <svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+            </button>
+          </div>
           <div class="player-pop switch-pop" id="switchPop" role="menu">
             <div class="pop-title">This group</div>
             <div id="switchPopList"></div>
@@ -2538,19 +2548,67 @@ const loadingEl = document.getElementById('playerLoading');
   if (!wrapper || !moviPlayer) return;
   let visible = true;
   const toggle = document.getElementById('controlsToggle');
-  const setVisible = (value) => { visible = !!value; wrapper.classList.toggle('controls-hidden', !visible); moviPlayer.setAttribute('controls', ''); if(toggle){ toggle.textContent = BRANDING; toggle.setAttribute('aria-label', visible ? 'Hide all player controls' : 'Show all player controls'); } if(!visible){document.getElementById('switchPop')?.classList.remove('open'); document.getElementById('laptopPop')?.classList.remove('open');} };
-  // Visibility is explicit: tapping video/player chrome does not toggle it.
-  if (toggle) { toggle.textContent = BRANDING; toggle.addEventListener('click', (event) => { event.stopPropagation(); setVisible(!visible); }); }
+  const setVisible = (value) => {
+    visible = !!value;
+    wrapper.classList.toggle('controls-hidden', !visible);
+    try { moviPlayer.setAttribute('controls', ''); } catch(_){}
+    if (toggle) {
+      toggle.textContent = BRANDING;
+      toggle.setAttribute('aria-label', visible ? 'Hide all player controls' : 'Show all player controls');
+    }
+    if (!visible) {
+      document.getElementById('switchPop')?.classList.remove('open');
+      document.getElementById('laptopPop')?.classList.remove('open');
+    }
+  };
+  // Always start with controls visible
+  setVisible(true);
+  if (toggle) {
+    toggle.textContent = BRANDING;
+    toggle.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); setVisible(!visible); });
+  }
   document.addEventListener('fullscreenchange', () => {
-    const isFull = document.fullscreenElement === wrapper;
+    const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement);
     const b = document.getElementById('pcFullscreenBtn');
-    if (b) b.textContent = isFull ? '⤢' : '⛶';
+    if (b) { b.setAttribute('aria-pressed', String(isFull)); b.title = isFull ? 'Exit fullscreen' : 'Fullscreen'; }
   });
   const fit = document.getElementById('pcFitBtn');
   let fitMode = 'contain';
-  if (fit) fit.addEventListener('click', () => { fitMode = fitMode === 'contain' ? 'cover' : 'contain'; moviPlayer.style.objectFit = fitMode; fit.textContent = fitMode === 'contain' ? 'FIT' : 'FILL'; });
+  if (fit) fit.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    fitMode = fitMode === 'contain' ? 'cover' : 'contain';
+    moviPlayer.classList.toggle('player-fit-cover', fitMode === 'cover');
+    moviPlayer.classList.toggle('player-fit-contain', fitMode === 'contain');
+    try { moviPlayer.style.objectFit = fitMode; } catch(_){}
+    fit.textContent = fitMode === 'contain' ? 'FIT' : 'FILL';
+    showToast(fitMode === 'cover' ? 'Video fill enabled' : 'Video fit enabled');
+  });
   const fs = document.getElementById('pcFullscreenBtn');
-  if (fs) fs.addEventListener('click', () => { if (!document.fullscreenElement) wrapper.requestFullscreen?.(); else document.exitFullscreen?.(); });
+  if (fs) fs.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const active = document.fullscreenElement || document.webkitFullscreenElement;
+    if (!active) {
+      const req = wrapper.requestFullscreen || wrapper.webkitRequestFullscreen;
+      if (req) req.call(wrapper).catch(() => showToast('Fullscreen blocked'));
+    } else {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (exit) exit.call(document);
+    }
+  });
+  const retry = document.getElementById('pcRetryBtn');
+  if (retry) retry.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    try {
+      const t = Number(moviPlayer.currentTime) || 0;
+      moviPlayer.src = STREAM_URL;
+      moviPlayer.addEventListener('loadedmetadata', function once() {
+        moviPlayer.removeEventListener('loadedmetadata', once);
+        try { moviPlayer.currentTime = t; } catch(_){}
+        const p = moviPlayer.play(); if (p && p.catch) p.catch(()=>{});
+      });
+      showToast('Retrying playback…');
+    } catch(_) { showToast('Retry failed'); }
+  });
 })();
 
 let engine = 'movi';
@@ -2737,7 +2795,7 @@ function goToGroupButton(groupIdx, buttonIdx) {
     list.appendChild(a);
   });
   btn.addEventListener('click', (e) => {
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation();
     document.getElementById('laptopPop')?.classList.remove('open');
     pop.classList.toggle('open');
   });
@@ -2761,7 +2819,7 @@ function goToGroupButton(groupIdx, buttonIdx) {
     list.appendChild(a);
   });
   btn.addEventListener('click', (e) => {
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation();
     document.getElementById('switchPop')?.classList.remove('open');
     pop.classList.toggle('open');
   });
@@ -2770,18 +2828,27 @@ function goToGroupButton(groupIdx, buttonIdx) {
 (function setupDownloadBtn() {
   const btn = document.getElementById('pcDownloadBtn');
   if (!btn) return;
-  btn.addEventListener('click', () => {
-    const a = document.createElement('a');
-    a.href = DL_URL;
-    a.setAttribute('download', '');
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  btn.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    try {
+      const a = document.createElement('a');
+      a.href = DL_URL;
+      a.setAttribute('download', '');
+      a.rel = 'noopener';
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showToast('Download started');
+    } catch(_) {
+      window.open(DL_URL, '_blank');
+    }
   });
 })();
 
-document.addEventListener('click', () => {
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  if (t && t.closest && (t.closest('#switchPop') || t.closest('#laptopPop') || t.closest('#pcSwitchBtn') || t.closest('#pcLaptopBtn') || t.closest('.player-chrome-btn'))) return;
   document.getElementById('switchPop')?.classList.remove('open');
   document.getElementById('laptopPop')?.classList.remove('open');
 });
@@ -3317,6 +3384,8 @@ export default async function handler(req, res) {
 
     const state = await getSettingsState(db, req);
     const cloudflareUrl = state.cloudflare_url;
+    // Prefer DB-stored TMDB key for landscape backfill
+    ensureTmdbBackdrops(db, state._raw_map?.tmdb_api_key || process.env.TMDB_API_KEY).catch(() => {});
     const currentHost = requestHost(req);
 
     // Shortener/access-key workflow is hosted on Vercel so it protects the actual title pages.
@@ -3613,26 +3682,37 @@ export default async function handler(req, res) {
         const tmdbKey = String(process.env.TMDB_API_KEY || state._raw_map?.tmdb_api_key || '').trim();
         if (!tmdbKey) return json(res, 503, { error: 'TMDB not configured' });
         try {
+          const idNum = Number(id);
+          const idQuery = Number.isFinite(idNum)
+            ? { $or: [{ tmdb_id: idNum }, { tmdb_id: String(idNum) }, { tmdb_id: id }] }
+            : { tmdb_id: id };
           const page = await db.collection('catalog_pages').findOne(
-            { tmdb_id: Number(id) },
+            idQuery,
             { projection: { backdrop_path: 1, poster_path: 1 } }
           );
           if (page && page.backdrop_path) {
             return json(res, 200, { backdrop_path: page.backdrop_path, poster_path: page.poster_path || '' });
           }
-          const r = await fetch(
+          let r = await fetch(
             'https://api.themoviedb.org/3/' + mediaType + '/' + id + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
-            { signal: AbortSignal.timeout(8000) }
+            { signal: AbortSignal.timeout(10000) }
           );
+          if (!r.ok) {
+            const other = mediaType === 'tv' ? 'movie' : 'tv';
+            r = await fetch(
+              'https://api.themoviedb.org/3/' + other + '/' + id + '?api_key=' + encodeURIComponent(tmdbKey) + '&language=en-US',
+              { signal: AbortSignal.timeout(10000) }
+            );
+          }
           if (!r.ok) return json(res, 502, { error: 'TMDB fetch failed' });
           const data = await r.json();
           const backdrop = data.backdrop_path || '';
           const poster = data.poster_path || '';
-          if (backdrop) {
-            await db.collection('catalog_pages').updateMany(
-              { tmdb_id: Number(id) },
-              { $set: { backdrop_path: backdrop, updated_at: new Date() } }
-            ).catch(() => {});
+          if (backdrop || poster) {
+            const patch = { updated_at: new Date() };
+            if (backdrop) patch.backdrop_path = backdrop;
+            if (poster) patch.poster_path = poster;
+            await db.collection('catalog_pages').updateMany(idQuery, { $set: patch }).catch(() => {});
           }
           return json(res, 200, { backdrop_path: backdrop, poster_path: poster });
         } catch (e) {
@@ -4025,7 +4105,7 @@ export default async function handler(req, res) {
 
       // Title context for prev/next, switch, related groups (works on Vercel website)
       // Use searchParams from getRequestPath — NOT a missing `url` variable.
-      const titleSlug = String(searchParams.get('title') || '').trim();
+      let titleSlug = String(searchParams.get('title') || '').trim();
       let groupIndex = parseInt(searchParams.get('g') || '0', 10);
       let buttonIndex = parseInt(searchParams.get('b') || '0', 10);
       if (!Number.isFinite(groupIndex) || groupIndex < 0) groupIndex = 0;
@@ -4033,38 +4113,62 @@ export default async function handler(req, res) {
 
       let watchGroups = [];
       let posterUrl = '';
-      if (titleSlug) {
-        try {
-          const rawPage = await db.collection('catalog_pages').findOne({ slug: titleSlug, published: true });
-          if (rawPage) {
-            const page = serializeCatalogDoc(rawPage, cloudflareUrl || '');
-            posterUrl = pagePosterPath(page.poster_path || '');
-            const allGroups = Array.isArray(page.groups) ? page.groups : [];
-            for (const g of allGroups) {
-              const box = String((g && g.box) || 'watch').trim().toLowerCase();
-              if (box && box !== 'watch') continue;
-              const buttons = [];
-              for (const btn of (g && g.buttons) || []) {
-                if (!btn || typeof btn !== 'object') continue;
-                const u = String(btn.url || '').trim();
-                const name = String(btn.name || 'Watch').trim() || 'Watch';
-                if (u) buttons.push({ name, url: u });
-              }
-              if (buttons.length) {
-                watchGroups.push({
-                  name: String((g && g.name) || 'Watch Group').trim() || 'Watch Group',
-                  buttons,
-                });
-              }
-            }
-            if (groupIndex >= watchGroups.length) groupIndex = 0;
-            if (watchGroups[groupIndex] && buttonIndex >= (watchGroups[groupIndex].buttons || []).length) {
-              buttonIndex = 0;
+      // Resolve title page: explicit ?title=slug, else find by short_code in watch button URLs
+      let resolvedPage = null;
+      try {
+        if (titleSlug) {
+          resolvedPage = await db.collection('catalog_pages').findOne({ slug: titleSlug, published: true });
+        }
+        if (!resolvedPage && shortCode) {
+          // Match any catalog page whose watch button URL contains this short code
+          const codeRe = shortCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          resolvedPage = await db.collection('catalog_pages').findOne({
+            published: true,
+            'groups.buttons.url': { $regex: codeRe, $options: 'i' },
+          });
+          if (!resolvedPage) {
+            // Broader scan (limited) for rewritten / absolute URLs
+            const candidates = await db.collection('catalog_pages').find(
+              { published: true, 'groups.0': { $exists: true } },
+              { projection: { slug: 1, groups: 1, poster_path: 1, title: 1 } }
+            ).limit(200).toArray();
+            for (const cand of candidates) {
+              const groups = Array.isArray(cand.groups) ? cand.groups : [];
+              const hit = groups.some((g) => (g.buttons || []).some((b) => String((b && b.url) || '').includes(shortCode)));
+              if (hit) { resolvedPage = cand; break; }
             }
           }
-        } catch (e) {
-          console.warn('watch title context failed', e);
         }
+        if (resolvedPage) {
+          const page = serializeCatalogDoc(resolvedPage, cloudflareUrl || '');
+          if (!titleSlug && page.slug) titleSlug = String(page.slug);
+          posterUrl = pagePosterPath(page.poster_path || '');
+          const allGroups = Array.isArray(page.groups) ? page.groups : [];
+          for (const g of allGroups) {
+            const box = String((g && g.box) || 'watch').trim().toLowerCase();
+            // Treat missing/empty box as watch (same as title page)
+            if (box && box !== 'watch') continue;
+            const buttons = [];
+            for (const btn of (g && g.buttons) || []) {
+              if (!btn || typeof btn !== 'object') continue;
+              const u = String(btn.url || btn.link || '').trim();
+              const name = String(btn.name || btn.text || 'Watch').trim() || 'Watch';
+              if (u) buttons.push({ name, url: u });
+            }
+            if (buttons.length) {
+              watchGroups.push({
+                name: String((g && g.name) || 'Watch Group').trim() || 'Watch Group',
+                buttons,
+              });
+            }
+          }
+          if (groupIndex >= watchGroups.length) groupIndex = 0;
+          if (watchGroups[groupIndex] && buttonIndex >= (watchGroups[groupIndex].buttons || []).length) {
+            buttonIndex = 0;
+          }
+        }
+      } catch (e) {
+        console.warn('watch title context failed', e);
       }
 
       const fsUser = String(state.filestore_bot_username || '').replace(/^@+/, '');

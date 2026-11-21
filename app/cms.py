@@ -597,7 +597,8 @@ async def tmdb_backdrop(id: int, type: str = 'movie'):
     """Return TMDB backdrop for home landscape cards; persist onto matching catalog pages."""
     media_type = 'tv' if str(type).lower() == 'tv' else 'movie'
     # Prefer already stored
-    page = await pages.find_one({'tmdb_id': id}, {'backdrop_path': 1, 'poster_path': 1})
+    id_query = {'$or': [{'tmdb_id': id}, {'tmdb_id': str(id)}, {'tmdb_id': int(id) if str(id).isdigit() else id}]}
+    page = await pages.find_one(id_query, {'backdrop_path': 1, 'poster_path': 1})
     if page and page.get('backdrop_path'):
         return {'backdrop_path': page['backdrop_path'], 'poster_path': page.get('poster_path') or ''}
     key = settings.TMDB_API_KEY
@@ -607,11 +608,17 @@ async def tmdb_backdrop(id: int, type: str = 'movie'):
     if not key:
         raise HTTPException(503, 'TMDB_API_KEY is not configured')
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(
                 f'https://api.themoviedb.org/3/{media_type}/{id}',
                 params={'api_key': key, 'language': 'en-US'},
             )
+            if r.status_code != 200:
+                other = 'movie' if media_type == 'tv' else 'tv'
+                r = await client.get(
+                    f'https://api.themoviedb.org/3/{other}/{id}',
+                    params={'api_key': key, 'language': 'en-US'},
+                )
         if r.status_code != 200:
             raise HTTPException(502, 'TMDB fetch failed')
         data = r.json()
@@ -619,7 +626,7 @@ async def tmdb_backdrop(id: int, type: str = 'movie'):
         poster = data.get('poster_path') or ''
         if backdrop:
             await pages.update_many(
-                {'tmdb_id': id},
+                id_query,
                 {'$set': {'backdrop_path': backdrop, 'updated_at': datetime.now(timezone.utc)}},
             )
         return {'backdrop_path': backdrop, 'poster_path': poster}

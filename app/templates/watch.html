@@ -47,7 +47,8 @@
     aspect-ratio:16/9;
     position:relative;
     background:#000;
-    contain:layout style;
+    /* avoid contain:layout — it breaks absolute chrome button hit-testing in some browsers */
+    contain:style;
   }
   .player-wrapper movi-player{
     width:100%;height:100%;background:#000;object-fit:contain;display:block;
@@ -79,49 +80,56 @@
   @keyframes dd-spin{to{transform:rotate(360deg)}}
 
 
-  /* ===== Built-in player chrome overlays ===== */
+
+  /* ===== Built-in player chrome — clean toolbar ===== */
   .player-chrome-btn{
-    position:absolute;z-index:9;width:40px;height:40px;border-radius:12px;
-    border:1px solid rgba(255,255,255,.14);background:rgba(6,6,12,.82);
-    color:#fff;display:flex;align-items:center;justify-content:center;
-    cursor:pointer;backdrop-filter:blur(8px);transition:background .2s,border-color .2s,transform .15s;
-    padding:0;line-height:0;
+    position:relative;z-index:50;width:36px;height:36px;border-radius:10px;
+    border:1px solid rgba(255,255,255,.18);background:rgba(8,8,14,.88);
+    color:#fff;display:inline-flex;align-items:center;justify-content:center;
+    cursor:pointer;backdrop-filter:blur(10px);transition:background .15s,border-color .15s,transform .12s;
+    padding:0;line-height:0;pointer-events:auto!important;touch-action:manipulation;
+    -webkit-tap-highlight-color:transparent;user-select:none;flex:0 0 auto;
   }
-  .player-chrome-btn:hover{background:rgba(255,106,0,.25);border-color:rgba(255,106,0,.55);transform:scale(1.05)}
-  .player-chrome-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-  .pc-switch{top:12px;left:12px}
-  .pc-laptop{top:12px;right:56px}
-  .pc-download{top:12px;right:12px}
-  .player-shortcut-hint{position:absolute;z-index:3;left:12px;bottom:10px;max-width:calc(100% - 24px);padding:5px 8px;border-radius:8px;background:rgba(0,0,0,.58);color:rgba(255,255,255,.72);font:10px/1.3 system-ui;pointer-events:none;opacity:0;transition:opacity .2s}
+  .player-chrome-btn:hover{background:rgba(216,179,106,.22);border-color:rgba(216,179,106,.5);transform:scale(1.06)}
+  .player-chrome-btn:active{transform:scale(.96)}
+  .player-chrome-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .player-chrome-left{
+    position:absolute;z-index:50;top:10px;left:10px;display:flex;gap:6px;align-items:center;
+    pointer-events:auto;
+  }
+  .player-chrome-right{
+    position:absolute;z-index:50;top:10px;right:10px;display:flex;gap:6px;align-items:center;
+    pointer-events:auto;
+  }
+  .pc-switch,.pc-laptop,.pc-download,.pc-fit,.pc-retry,.pc-fullscreen{top:auto;left:auto;right:auto}
+  .player-shortcut-hint{position:absolute;z-index:3;left:12px;bottom:10px;max-width:calc(100% - 24px);padding:4px 8px;border-radius:8px;background:rgba(0,0,0,.5);color:rgba(255,255,255,.65);font:10px/1.3 system-ui;pointer-events:none;opacity:0;transition:opacity .2s}
   #playerWrapper:not(.chrome-idle) .player-shortcut-hint{opacity:1}
-  .pc-fit{top:60px;right:12px}
-  .pc-retry{top:60px;right:60px}
-  @media(max-width:700px){.pc-fit{top:56px;right:10px}.pc-retry{top:56px;right:54px}}
   movi-player.player-fit-cover::part(video){object-fit:cover!important}
   movi-player.player-fit-contain::part(video){object-fit:contain!important}
-  .player-chrome-btn:focus-visible{outline:2px solid #a78bfa;outline-offset:3px}
+  .player-chrome-btn:focus-visible{outline:2px solid #d8b36a;outline-offset:2px}
   .player-pop{
-    position:absolute;z-index:12;min-width:160px;max-width:min(280px,86vw);
-    background:rgba(10,10,20,.96);border:1px solid rgba(139,92,246,.35);
-    border-radius:14px;padding:8px;box-shadow:0 12px 32px rgba(0,0,0,.55);
-    display:none;flex-direction:column;gap:4px;backdrop-filter:blur(12px);
+    position:absolute;z-index:60;min-width:150px;max-width:min(260px,88vw);
+    background:rgba(10,10,16,.97);border:1px solid rgba(216,179,106,.28);
+    border-radius:12px;padding:6px;box-shadow:0 12px 28px rgba(0,0,0,.5);
+    display:none;flex-direction:column;gap:2px;backdrop-filter:blur(12px);
+    pointer-events:auto;
   }
   .player-pop.open{display:flex}
-  #switchPopList,#laptopPopList{display:flex;flex:1 1 auto;flex-direction:column;min-height:0;max-height:none;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scrollbar-width:thin;scrollbar-color:rgba(168,85,247,.9) rgba(255,255,255,.08);padding:0 3px 2px 0}
-  #switchPopList button,#laptopPopList a{display:block;flex:0 0 auto;min-height:40px}
-  #switchPop{display:none;max-height:calc(100dvh - 84px);overflow:hidden}#switchPop.open{display:flex}#switchPop .pop-title{flex:0 0 auto}#switchPopList{max-height:calc(100dvh - 132px)}
-  #switchPopList::-webkit-scrollbar,#laptopPopList::-webkit-scrollbar{width:7px}
-  #switchPopList::-webkit-scrollbar-thumb,#laptopPopList::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#a855f7,#ef4444,#3b82f6);border-radius:999px}
-  #switchPopList::-webkit-scrollbar-track,#laptopPopList::-webkit-scrollbar-track{background:rgba(255,255,255,.06);border-radius:999px}
-  .player-pop.switch-pop{top:56px;left:12px}
-  .player-pop.laptop-pop{top:56px;right:12px}
+  .player-pop.switch-pop{top:48px;left:10px}
+  .player-pop.laptop-pop{top:48px;right:10px}
   .player-pop button,.player-pop a{
-    display:block;width:100%;text-align:left;border:0;background:transparent;
-    color:#f5f5f5;padding:10px 12px;border-radius:10px;font:600 13px var(--font,system-ui);
-    cursor:pointer;text-decoration:none;
+    display:block;width:100%;text-align:left;border:0;background:transparent;color:#eee;
+    padding:9px 11px;border-radius:8px;font:600 12px/1.3 system-ui;cursor:pointer;text-decoration:none;
   }
-  .player-pop button:hover,.player-pop a:hover{background:rgba(139,92,246,.18)}
-  .player-pop .pop-title{font-size:11px;color:#9ca3af;padding:4px 12px 6px;text-transform:uppercase;letter-spacing:.06em}
+  .player-pop button:hover,.player-pop a:hover{background:rgba(216,179,106,.14)}
+  .player-pop .pop-title{font-size:10px;color:#9a9aab;padding:4px 10px 6px;text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+  #switchPopList,#laptopPopList{display:flex;flex-direction:column;max-height:min(50vh,280px);overflow-y:auto;scrollbar-width:thin}
+  @media(max-width:700px){
+    .player-chrome-btn{width:34px;height:34px;border-radius:9px}
+    .player-chrome-btn svg{width:15px;height:15px}
+    .player-chrome-left,.player-chrome-right{top:8px;gap:5px}
+    .player-chrome-left{left:8px}.player-chrome-right{right:8px}
+  }
 
   .nav-row{
     display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;
@@ -451,25 +459,28 @@
             tabindex="0"></movi-player>
           <div class="player-loading" id="playerLoading"><div class="spinner"></div></div>
 
-          <!-- Top-left: switch qualities in current group -->
-          <button type="button" class="player-chrome-btn pc-switch" id="pcSwitchBtn" title="Switch quality / source" aria-label="Switch source">
-            <svg viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
-          </button>
-          <!-- Laptop: external players MX / PLAYit / VLC -->
-          <button type="button" class="player-chrome-btn pc-laptop" id="pcLaptopBtn" title="Open in external player" aria-label="External players">
-            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/><path d="M8 20v-2h8v2"/></svg>
-          </button>
-          <!-- Download -->
-          <button type="button" class="player-chrome-btn pc-download" id="pcDownloadBtn" title="Download" aria-label="Download">
-            <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
-          </button>
-          <!-- Quick display and recovery actions -->
-          <button type="button" class="player-chrome-btn pc-fit" id="pcFitBtn" title="Toggle fit / fill" aria-label="Toggle video fit" aria-pressed="false">
-            <svg viewBox="0 0 24 24"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><path d="M8 8h8v8H8z"/></svg>
-          </button>
-          <button type="button" class="player-chrome-btn pc-retry" id="pcRetryBtn" title="Retry playback" aria-label="Retry playback">
-            <svg viewBox="0 0 24 24"><path d="M20 7v5h-5"/><path d="M4.8 9a8 8 0 0 1 13.4-2L20 12M4 17v-5h5"/><path d="M19.2 15a8 8 0 0 1-13.4 2L4 12"/></svg>
-          </button>
+          <div class="player-chrome-left">
+            <button type="button" class="player-chrome-btn pc-switch" id="pcSwitchBtn" title="Switch source" aria-label="Switch source">
+              <svg viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+            </button>
+          </div>
+          <div class="player-chrome-right">
+            <button type="button" class="player-chrome-btn pc-laptop" id="pcLaptopBtn" title="External player" aria-label="External player">
+              <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/><path d="M8 20v-2h8v2"/></svg>
+            </button>
+            <button type="button" class="player-chrome-btn pc-download" id="pcDownloadBtn" title="Download" aria-label="Download">
+              <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+            </button>
+            <button type="button" class="player-chrome-btn pc-fit" id="pcFitBtn" title="Fit / Fill" aria-label="Fit video" aria-pressed="false">
+              <svg viewBox="0 0 24 24"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><path d="M8 8h8v8H8z"/></svg>
+            </button>
+            <button type="button" class="player-chrome-btn pc-retry" id="pcRetryBtn" title="Retry" aria-label="Retry">
+              <svg viewBox="0 0 24 24"><path d="M20 7v5h-5"/><path d="M4.8 9a8 8 0 0 1 13.4-2L20 12M4 17v-5h5"/><path d="M19.2 15a8 8 0 0 1-13.4 2L4 12"/></svg>
+            </button>
+            <button type="button" class="player-chrome-btn pc-fullscreen" id="pcFullscreenBtn" title="Fullscreen" aria-label="Fullscreen">
+              <svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+            </button>
+          </div>
 
           <div class="player-pop switch-pop" id="switchPop" role="menu">
             <div class="pop-title">This group</div>
@@ -745,7 +756,7 @@ buildPlayerGrids();
       Object.defineProperty(Element.prototype,'__moviWrapperFullscreenPatched',{value:true,configurable:true});
     }catch(_){/* retain native fullscreen if the browser locks the prototype */}
   }
-  const ids=['pcSwitchBtn','pcLaptopBtn','pcDownloadBtn','pcFitBtn','pcRetryBtn','switchPop','laptopPop'];
+  const ids=['pcSwitchBtn','pcLaptopBtn','pcDownloadBtn','pcFitBtn','pcRetryBtn','pcFullscreenBtn','switchPop','laptopPop'];
   const homes=new Map(ids.map(id=>[document.getElementById(id),wrapper]));
   function sync(){
     const fs=document.fullscreenElement||document.webkitFullscreenElement;
@@ -891,7 +902,9 @@ function goToGroupButton(groupIdx, buttonIdx) {
   });
 })();
 
-document.addEventListener('click', () => {
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  if (t && t.closest && (t.closest('#switchPop') || t.closest('#laptopPop') || t.closest('#pcSwitchBtn') || t.closest('#pcLaptopBtn') || t.closest('.player-chrome-btn'))) return;
   document.getElementById('switchPop')?.classList.remove('open');
   document.getElementById('laptopPop')?.classList.remove('open');
 });
@@ -1266,24 +1279,55 @@ function recoverMoviAfterStall() {
 (function wirePlayerQuickActions(){
   const fitBtn=document.getElementById('pcFitBtn');
   const retryBtn=document.getElementById('pcRetryBtn');
-  if(fitBtn){
-    fitBtn.addEventListener('click',()=>{
+  const fsBtn=document.getElementById('pcFullscreenBtn');
+  const wrapper=document.getElementById('playerWrapper');
+  if(fitBtn && moviPlayer){
+    fitBtn.addEventListener('click',(e)=>{
+      e.preventDefault(); e.stopPropagation();
       const cover=moviPlayer.classList.toggle('player-fit-cover');
       moviPlayer.classList.toggle('player-fit-contain',!cover);
+      try { moviPlayer.style.setProperty('--movi-object-fit', cover ? 'cover' : 'contain'); } catch(_){}
       fitBtn.setAttribute('aria-pressed',String(cover));
       fitBtn.title=cover?'Video fit: Fill (tap to contain)':'Video fit: Contain (tap to fill)';
       showToast(cover?'Video fill enabled':'Video fit enabled');
     });
   }
-  if(retryBtn){
-    retryBtn.addEventListener('click',()=>{
-      if(!moviPlayer)return;
+  if(retryBtn && moviPlayer){
+    retryBtn.addEventListener('click',(e)=>{
+      e.preventDefault(); e.stopPropagation();
       stallRetries=0;
       recoveryCooldownUntil=0;
       recoveryInFlight=false;
       clearStallWatch();
       clearRecoveryWatch();
-      recoverMoviAfterStall();
+      try {
+        const t = Number(moviPlayer.currentTime)||0;
+        moviPlayer.src = STREAM_URL;
+        moviPlayer.addEventListener('loadedmetadata', function once(){
+          moviPlayer.removeEventListener('loadedmetadata', once);
+          try { moviPlayer.currentTime = t; } catch(_){}
+          const p = moviPlayer.play(); if(p&&p.catch) p.catch(()=>{});
+        });
+      } catch(_) { recoverMoviAfterStall(); }
+      showToast('Retrying playback…');
+    });
+  }
+  if(fsBtn && wrapper){
+    fsBtn.addEventListener('click',(e)=>{
+      e.preventDefault(); e.stopPropagation();
+      const active = document.fullscreenElement || document.webkitFullscreenElement;
+      if(!active){
+        const req = wrapper.requestFullscreen || wrapper.webkitRequestFullscreen;
+        if(req) req.call(wrapper).catch(()=>showToast('Fullscreen blocked by browser'));
+      } else {
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if(exit) exit.call(document);
+      }
+    });
+    document.addEventListener('fullscreenchange', ()=>{
+      const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      fsBtn.setAttribute('aria-pressed', String(isFull));
+      fsBtn.title = isFull ? 'Exit fullscreen' : 'Fullscreen';
     });
   }
 })();
