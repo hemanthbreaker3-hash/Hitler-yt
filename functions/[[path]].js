@@ -1,3 +1,131 @@
+import { PassThrough, Readable } from 'node:stream';
+import handler from '../api/[...path].js';
+
+function syncEnvToProcess(env) {
+  if (!env || typeof env !== 'object') return;
+  for (const [k, v] of Object.entries(env)) {
+    if (typeof v === 'string' && v.length > 0 && !process.env[k]) {
+      process.env[k] = v;
+    }
+  }
+  // Normalize common aliases so MONGODB_URI / DATABASE_NAME / TMDB_API_KEY always resolve
+  if (!process.env.MONGODB_URI) {
+    process.env.MONGODB_URI = String(
+      env.MONGODB_URI || env.MONGO_URL || env.MONGO_URI || env.DATABASE_URL || env.DATABASE_URI || ''
+    ).trim();
+  }
+  if (!process.env.DATABASE_NAME) {
+    process.env.DATABASE_NAME = String(
+      env.DATABASE_NAME || env.MONGODB_DB_NAME || env.DB_NAME || env.MONGO_DB_NAME || ''
+    ).trim();
+  }
+  if (!process.env.TMDB_API_KEY && env.TMDB_API_KEY) {
+    process.env.TMDB_API_KEY = String(env.TMDB_API_KEY).trim();
+  }
+}
+
+async function runNodeHandler(request, env) {
+  syncEnvToProcess(env);
+  const url = new URL(request.url);
+  const reqHeaders = {};
+  for (const [k, v] of request.headers.entries()) {
+    reqHeaders[k.toLowerCase()] = v;
+  }
+  if (!reqHeaders.host) reqHeaders.host = url.host;
+
+  const hasBody = !['GET', 'HEAD'].includes(request.method.toUpperCase()) && request.body;
+  const reqStream = new PassThrough();
+  reqStream.method = request.method.toUpperCase();
+  reqStream.url = url.pathname + url.search;
+  reqStream.headers = reqHeaders;
+  reqStream.socket = { encrypted: true };
+
+  if (hasBody) {
+    const ab = await request.arrayBuffer();
+    reqStream.end(Buffer.from(ab));
+  } else {
+    reqStream.end();
+  }
+
+  const outStream = new PassThrough();
+  const outHeaders = new Headers();
+  let statusCode = 200;
+  let headersResolved = false;
+  let resolveHeaders;
+  const headersReady = new Promise((r) => { resolveHeaders = r; });
+
+  function flushHeaders() {
+    if (!headersResolved) {
+      headersResolved = true;
+      resolveHeaders();
+    }
+  }
+
+  outStream.statusCode = 200;
+  outStream.headersSent = false;
+  outStream.setHeader = (name, value) => {
+    if (outStream.headersSent) return;
+    if (Array.isArray(value)) {
+      outHeaders.delete(name);
+      value.forEach((v) => outHeaders.append(name, String(v)));
+    } else {
+      outHeaders.set(name, String(value));
+    }
+  };
+  outStream.getHeader = (name) => outHeaders.get(name);
+  outStream.removeHeader = (name) => outHeaders.delete(name);
+  outStream.writeHead = (code, hdrs) => {
+    statusCode = Number(code) || 200;
+    outStream.statusCode = statusCode;
+    if (hdrs && typeof hdrs === 'object') {
+      for (const [k, v] of Object.entries(hdrs)) {
+        if (v !== undefined) outStream.setHeader(k, v);
+      }
+    }
+    outStream.headersSent = true;
+    flushHeaders();
+    return outStream;
+  };
+
+  const origWrite = outStream.write.bind(outStream);
+  outStream.write = (chunk, encoding, cb) => {
+    if (!outStream.headersSent) {
+      statusCode = Number(outStream.statusCode) || 200;
+      outStream.headersSent = true;
+      flushHeaders();
+    }
+    return origWrite(chunk, encoding, cb);
+  };
+
+  const origEnd = outStream.end.bind(outStream);
+  outStream.end = (chunk, encoding, cb) => {
+    if (!outStream.headersSent) {
+      statusCode = Number(outStream.statusCode) || 200;
+      outStream.headersSent = true;
+      flushHeaders();
+    }
+    return origEnd(chunk, encoding, cb);
+  };
+
+  const handlerPromise = Promise.resolve(handler(reqStream, outStream)).catch((err) => {
+    if (!outStream.headersSent) {
+      statusCode = 500;
+      outHeaders.set('content-type', 'application/json; charset=utf-8');
+      outStream.headersSent = true;
+      flushHeaders();
+      origEnd(JSON.stringify({ error: 'Cloudflare Pages handler error', detail: String(err?.message || err) }));
+    } else {
+      outStream.destroy(err);
+    }
+  });
+
+  await headersReady;
+  const webBody = Readable.toWeb(outStream);
+  // Keep handler promise alive while response streams
+  void handlerPromise;
+  return new Response(webBody, { status: statusCode, headers: outHeaders });
+}
+
 export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -11,50 +139,28 @@ export async function onRequest(context) {
     } catch (_) {}
   }
 
-  // CORS preflight for media/track endpoints
-  if (request.method === 'OPTIONS' && (/^\/(stream|dl|remux|api\/tracks)\//.test(pathname))) {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'access-control-allow-origin': '*',
-        'access-control-allow-methods': 'GET, HEAD, OPTIONS',
-        'access-control-allow-headers': 'Range, Content-Type, Accept, Origin, ngrok-skip-browser-warning',
-        'access-control-expose-headers': 'Content-Length, Content-Range, Accept-Ranges, Content-Disposition, Content-Type',
-        'access-control-max-age': '86400',
-      },
-    });
+  // Standalone MongoDB + TMDB mode (fetches all other credentials/settings from MongoDB)
+  const hasMongo = Boolean(
+    env.MONGODB_URI || env.MONGO_URL || env.MONGO_URI || env.DATABASE_URL || env.DATABASE_URI || process.env.MONGODB_URI
+  );
+  if (hasMongo) {
+    return runNodeHandler(request, env);
   }
 
-  const backend = String(env.BACKEND_URL || env.ORIGIN_URL || env.VPS_URL || env.VERCEL_URL || '')
-    .trim()
-    .replace(/\/+$/, '');
+  // Optional fallback: proxy to BACKEND_URL if MongoDB URI is not configured
+  const backend = String(env.BACKEND_URL || env.ORIGIN_URL || env.VPS_URL || '').trim().replace(/\/+$/, '');
   if (!backend) {
     return new Response(
       JSON.stringify({
-        error: 'BACKEND_URL is not configured for Cloudflare Pages',
-        hint: 'Set BACKEND_URL in Cloudflare Pages -> Settings -> Environment variables to your HTTPS tunnel or Vercel origin.',
+        error: 'Cloudflare Pages environment variables missing',
+        required: ['MONGODB_URI', 'DATABASE_NAME (or MONGODB_DB_NAME)', 'TMDB_API_KEY'],
       }),
       { status: 503, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } }
     );
   }
 
-  let upstreamUrl;
-  try {
-    const base = new URL(backend.startsWith('http') ? backend : 'https://' + backend);
-    if (base.host === url.host) {
-      return new Response(JSON.stringify({ error: 'BACKEND_URL cannot point to the Pages domain itself' }), {
-        status: 500,
-        headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
-      });
-    }
-    upstreamUrl = new URL(base.origin + pathname + url.search);
-  } catch {
-    return new Response(JSON.stringify({ error: 'Invalid BACKEND_URL' }), {
-      status: 500,
-      headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
-    });
-  }
-
+  const base = new URL(backend.startsWith('http') ? backend : 'https://' + backend);
+  const upstreamUrl = new URL(base.origin + pathname + url.search);
   const headers = new Headers(request.headers);
   headers.set('x-forwarded-host', url.host);
   headers.set('x-forwarded-proto', 'https');
@@ -62,45 +168,11 @@ export async function onRequest(context) {
   headers.delete('host');
 
   const isGetHead = request.method === 'GET' || request.method === 'HEAD';
-  const isCacheablePage = isGetHead && (pathname === '/' || pathname.startsWith('/title/') || pathname.startsWith('/watch/'));
-  const isCacheableTracks = isGetHead && pathname.startsWith('/api/tracks/');
-
-  const fetchOpts = {
+  const response = await fetch(upstreamUrl.toString(), {
     method: request.method,
     headers,
     body: isGetHead ? undefined : request.body,
     redirect: 'manual',
-  };
-  if (isCacheablePage) {
-    fetchOpts.cf = { cacheEverything: true, cacheTtl: 30 };
-  } else if (isCacheableTracks) {
-    fetchOpts.cf = { cacheEverything: true, cacheTtl: 3600 };
-  }
-
-  try {
-    const response = await fetch(upstreamUrl.toString(), fetchOpts);
-    const out = new Headers(response.headers);
-    if (isCacheableTracks && response.status === 200) {
-      out.set('cache-control', 'public, max-age=3600, s-maxage=3600');
-    } else if (isCacheablePage && response.status === 200) {
-      if (!out.get('cache-control') || out.get('cache-control').includes('no-store')) {
-        out.set('cache-control', 'public, s-maxage=30, stale-while-revalidate=180');
-      }
-    } else if (!/^\/(stream|dl|remux)\//.test(pathname)) {
-      out.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
-    }
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: out,
-    });
-  } catch (error) {
-    return new Response(
-      JSON.stringify({
-        error: 'Cloudflare Pages could not reach the backend',
-        detail: String(error?.message || error),
-      }),
-      { status: 502, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } }
-    );
-  }
+  });
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }

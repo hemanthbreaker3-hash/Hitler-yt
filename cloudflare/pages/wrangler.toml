@@ -1,3 +1,4 @@
 name = "hitler-yt-pages"
 pages_build_output_dir = "./public"
 compatibility_date = "2026-11-22"
+compatibility_flags = ["nodejs_compat"]

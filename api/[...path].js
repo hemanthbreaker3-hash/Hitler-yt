@@ -24,6 +24,8 @@ let resolvedDbName = null;
 function getMongoUri() {
   return String(
     process.env.MONGODB_URI ||
+    process.env.MONGO_URL ||
+    process.env.MONGO_URI ||
     process.env.DATABASE_URL ||
     process.env.DATABASE_URI ||
     ''
@@ -57,7 +59,7 @@ async function getMongoClient() {
 }
 
 function dbCandidateNames() {
-  const envName = String(process.env.DATABASE_NAME || '').trim();
+  const envName = String(process.env.DATABASE_NAME || process.env.MONGODB_DB_NAME || process.env.DB_NAME || process.env.MONGO_DB_NAME || '').trim();
   const uriName = extractDbNameFromUri(getMongoUri());
   return [...new Set([envName, uriName, 'tg_media_bot', 'file2link'].filter(Boolean))];
 }
