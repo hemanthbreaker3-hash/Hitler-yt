@@ -367,7 +367,7 @@
 
   <!-- Quality / Source Popup -->
   <div class="p4u-pop quality-pop" id="switchPop" role="menu">
-    <div class="pop-title">Switch Quality / Source</div>
+    <div class="pop-title">This Group</div>
     <div id="switchPopList"></div>
   </div>
 
@@ -665,29 +665,20 @@ const epDrawer = document.getElementById('episodesDrawer');
 
 (function initSwitchPop(){
   const g = WATCH_GROUPS[GROUP_INDEX];
-  const btns = (g && g.buttons) || [];
+  const btns = (g && Array.isArray(g.buttons)) ? g.buttons : [];
   let count = 0;
   btns.forEach((b, i) => {
     const el = document.createElement('button');
     el.type = 'button';
     el.textContent = (b.name || ('Source ' + (i + 1))) + (i === BUTTON_INDEX ? ' ✓' : '');
-    el.onclick = (e) => { e.stopPropagation(); swPop.classList.remove('open'); if (i !== BUTTON_INDEX) goToGroupButton(GROUP_INDEX, i); };
+    el.onclick = (e) => {
+      e.stopPropagation();
+      swPop.classList.remove('open');
+      if (i !== BUTTON_INDEX) goToGroupButton(GROUP_INDEX, i);
+    };
     swList.appendChild(el);
     count++;
   });
-  if (WATCH_GROUPS.length > 1) {
-    const hdr = document.createElement('div'); hdr.className = 'pop-title'; hdr.textContent = 'Episodes / Groups';
-    swList.appendChild(hdr);
-    WATCH_GROUPS.forEach((grp, gi) => {
-      if (!grp.buttons?.length) return;
-      const el = document.createElement('button');
-      el.type = 'button';
-      el.textContent = (grp.name || ('Group ' + (gi + 1))) + (gi === GROUP_INDEX ? ' ✓' : '');
-      el.onclick = (e) => { e.stopPropagation(); swPop.classList.remove('open'); if (gi !== GROUP_INDEX) goToGroupButton(gi, preferredButtonForGroup(gi)); };
-      swList.appendChild(el);
-      count++;
-    });
-  }
   const aacBtn = document.createElement('button');
   aacBtn.type = 'button';
   aacBtn.textContent = '🔊 Fix Audio (AAC Remux)';
@@ -710,8 +701,7 @@ const epDrawer = document.getElementById('episodesDrawer');
   swBtn?.addEventListener('click', (e) => {
     e.stopPropagation();
     lpPop?.classList.remove('open');
-    epDrawer?.classList.remove('open');
-    if (count <= 1) return showToast('Only 1 source available');
+    if (count === 0) return showToast('No sources available');
     swPop.classList.toggle('open');
   });
 })();

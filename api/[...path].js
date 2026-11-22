@@ -2552,7 +2552,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
       <button type="button" class="p4u-circle-btn" id="pcShareBtn" title="Share"><svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>
     </div>
   </div>
-  <div class="p4u-pop quality-pop" id="switchPop"><div class="pop-title">Switch Quality / Source</div><div id="switchPopList"></div></div>
+  <div class="p4u-pop quality-pop" id="switchPop"><div class="pop-title">This Group</div><div id="switchPopList"></div></div>
   <div class="p4u-pop external-pop" id="laptopPop"><div class="pop-title">Open in External Player</div><div id="laptopPopList"></div></div>
   
     </div>
@@ -2700,12 +2700,21 @@ const swBtn = document.getElementById('pcSwitchBtn'), swPop = document.getElemen
 const lpBtn = document.getElementById('pcLaptopBtn'), lpPop = document.getElementById('laptopPop'), lpList = document.getElementById('laptopPopList');
 const epDrawer = document.getElementById('episodesDrawer');
 (function initSwitchPop(){
-  const g = WATCH_GROUPS[GROUP_INDEX]; const btns = (g && g.buttons) || []; let count = 0;
-  btns.forEach((b, i) => { const el = document.createElement('button'); el.type = 'button'; el.textContent = (b.name || ('Source '+(i+1))) + (i === BUTTON_INDEX ? ' ✓' : ''); el.onclick = (e) => { e.stopPropagation(); swPop.classList.remove('open'); if (i !== BUTTON_INDEX) goToGroupButton(GROUP_INDEX, i); }; swList.appendChild(el); count++; });
-  if (WATCH_GROUPS.length > 1) {
-    const hdr = document.createElement('div'); hdr.className = 'pop-title'; hdr.textContent = 'Episodes / Groups'; swList.appendChild(hdr);
-    WATCH_GROUPS.forEach((grp, gi) => { if (!grp.buttons?.length) return; const el = document.createElement('button'); el.type = 'button'; el.textContent = (grp.name || ('Group '+(gi+1))) + (gi === GROUP_INDEX ? ' ✓' : ''); el.onclick = (e) => { e.stopPropagation(); swPop.classList.remove('open'); if (gi !== GROUP_INDEX) goToGroupButton(gi, preferredButtonForGroup(gi)); }; swList.appendChild(el); count++; });
-  }
+  const g = WATCH_GROUPS[GROUP_INDEX];
+  const btns = (g && Array.isArray(g.buttons)) ? g.buttons : [];
+  let count = 0;
+  btns.forEach((b, i) => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.textContent = (b.name || ('Source ' + (i + 1))) + (i === BUTTON_INDEX ? ' ✓' : '');
+    el.onclick = (e) => {
+      e.stopPropagation();
+      swPop.classList.remove('open');
+      if (i !== BUTTON_INDEX) goToGroupButton(GROUP_INDEX, i);
+    };
+    swList.appendChild(el);
+    count++;
+  });
   const aacBtn = document.createElement('button');
   aacBtn.type = 'button';
   aacBtn.textContent = '🔊 Fix Audio (AAC Remux)';
@@ -2725,7 +2734,12 @@ const epDrawer = document.getElementById('episodesDrawer');
   };
   swList.appendChild(aacBtn);
   count++;
-  swBtn?.addEventListener('click', (e) => { e.stopPropagation(); lpPop?.classList.remove('open'); epDrawer?.classList.remove('open'); if (count <= 1) return showToast('Only 1 source available'); swPop.classList.toggle('open'); });
+  swBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    lpPop?.classList.remove('open');
+    if (count === 0) return showToast('No sources available');
+    swPop.classList.toggle('open');
+  });
 })();
 function androidIntent(url, pkg, mime) { const u = new URL(url); return 'intent://' + u.host + u.pathname + u.search + '#Intent;scheme=' + u.protocol.replace(':','') + ';action=android.intent.action.VIEW;type=' + (mime||'video/*') + ';package=' + pkg + ';S.browser_fallback_url=' + encodeURIComponent(url) + ';end'; }
 [['MX Player', androidIntent(EXTERNAL_STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME)], ['PLAYit', androidIntent(REMUX_URL + '?audio=0&aac=1', 'com.playit.videoplayer', 'video/mp4')], ['VLC', androidIntent(EXTERNAL_STREAM_URL, 'org.videolan.vlc', INTENT_MIME)]].forEach(([l, h]) => { const a = document.createElement('a'); a.href = h; a.textContent = l; lpList.appendChild(a); const b = document.createElement('a'); b.className = 'ext-btn'; b.href = h; b.textContent = l; document.getElementById('sideExtGrid')?.appendChild(b); });
