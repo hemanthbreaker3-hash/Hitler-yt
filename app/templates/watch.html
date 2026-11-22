@@ -296,6 +296,8 @@
   }
   .toast.active { opacity: 1; }
 </style>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
 <script>
 (function () {
   var CDN = 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/';
@@ -331,7 +333,7 @@
     <div class="p4u-stage" id="playerWrapper">
   {% if _bg %}<div class="p4u-backdrop" style="background-image:url('{{ _bg }}')"></div>{% endif %}
 
-  <movi-player id="moviPlayer" playsinline controls preload="auto" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
+  <movi-player id="moviPlayer" playsinline controls sw="auto" fallback="native" subtitlepicker fastseek resume persist theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
 
   <div class="p4u-loading" id="playerLoading"><div class="p4u-spinner"></div></div>
 
@@ -376,23 +378,6 @@
     <div class="pop-title">Open in External Player</div>
     <div id="laptopPopList"></div>
   </div>
-
-  <!-- Episodes Drawer -->
-  {% if _wg and _wg|length > 1 %}
-  <div class="p4u-drawer" id="episodesDrawer">
-    <div class="p4u-drawer-head">
-      <span>Episodes / Seasons</span>
-      <button type="button" class="p4u-icon-btn" id="closeDrawerBtn" aria-label="Close">✕</button>
-    </div>
-    <div class="p4u-season-bar" id="sideSeasonBar"></div>
-    <div class="p4u-drawer-tools">
-      <select id="seasonFilter" aria-label="Season"><option value="all">All Seasons</option></select>
-      <input id="episodeSearch" type="search" placeholder="Search EP…">
-    </div>
-    <div class="p4u-ep-list" id="sideEpList"></div>
-  </div>
-  {% endif %}
-    </div>
     </div>
     <div class="p4u-below-bar">
       <button type="button" class="p4u-ep-pill" id="prevGroupBtn" disabled>← Previous</button>
@@ -427,11 +412,13 @@
       </div>
       {% if title_page and title_page.overview %}<p class="muted" style="font-size:13px;line-height:1.55">{{ title_page.overview }}</p>{% endif %}
       <div class="audio-track-row" id="audioTrackRow" style="display:none"><select id="audioSelect" class="audio-track-select" aria-label="Audio track"></select><span id="audioTrackStatus" class="audio-track-status"></span></div>
+      <div class="audio-track-row" id="subtitleTrackRow" style="display:none"><select id="subtitleSelect" class="audio-track-select" aria-label="Subtitle track"></select><span id="subtitleTrackStatus" class="audio-track-status"></span></div>
       <div class="watch-tools">
         {% if player_settings.downloads_enabled %}
         <a class="btn btn-accent" id="infoDlBtn" href="{{ effective_stream_base }}/dl/{{ file.short_code }}" download>⬇ Download</a>
-        {% elif _fs %}
-        <a class="btn btn-accent" id="infoDlBtn" href="https://t.me/{{ _fs }}?start=file_{{ file.short_code }}" target="_blank" rel="noopener">📥 Get File in Bot</a>
+        {% endif %}
+        {% if _fs %}
+        <a class="btn" id="tgBotBtn" href="https://t.me/{{ _fs }}?start=file_{{ file.short_code }}" target="_blank" rel="noopener" style="background:linear-gradient(135deg,#0ea5e9,#2563eb);color:#fff;border:0">✈ Get in Telegram</a>
         {% endif %}
         <button type="button" class="btn" onclick="navigator.clipboard?.writeText(location.href).then(()=>showToast('Watch link copied!'))">Copy Watch Link</button>
         <button type="button" class="btn" onclick="navigator.clipboard?.writeText(STREAM_URL).then(()=>showToast('Stream URL copied!'))">Copy Stream URL</button>
@@ -464,7 +451,7 @@ const FILESTORE_BOT = {{ (player_settings.filestore_bot_username or '')|tojson }
 const DL_URL = DOWNLOADS_ENABLED
   ? (PLAY_ORIGIN + '/dl/' + SHORT_CODE)
   : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (PLAY_ORIGIN + '/dl/' + SHORT_CODE));
-const REMUX_URL = PLAY_ORIGIN + '/remux/' + SHORT_CODE;
+const REMUX_URL = (HAS_DIRECT_TUNNEL ? STREAM_ORIGIN : PLAY_ORIGIN) + '/remux/' + SHORT_CODE;
 const PLAYER_MIME = {{ file.mime_type|tojson }};
 const INTENT_MIME = (!PLAYER_MIME || PLAYER_MIME === 'application/octet-stream') ? 'video/*' : PLAYER_MIME;
 const WATCH_GROUPS = {{ (_wg if _wg is defined else [])|tojson }};
@@ -522,7 +509,7 @@ function goToGroupButton(gi, bi) {
   if (href) window.location.href = href;
 }
 
-// Tap anywhere on video surface to hide/show ALL controls
+// Tap empty video area to hide/show top bar without blocking Movi-Player controls/menus
 (function setupTapToggle(){
   let visible = true;
   function syncMoviShadow(show) {
@@ -534,7 +521,7 @@ function goToGroupButton(gi, bi) {
         if (!st) {
           st = document.createElement('style');
           st.id = 'amz-hide-controls-style';
-          st.textContent = '[part*="control"],[part*="chrome"],[part*="progress"],[part*="bar"],[part*="overlay"],[class*="control"],[class*="chrome"],[class*="progress"],[class*="seek"],[class*="overlay"],button{opacity:0!important;visibility:hidden!important;pointer-events:none!important;display:none!important}';
+          st.textContent = '[part*="chrome"],[part*="controls"],[part*="bottom-bar"],[part*="control-bar"],[part*="progress-container"]{opacity:0!important;pointer-events:none!important}';
           sr.appendChild(st);
         }
       } else if (st) {
@@ -545,12 +532,10 @@ function goToGroupButton(gi, bi) {
   function setVisible(on) {
     visible = !!on;
     wrapper.classList.toggle('controls-hidden', !visible);
-    try { if (visible) mp.setAttribute('controls', ''); else mp.removeAttribute('controls'); } catch(_){}
     syncMoviShadow(visible);
     if (!visible) {
       document.getElementById('switchPop')?.classList.remove('open');
       document.getElementById('laptopPop')?.classList.remove('open');
-      document.getElementById('episodesDrawer')?.classList.remove('open');
     }
   }
   wrapper.addEventListener('pointerdown', () => { if (mp && mp.muted) forceUnmuteMovi(); }, { once: true, capture: true });
@@ -561,11 +546,13 @@ function goToGroupButton(gi, bi) {
       return;
     }
     const path = (typeof e.composedPath === 'function') ? e.composedPath() : [e.target];
-    const hitControl = path.some(node => node && node.nodeType === 1 && node.matches && node.matches('button, a, input, select, .p4u-scrub, .p4u-pop, .p4u-drawer'));
+    const hitControl = path.some(node => {
+      if (!node || node.nodeType !== 1 || !node.matches) return false;
+      return node.matches('button, a, input, select, [role="button"], [role="menuitem"], [role="option"], [role="slider"], [role="menu"], [role="listbox"], [part*="control"], [part*="bar"], [part*="progress"], [part*="menu"], [part*="slider"], .p4u-pop, .p4u-top');
+    });
     if (hitControl) return;
     const rect = wrapper.getBoundingClientRect();
-    if (e.clientY && rect.height > 140 && e.clientY > rect.bottom - 64) return;
-    e.stopPropagation();
+    if (e.clientY && rect.height > 140 && (e.clientY > rect.bottom - 88 || e.clientY < rect.top + 64)) return;
     setVisible(false);
   }, true);
 })();
@@ -587,7 +574,8 @@ const durTimeLabel = document.getElementById('durTimeLabel');
 function forceUnmuteMovi() {
   if (!mp) return;
   try {
-    forceUnmuteMovi();
+    mp.muted = false;
+    mp.removeAttribute('muted');
     if (!mp.volume || mp.volume === 0) mp.volume = 1;
     if (mp.shadowRoot) {
       mp.shadowRoot.querySelectorAll('video, audio').forEach(el => {
@@ -909,58 +897,169 @@ document.addEventListener('click', (e) => {
   render();
 })();
 
-// Load audio tracks from /api/tracks/<SHORT_CODE> and switch cleanly
-(function initAudioTrackSelector(){
-  const box = document.getElementById('audioTrackRow');
-  const sel = document.getElementById('audioSelect');
-  const st = document.getElementById('audioTrackStatus');
-  if (!box || !sel) return;
-  fetch('/api/tracks/' + encodeURIComponent(SHORT_CODE), { cache: 'no-store' })
-    .then(r => r.ok ? r.json() : null)
-    .then(data => {
-      const tracks = (data && Array.isArray(data.audio_tracks)) ? data.audio_tracks : [];
-      if (!tracks.length) return;
-      sel.innerHTML = '';
-      tracks.forEach((tr, i) => {
-        const opt = document.createElement('option');
-        opt.value = String(i);
-        const lang = tr.language || tr.lang || '';
-        const title = tr.title || '';
-        const codec = tr.codec || '';
-        const label = ['Track ' + (i + 1), lang.toUpperCase(), title, codec].filter(Boolean).join(' · ');
-        opt.textContent = label;
-        sel.appendChild(opt);
-      });
-      box.style.display = 'flex';
-      if (st) st.textContent = tracks.length + ' audio track' + (tracks.length === 1 ? '' : 's');
-      sel.onchange = () => {
-        const idx = Number(sel.value) || 0;
-        // Try Movi-Player native audio track API first, then fallback to seekable AAC remux for that track
+// Native Movi-Player Audio & Subtitle Track Selectors (0 server load) + /api/tracks fallback
+(function initAudioAndSubtitleSelectors(){
+  const aBox = document.getElementById('audioTrackRow');
+  const aSel = document.getElementById('audioSelect');
+  const aSt = document.getElementById('audioTrackStatus');
+  const sBox = document.getElementById('subtitleTrackRow');
+  const sSel = document.getElementById('subtitleSelect');
+  const sSt = document.getElementById('subtitleTrackStatus');
+  let serverTracksPromise = null;
+  let tracksPopulatedFromMovi = false;
+
+  function populateAudioFromMovi() {
+    if (!aBox || !aSel || !mp || typeof mp.getAudioLangs !== 'function') return false;
+    let langs = [];
+    try { langs = mp.getAudioLangs() || []; } catch (_) { langs = []; }
+    if (!Array.isArray(langs) || !langs.length) return false;
+    tracksPopulatedFromMovi = true;
+    aSel.innerHTML = '';
+    langs.forEach((tr, i) => {
+      const opt = document.createElement('option');
+      const code = tr.lang || tr.language || String(i);
+      opt.value = 'movi:' + code;
+      opt.textContent = tr.label || tr.title || ('Audio ' + (i + 1) + (code ? ' (' + String(code).toUpperCase() + ')' : ''));
+      if (tr.active) opt.selected = true;
+      aSel.appendChild(opt);
+    });
+    const remuxOpt = document.createElement('option');
+    remuxOpt.value = 'remux:0';
+    remuxOpt.textContent = '🔊 Fix Audio (AAC Remux)';
+    aSel.appendChild(remuxOpt);
+    aBox.style.display = 'flex';
+    if (aSt) aSt.textContent = langs.length + ' audio track' + (langs.length === 1 ? '' : 's');
+    aSel.onchange = () => {
+      const val = String(aSel.value || '');
+      if (val.startsWith('movi:')) {
+        const langCode = val.slice(5);
         try {
-          if (mp && typeof mp.setAudioTrack === 'function') {
-            mp.setAudioTrack(idx);
-            showToast('Audio switched to Track ' + (idx + 1));
-            return;
-          }
-          if (mp && mp.audioTracks && mp.audioTracks.length > idx) {
-            for (let k = 0; k < mp.audioTracks.length; k++) mp.audioTracks[k].enabled = (k === idx);
-            showToast('Audio switched to Track ' + (idx + 1));
-            return;
-          }
-        } catch (_) {}
-        const t = Number(mp && mp.currentTime) || 0;
-        showLoading();
-        mp.src = REMUX_URL + '?audio=' + idx + '&aac=1';
-        if (typeof mp.load === 'function') mp.load();
-        mp.addEventListener('loadedmetadata', () => {
-          if (t > 1) { try { mp.currentTime = t; } catch (_) {} }
+          mp.selectAudioLang(langCode);
           forceUnmuteMovi();
-          mp.play()?.catch(() => {});
-        }, { once: true });
-        showToast('Loading Audio Track ' + (idx + 1) + '…');
-      };
-    })
-    .catch(() => {});
+          showToast('Audio switched');
+          return;
+        } catch (_) {}
+      }
+      const idx = val.startsWith('remux:') ? (Number(val.slice(6)) || 0) : 0;
+      const t = Number(mp && mp.currentTime) || 0;
+      showLoading();
+      mp.src = REMUX_URL + '?audio=' + idx + '&aac=1';
+      if (typeof mp.load === 'function') mp.load();
+      mp.addEventListener('loadedmetadata', () => {
+        if (t > 1) { try { mp.currentTime = t; } catch (_) {} }
+        forceUnmuteMovi();
+        mp.play()?.catch(() => {});
+      }, { once: true });
+      showToast('Loading AAC audio stream…');
+    };
+    return true;
+  }
+
+  function populateSubsFromMovi() {
+    if (!sBox || !sSel || !mp || typeof mp.getSubtitleLangs !== 'function') return;
+    let subs = [];
+    try { subs = mp.getSubtitleLangs() || []; } catch (_) { subs = []; }
+    if (!Array.isArray(subs)) subs = [];
+    sSel.innerHTML = '';
+    const offOpt = document.createElement('option');
+    offOpt.value = '';
+    offOpt.textContent = 'Subtitles: Off';
+    sSel.appendChild(offOpt);
+    let hasActive = false;
+    subs.forEach((tr, i) => {
+      const opt = document.createElement('option');
+      const code = tr.lang || tr.language || String(i);
+      opt.value = code;
+      opt.textContent = tr.label || tr.title || ('Subtitle ' + (i + 1) + (code ? ' (' + String(code).toUpperCase() + ')' : ''));
+      if (tr.active) { opt.selected = true; hasActive = true; }
+      sSel.appendChild(opt);
+    });
+    const localOpt = document.createElement('option');
+    localOpt.value = '__local__';
+    localOpt.textContent = '+ Load .srt / .vtt file…';
+    sSel.appendChild(localOpt);
+    if (!hasActive) offOpt.selected = true;
+    sBox.style.display = 'flex';
+    if (sSt) sSt.textContent = subs.length ? (subs.length + ' subtitle' + (subs.length === 1 ? '' : 's')) : 'Load .srt / .vtt';
+    sSel.onchange = async () => {
+      const val = sSel.value;
+      if (val === '__local__') {
+        const inp = document.createElement('input');
+        inp.type = 'file';
+        inp.accept = '.srt,.vtt,.ass,.ssa,.ttml';
+        inp.onchange = () => {
+          const f = inp.files && inp.files[0];
+          if (!f) { sSel.value = ''; return; }
+          const url = URL.createObjectURL(f);
+          const track = document.createElement('track');
+          track.kind = 'subtitles';
+          track.label = f.name;
+          track.srclang = 'en';
+          track.src = url;
+          track.default = true;
+          if (/\.srt$/i.test(f.name)) track.setAttribute('data-format', 'srt');
+          mp.appendChild(track);
+          showToast('Subtitle loaded: ' + f.name);
+          setTimeout(populateSubsFromMovi, 400);
+        };
+        inp.click();
+        return;
+      }
+      try {
+        if (typeof mp.selectSubtitleLang === 'function') {
+          await mp.selectSubtitleLang(val || null);
+          showToast(val ? 'Subtitle enabled' : 'Subtitles off');
+        }
+      } catch (_) {}
+    };
+  }
+
+  function fetchServerTracksFallback() {
+    if (tracksPopulatedFromMovi || serverTracksPromise || !aBox || !aSel) return;
+    serverTracksPromise = fetch('/api/tracks/' + encodeURIComponent(SHORT_CODE))
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (tracksPopulatedFromMovi) return;
+        const tracks = (data && Array.isArray(data.audio_tracks)) ? data.audio_tracks : [];
+        if (!tracks.length) return;
+        aSel.innerHTML = '';
+        tracks.forEach((tr, i) => {
+          const opt = document.createElement('option');
+          opt.value = String(i);
+          const lang = tr.language || tr.lang || '';
+          const title = tr.title || '';
+          const codec = tr.codec || '';
+          opt.textContent = tr.label || ['Track ' + (i + 1), lang.toUpperCase(), title, codec].filter(Boolean).join(' · ');
+          aSel.appendChild(opt);
+        });
+        aBox.style.display = 'flex';
+        if (aSt) aSt.textContent = tracks.length + ' audio track' + (tracks.length === 1 ? '' : 's');
+        aSel.onchange = () => {
+          const idx = Number(aSel.value) || 0;
+          const t = Number(mp && mp.currentTime) || 0;
+          showLoading();
+          mp.src = REMUX_URL + '?audio=' + idx + '&aac=1';
+          if (typeof mp.load === 'function') mp.load();
+          mp.addEventListener('loadedmetadata', () => {
+            if (t > 1) { try { mp.currentTime = t; } catch (_) {} }
+            forceUnmuteMovi();
+            mp.play()?.catch(() => {});
+          }, { once: true });
+          showToast('Loading Audio Track ' + (idx + 1) + '…');
+        };
+      })
+      .catch(() => {});
+  }
+
+  const syncAll = () => {
+    const ok = populateAudioFromMovi();
+    populateSubsFromMovi();
+    if (!ok) fetchServerTracksFallback();
+  };
+  mp?.addEventListener('loadedmetadata', syncAll);
+  mp?.addEventListener('loadeddata', syncAll);
+  mp?.addEventListener('canplay', syncAll);
+  setTimeout(() => { if (!tracksPopulatedFromMovi) syncAll(); }, 3500);
 })();
 
 

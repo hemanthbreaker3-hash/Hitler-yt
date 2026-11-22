@@ -1338,7 +1338,7 @@ function buildTelegramGroupsFromWatch(groups, filestoreUsername) {
 }
 
 function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
-  const headExtra = `<style>
+  const headExtra = `<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="dns-prefetch" href="https://cdn.jsdelivr.net"><style>
     .detail{display:grid;grid-template-columns:minmax(160px,280px) 1fr;gap:28px;align-items:start;margin-top:12px}
     .detail img{width:100%;border-radius:16px;border:1px solid var(--line);box-shadow:var(--shadow)}
     .detail h1{font-size:clamp(1.5rem,4vw,2.35rem);line-height:1.1;margin:0 0 12px}
@@ -1723,7 +1723,7 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
 }
 
 function renderPanelHtml(settings) {
-  const headExtra = `<style>
+  const headExtra = `<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="dns-prefetch" href="https://cdn.jsdelivr.net"><style>
     .admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
     .admin-card{padding:18px}
     .switch{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #1e3d64}
@@ -2414,7 +2414,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   const groupName = (watchGroups[groupIndex] && watchGroups[groupIndex].name) || '';
   const curBtnName = (watchGroups[groupIndex] && watchGroups[groupIndex].buttons && watchGroups[groupIndex].buttons[buttonIndex] && watchGroups[groupIndex].buttons[buttonIndex].name) || 'Auto';
 
-  const headExtra = `<style>
+  const headExtra = `<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="dns-prefetch" href="https://cdn.jsdelivr.net"><style>
     .watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:18px;margin-top:14px;align-items:start}
     @media(max-width:960px){.watch-grid{grid-template-columns:1fr}}
     .p4u-stage{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.12);box-shadow:0 20px 50px rgba(0,0,0,.55);user-select:none;-webkit-tap-highlight-color:transparent}
@@ -2531,7 +2531,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   <div>
     <div class="p4u-stage" id="playerWrapper">
   ${posterUrl ? `<div class="p4u-backdrop" style="background-image:url('${escapeHtml(posterUrl)}')"></div>` : ''}
-  <movi-player id="moviPlayer" playsinline controls preload="auto" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
+  <movi-player id="moviPlayer" playsinline controls sw="auto" fallback="native" subtitlepicker fastseek resume persist theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
   <div class="p4u-loading" id="playerLoading"><div class="p4u-spinner"></div></div>
   
   <div class="p4u-top">
@@ -2573,8 +2573,10 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
         ${groupName ? `<span>${escapeHtml(groupName)}</span>` : ''}
       </div>
       <div class="audio-track-row" id="audioTrackRow" style="display:none"><select id="audioSelect" class="audio-track-select" aria-label="Audio track"></select><span id="audioTrackStatus" class="audio-track-status"></span></div>
+      <div class="audio-track-row" id="subtitleTrackRow" style="display:none"><select id="subtitleSelect" class="audio-track-select" aria-label="Subtitle track"></select><span id="subtitleTrackStatus" class="audio-track-status"></span></div>
       <div class="watch-tools">
-        <a class="btn btn-accent" href="${escapeHtml(dlHref)}" ${downloadsEnabled ? 'download' : 'target="_blank" rel="noopener"'}>⬇ Download</a>
+        ${downloadsEnabled ? `<a class="btn btn-accent" id="infoDlBtn" href="${escapeHtml(dlHref)}" download>⬇ Download</a>` : ''}
+        ${fsUser ? `<a class="btn" id="tgBotBtn" href="https://t.me/${encodeURIComponent(fsUser)}?start=file_${encodeURIComponent(file.short_code)}" target="_blank" rel="noopener" style="background:linear-gradient(135deg,#0ea5e9,#2563eb);color:#fff;border:0">✈ Get in Telegram</a>` : (!downloadsEnabled ? `<a class="btn btn-accent" id="infoDlBtn" href="${escapeHtml(dlHref)}" target="_blank" rel="noopener">⬇ Download</a>` : '')}
         <button type="button" class="btn" onclick="navigator.clipboard?.writeText(location.href).then(()=>showToast('Watch link copied!'))">Copy Watch Link</button>
         <button type="button" class="btn" onclick="navigator.clipboard?.writeText(STREAM_URL).then(()=>showToast('Stream URL copied!'))">Copy Stream URL</button>
       </div>
@@ -2602,7 +2604,7 @@ const EXTERNAL_STREAM_URL = DIRECT_STREAM_URL + EXT_FILE_PART;
 const DOWNLOADS_ENABLED = ${safeJsonForScript(downloadsEnabled)};
 const FILESTORE_BOT = ${safeJsonForScript(fsUser)};
 const DL_URL = DOWNLOADS_ENABLED ? (PLAY_ORIGIN + '/dl/' + SHORT_CODE) : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (PLAY_ORIGIN + '/dl/' + SHORT_CODE));
-const REMUX_URL = PLAY_ORIGIN + '/remux/' + SHORT_CODE;
+const REMUX_URL = (HAS_DIRECT_TUNNEL ? STREAM_ORIGIN : PLAY_ORIGIN) + '/remux/' + SHORT_CODE;
 const PLAYER_MIME = ${safeJsonForScript(file.mime_type || 'video/mp4')};
 const INTENT_MIME = (!PLAYER_MIME || PLAYER_MIME === 'application/octet-stream') ? 'video/*' : PLAYER_MIME;
 const WATCH_GROUPS = ${safeJsonForScript(watchGroups)};
@@ -2620,6 +2622,7 @@ function extractWatchCode(url) { if (!url) return null; try { const u = new URL(
 function preferredButtonForGroup(gi) { const g = WATCH_GROUPS[gi]; const btns = (g && g.buttons) || []; return !btns.length ? 0 : (BUTTON_INDEX < btns.length ? BUTTON_INDEX : 0); }
 function watchHrefFor(gi, bi) { const g = WATCH_GROUPS[gi]; if (!g || !g.buttons || !g.buttons[bi]) return null; const code = extractWatchCode(g.buttons[bi].url); if (!code) return g.buttons[bi].url; const p = new URLSearchParams(); if (TITLE_SLUG) p.set('title', TITLE_SLUG); p.set('g', String(gi)); p.set('b', String(bi)); return '/watch/' + code + '?' + p.toString(); }
 function goToGroupButton(gi, bi) { const h = watchHrefFor(gi, bi); if (h) window.location.href = h; }
+// Tap empty video area to hide/show top bar without blocking Movi-Player controls/menus
 (function setupTapToggle(){
   let visible = true;
   function syncMoviShadow(show) {
@@ -2631,7 +2634,7 @@ function goToGroupButton(gi, bi) { const h = watchHrefFor(gi, bi); if (h) window
         if (!st) {
           st = document.createElement('style');
           st.id = 'amz-hide-controls-style';
-          st.textContent = '[part*="control"],[part*="chrome"],[part*="progress"],[part*="bar"],[part*="overlay"],[class*="control"],[class*="chrome"],[class*="progress"],[class*="seek"],[class*="overlay"],button{opacity:0!important;visibility:hidden!important;pointer-events:none!important;display:none!important}';
+          st.textContent = '[part*="chrome"],[part*="controls"],[part*="bottom-bar"],[part*="control-bar"],[part*="progress-container"]{opacity:0!important;pointer-events:none!important}';
           sr.appendChild(st);
         }
       } else if (st) {
@@ -2642,12 +2645,10 @@ function goToGroupButton(gi, bi) { const h = watchHrefFor(gi, bi); if (h) window
   function setVisible(on) {
     visible = !!on;
     wrapper.classList.toggle('controls-hidden', !visible);
-    try { if (visible) mp.setAttribute('controls', ''); else mp.removeAttribute('controls'); } catch(_){}
     syncMoviShadow(visible);
     if (!visible) {
       document.getElementById('switchPop')?.classList.remove('open');
       document.getElementById('laptopPop')?.classList.remove('open');
-      document.getElementById('episodesDrawer')?.classList.remove('open');
     }
   }
   wrapper.addEventListener('pointerdown', () => { if (mp && mp.muted) forceUnmuteMovi(); }, { once: true, capture: true });
@@ -2658,11 +2659,13 @@ function goToGroupButton(gi, bi) { const h = watchHrefFor(gi, bi); if (h) window
       return;
     }
     const path = (typeof e.composedPath === 'function') ? e.composedPath() : [e.target];
-    const hitControl = path.some(node => node && node.nodeType === 1 && node.matches && node.matches('button, a, input, select, .p4u-scrub, .p4u-pop, .p4u-drawer'));
+    const hitControl = path.some(node => {
+      if (!node || node.nodeType !== 1 || !node.matches) return false;
+      return node.matches('button, a, input, select, [role="button"], [role="menuitem"], [role="option"], [role="slider"], [role="menu"], [role="listbox"], [part*="control"], [part*="bar"], [part*="progress"], [part*="menu"], [part*="slider"], .p4u-pop, .p4u-top');
+    });
     if (hitControl) return;
     const rect = wrapper.getBoundingClientRect();
-    if (e.clientY && rect.height > 140 && e.clientY > rect.bottom - 64) return;
-    e.stopPropagation();
+    if (e.clientY && rect.height > 140 && (e.clientY > rect.bottom - 88 || e.clientY < rect.top + 64)) return;
     setVisible(false);
   }, true);
 })();
@@ -2871,58 +2874,169 @@ document.addEventListener('click', (e) => { const t = e.target; if (t?.closest &
   render();
 })();
 
-// Load audio tracks from /api/tracks/<SHORT_CODE> and switch cleanly
-(function initAudioTrackSelector(){
-  const box = document.getElementById('audioTrackRow');
-  const sel = document.getElementById('audioSelect');
-  const st = document.getElementById('audioTrackStatus');
-  if (!box || !sel) return;
-  fetch('/api/tracks/' + encodeURIComponent(SHORT_CODE), { cache: 'no-store' })
-    .then(r => r.ok ? r.json() : null)
-    .then(data => {
-      const tracks = (data && Array.isArray(data.audio_tracks)) ? data.audio_tracks : [];
-      if (!tracks.length) return;
-      sel.innerHTML = '';
-      tracks.forEach((tr, i) => {
-        const opt = document.createElement('option');
-        opt.value = String(i);
-        const lang = tr.language || tr.lang || '';
-        const title = tr.title || '';
-        const codec = tr.codec || '';
-        const label = ['Track ' + (i + 1), lang.toUpperCase(), title, codec].filter(Boolean).join(' · ');
-        opt.textContent = label;
-        sel.appendChild(opt);
-      });
-      box.style.display = 'flex';
-      if (st) st.textContent = tracks.length + ' audio track' + (tracks.length === 1 ? '' : 's');
-      sel.onchange = () => {
-        const idx = Number(sel.value) || 0;
-        // Try Movi-Player native audio track API first, then fallback to seekable AAC remux for that track
+// Native Movi-Player Audio & Subtitle Track Selectors (0 server load) + /api/tracks fallback
+(function initAudioAndSubtitleSelectors(){
+  const aBox = document.getElementById('audioTrackRow');
+  const aSel = document.getElementById('audioSelect');
+  const aSt = document.getElementById('audioTrackStatus');
+  const sBox = document.getElementById('subtitleTrackRow');
+  const sSel = document.getElementById('subtitleSelect');
+  const sSt = document.getElementById('subtitleTrackStatus');
+  let serverTracksPromise = null;
+  let tracksPopulatedFromMovi = false;
+
+  function populateAudioFromMovi() {
+    if (!aBox || !aSel || !mp || typeof mp.getAudioLangs !== 'function') return false;
+    let langs = [];
+    try { langs = mp.getAudioLangs() || []; } catch (_) { langs = []; }
+    if (!Array.isArray(langs) || !langs.length) return false;
+    tracksPopulatedFromMovi = true;
+    aSel.innerHTML = '';
+    langs.forEach((tr, i) => {
+      const opt = document.createElement('option');
+      const code = tr.lang || tr.language || String(i);
+      opt.value = 'movi:' + code;
+      opt.textContent = tr.label || tr.title || ('Audio ' + (i + 1) + (code ? ' (' + String(code).toUpperCase() + ')' : ''));
+      if (tr.active) opt.selected = true;
+      aSel.appendChild(opt);
+    });
+    const remuxOpt = document.createElement('option');
+    remuxOpt.value = 'remux:0';
+    remuxOpt.textContent = '🔊 Fix Audio (AAC Remux)';
+    aSel.appendChild(remuxOpt);
+    aBox.style.display = 'flex';
+    if (aSt) aSt.textContent = langs.length + ' audio track' + (langs.length === 1 ? '' : 's');
+    aSel.onchange = () => {
+      const val = String(aSel.value || '');
+      if (val.startsWith('movi:')) {
+        const langCode = val.slice(5);
         try {
-          if (mp && typeof mp.setAudioTrack === 'function') {
-            mp.setAudioTrack(idx);
-            showToast('Audio switched to Track ' + (idx + 1));
-            return;
-          }
-          if (mp && mp.audioTracks && mp.audioTracks.length > idx) {
-            for (let k = 0; k < mp.audioTracks.length; k++) mp.audioTracks[k].enabled = (k === idx);
-            showToast('Audio switched to Track ' + (idx + 1));
-            return;
-          }
-        } catch (_) {}
-        const t = Number(mp && mp.currentTime) || 0;
-        showLoading();
-        mp.src = REMUX_URL + '?audio=' + idx + '&aac=1';
-        if (typeof mp.load === 'function') mp.load();
-        mp.addEventListener('loadedmetadata', () => {
-          if (t > 1) { try { mp.currentTime = t; } catch (_) {} }
+          mp.selectAudioLang(langCode);
           forceUnmuteMovi();
-          mp.play()?.catch(() => {});
-        }, { once: true });
-        showToast('Loading Audio Track ' + (idx + 1) + '…');
-      };
-    })
-    .catch(() => {});
+          showToast('Audio switched');
+          return;
+        } catch (_) {}
+      }
+      const idx = val.startsWith('remux:') ? (Number(val.slice(6)) || 0) : 0;
+      const t = Number(mp && mp.currentTime) || 0;
+      showLoading();
+      mp.src = REMUX_URL + '?audio=' + idx + '&aac=1';
+      if (typeof mp.load === 'function') mp.load();
+      mp.addEventListener('loadedmetadata', () => {
+        if (t > 1) { try { mp.currentTime = t; } catch (_) {} }
+        forceUnmuteMovi();
+        mp.play()?.catch(() => {});
+      }, { once: true });
+      showToast('Loading AAC audio stream…');
+    };
+    return true;
+  }
+
+  function populateSubsFromMovi() {
+    if (!sBox || !sSel || !mp || typeof mp.getSubtitleLangs !== 'function') return;
+    let subs = [];
+    try { subs = mp.getSubtitleLangs() || []; } catch (_) { subs = []; }
+    if (!Array.isArray(subs)) subs = [];
+    sSel.innerHTML = '';
+    const offOpt = document.createElement('option');
+    offOpt.value = '';
+    offOpt.textContent = 'Subtitles: Off';
+    sSel.appendChild(offOpt);
+    let hasActive = false;
+    subs.forEach((tr, i) => {
+      const opt = document.createElement('option');
+      const code = tr.lang || tr.language || String(i);
+      opt.value = code;
+      opt.textContent = tr.label || tr.title || ('Subtitle ' + (i + 1) + (code ? ' (' + String(code).toUpperCase() + ')' : ''));
+      if (tr.active) { opt.selected = true; hasActive = true; }
+      sSel.appendChild(opt);
+    });
+    const localOpt = document.createElement('option');
+    localOpt.value = '__local__';
+    localOpt.textContent = '+ Load .srt / .vtt file…';
+    sSel.appendChild(localOpt);
+    if (!hasActive) offOpt.selected = true;
+    sBox.style.display = 'flex';
+    if (sSt) sSt.textContent = subs.length ? (subs.length + ' subtitle' + (subs.length === 1 ? '' : 's')) : 'Load .srt / .vtt';
+    sSel.onchange = async () => {
+      const val = sSel.value;
+      if (val === '__local__') {
+        const inp = document.createElement('input');
+        inp.type = 'file';
+        inp.accept = '.srt,.vtt,.ass,.ssa,.ttml';
+        inp.onchange = () => {
+          const f = inp.files && inp.files[0];
+          if (!f) { sSel.value = ''; return; }
+          const url = URL.createObjectURL(f);
+          const track = document.createElement('track');
+          track.kind = 'subtitles';
+          track.label = f.name;
+          track.srclang = 'en';
+          track.src = url;
+          track.default = true;
+          if (/\.srt$/i.test(f.name)) track.setAttribute('data-format', 'srt');
+          mp.appendChild(track);
+          showToast('Subtitle loaded: ' + f.name);
+          setTimeout(populateSubsFromMovi, 400);
+        };
+        inp.click();
+        return;
+      }
+      try {
+        if (typeof mp.selectSubtitleLang === 'function') {
+          await mp.selectSubtitleLang(val || null);
+          showToast(val ? 'Subtitle enabled' : 'Subtitles off');
+        }
+      } catch (_) {}
+    };
+  }
+
+  function fetchServerTracksFallback() {
+    if (tracksPopulatedFromMovi || serverTracksPromise || !aBox || !aSel) return;
+    serverTracksPromise = fetch('/api/tracks/' + encodeURIComponent(SHORT_CODE))
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (tracksPopulatedFromMovi) return;
+        const tracks = (data && Array.isArray(data.audio_tracks)) ? data.audio_tracks : [];
+        if (!tracks.length) return;
+        aSel.innerHTML = '';
+        tracks.forEach((tr, i) => {
+          const opt = document.createElement('option');
+          opt.value = String(i);
+          const lang = tr.language || tr.lang || '';
+          const title = tr.title || '';
+          const codec = tr.codec || '';
+          opt.textContent = tr.label || ['Track ' + (i + 1), lang.toUpperCase(), title, codec].filter(Boolean).join(' · ');
+          aSel.appendChild(opt);
+        });
+        aBox.style.display = 'flex';
+        if (aSt) aSt.textContent = tracks.length + ' audio track' + (tracks.length === 1 ? '' : 's');
+        aSel.onchange = () => {
+          const idx = Number(aSel.value) || 0;
+          const t = Number(mp && mp.currentTime) || 0;
+          showLoading();
+          mp.src = REMUX_URL + '?audio=' + idx + '&aac=1';
+          if (typeof mp.load === 'function') mp.load();
+          mp.addEventListener('loadedmetadata', () => {
+            if (t > 1) { try { mp.currentTime = t; } catch (_) {} }
+            forceUnmuteMovi();
+            mp.play()?.catch(() => {});
+          }, { once: true });
+          showToast('Loading Audio Track ' + (idx + 1) + '…');
+        };
+      })
+      .catch(() => {});
+  }
+
+  const syncAll = () => {
+    const ok = populateAudioFromMovi();
+    populateSubsFromMovi();
+    if (!ok) fetchServerTracksFallback();
+  };
+  mp?.addEventListener('loadedmetadata', syncAll);
+  mp?.addEventListener('loadeddata', syncAll);
+  mp?.addEventListener('canplay', syncAll);
+  setTimeout(() => { if (!tracksPopulatedFromMovi) syncAll(); }, 3500);
 })();
 
 
@@ -4264,6 +4378,7 @@ export default async function handler(req, res) {
           posterUrl,
           filestoreUsername: fsUser,
         }),
+        'public, s-maxage=30, stale-while-revalidate=180',
       );
       return;
     }

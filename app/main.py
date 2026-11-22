@@ -392,6 +392,8 @@ async def register_view(short_code: str, request: Request):
 
 _FILE_META_CACHE: dict[str, tuple[dict, float]] = {}
 _REMUX_SEM = asyncio.Semaphore(4)
+_TRACKS_CACHE: dict[str, tuple[float, dict]] = {}
+_TRACKS_CACHE_TTL = 600.0
 
 
 async def _get_file_cached(short_code: str):
@@ -522,13 +524,20 @@ async def stream_file(request: Request, short_code: str, extra_name: str = ""):
 @app.get("/api/tracks/{short_code}")
 async def get_tracks(short_code: str):
     """Return available audio/video/subtitle tracks for a media file."""
-    file_data = await files_col.find_one({"short_code": short_code})
+    now = time.monotonic()
+    mem_cached = _TRACKS_CACHE.get(short_code)
+    if mem_cached and (now - mem_cached[0]) < _TRACKS_CACHE_TTL:
+        return JSONResponse(mem_cached[1], headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"})
+    file_data = await _get_file_cached(short_code)
     if not file_data:
         raise HTTPException(status_code=404, detail="File not found")
 
     cached = file_data.get('tracks_info')
     if cached and not cached.get('error'):
-        return JSONResponse(cached)
+        if len(_TRACKS_CACHE) > 5000:
+            _TRACKS_CACHE.clear()
+        _TRACKS_CACHE[short_code] = (now, cached)
+        return JSONResponse(cached, headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"})
 
     client = session_manager.bot_client or session_manager.get_client()
     if not client:
@@ -559,12 +568,15 @@ async def get_tracks(short_code: str):
         tracks_info = await probe_tracks(client, msg, file_data['file_size'])
 
         if not tracks_info.get('error'):
+            if len(_TRACKS_CACHE) > 5000:
+                _TRACKS_CACHE.clear()
+            _TRACKS_CACHE[short_code] = (now, tracks_info)
             await files_col.update_one(
                 {"short_code": short_code},
                 {"$set": {"tracks_info": tracks_info}}
             )
 
-        return JSONResponse(tracks_info)
+        return JSONResponse(tracks_info, headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"})
 
     except HTTPException:
         raise
