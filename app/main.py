@@ -390,10 +390,30 @@ async def register_view(short_code: str, request: Request):
     return {"views": int((latest or {}).get("access_count") or 0)}
 
 
+_FILE_META_CACHE: dict[str, tuple[dict, float]] = {}
+_REMUX_SEM = asyncio.Semaphore(4)
+
+
+async def _get_file_cached(short_code: str):
+    import time as _t
+    now = _t.monotonic()
+    hit = _FILE_META_CACHE.get(short_code)
+    if hit and (now - hit[1]) < 60.0:
+        return hit[0]
+    doc = await files_col.find_one({"short_code": short_code})
+    if doc:
+        if len(_FILE_META_CACHE) > 5000:
+            for k in list(_FILE_META_CACHE.keys())[:1500]:
+                _FILE_META_CACHE.pop(k, None)
+        _FILE_META_CACHE[short_code] = (doc, now)
+    return doc
+
+
 @app.api_route("/dl/{short_code}", methods=["GET", "HEAD"])
 @app.api_route("/dl/{short_code}/{extra_name:path}", methods=["GET", "HEAD"])
 @app.api_route("/stream/{short_code}", methods=["GET", "HEAD"])
 @app.api_route("/stream/{short_code}/{extra_name:path}", methods=["GET", "HEAD"])
+
 async def stream_file(request: Request, short_code: str, extra_name: str = ""):
     """
     Public download (/dl/) and stream (/stream/) endpoint for any user in Chrome, 1DM, ADM, IDM, or players.
@@ -412,7 +432,7 @@ async def stream_file(request: Request, short_code: str, extra_name: str = ""):
     if request.url.path.startswith("/stream/") and runtime.get("streaming_enabled") is False:
         raise HTTPException(status_code=403, detail="Streaming is currently disabled")
 
-    file_data = await files_col.find_one({"short_code": short_code})
+    file_data = await _get_file_cached(short_code)
     if not file_data:
         raise HTTPException(status_code=404, detail="File not found")
     ext_url = file_data.get("external_url")
@@ -568,19 +588,20 @@ async def remux_file(request: Request, short_code: str, audio: int = 0, aac: int
     if not clients and session_manager.bot_client is None:
         raise HTTPException(status_code=503, detail="Telegram sessions are unavailable")
     try:
-        return await get_remux_response(
-            clients=clients,
-            chat_id=file_data["chat_id"],
-            message_id=file_data["message_id"],
-            file_size=int(file_data.get("file_size") or 0),
-            filename=file_data.get("filename") or "media.mp4",
-            audio_track=audio,
-            force_aac=bool(aac),
-            file_id=file_data.get("file_id"),
-            storage_chat_id=file_data.get("storage_chat_id"),
-            storage_message_id=file_data.get("storage_message_id"),
-            bot_client=session_manager.bot_client,
-        )
+        async with _REMUX_SEM:
+            return await get_remux_response(
+                clients=clients,
+                chat_id=file_data["chat_id"],
+                message_id=file_data["message_id"],
+                file_size=int(file_data.get("file_size") or 0),
+                filename=file_data.get("filename") or "media.mp4",
+                audio_track=audio,
+                force_aac=bool(aac),
+                file_id=file_data.get("file_id"),
+                storage_chat_id=file_data.get("storage_chat_id"),
+                storage_message_id=file_data.get("storage_message_id"),
+                bot_client=session_manager.bot_client,
+            )
     except HTTPException:
         raise
     except Exception as e:

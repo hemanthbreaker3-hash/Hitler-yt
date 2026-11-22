@@ -452,8 +452,13 @@
 const SHORT_CODE = {{ file.short_code|tojson }};
 let STREAM_ORIGIN = ({{ effective_stream_base|tojson }} || window.location.origin).replace(/\/+$/, '');
 const PLAY_ORIGIN = window.location.origin;
-const STREAM_URL = PLAY_ORIGIN + '/stream/' + SHORT_CODE;
-const EXTERNAL_STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
+const PROXY_STREAM_URL = PLAY_ORIGIN + '/stream/' + SHORT_CODE;
+const DIRECT_STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
+const HAS_DIRECT_TUNNEL = /^https:\/\//i.test(STREAM_ORIGIN) && !STREAM_ORIGIN.includes('vercel.app');
+const STREAM_URL = HAS_DIRECT_TUNNEL ? DIRECT_STREAM_URL : PROXY_STREAM_URL;
+const FILE_NAME = {{ file.filename|tojson }};
+const EXT_FILE_PART = '/' + encodeURIComponent(FILE_NAME || 'video.mkv');
+const EXTERNAL_STREAM_URL = DIRECT_STREAM_URL + EXT_FILE_PART;
 const DOWNLOADS_ENABLED = {{ player_settings.downloads_enabled|tojson }};
 const FILESTORE_BOT = {{ (player_settings.filestore_bot_username or '')|tojson }};
 const DL_URL = DOWNLOADS_ENABLED
@@ -711,7 +716,7 @@ function androidIntent(url, pkg, mime) {
   return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(':','')};action=android.intent.action.VIEW;type=${mime||'video/*'};package=${pkg};S.browser_fallback_url=${encodeURIComponent(url)};end`;
 }
 [['MX Player', androidIntent(EXTERNAL_STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME)],
- ['PLAYit', androidIntent(REMUX_URL + '?audio=0&aac=1', 'com.playit.videoplayer', 'video/mp4')],
+ ['PLAYit', androidIntent(EXTERNAL_STREAM_URL, 'com.playit.videoplayer', INTENT_MIME)],
  ['VLC', androidIntent(EXTERNAL_STREAM_URL, 'org.videolan.vlc', INTENT_MIME)]
 ].forEach(([label, href]) => {
   const a = document.createElement('a'); a.href = href; a.textContent = label; lpList.appendChild(a);
@@ -962,7 +967,7 @@ document.addEventListener('click', (e) => {
 
 // Smooth Movi-Player v0.4.1 playback, resume position, and buffering/stall recovery
 let stallRetries = 0, lastProgressAt = Date.now(), recoveryInFlight = false, stallTimer = null, usedBackendFallback = false;
-const BACKEND_STREAM_URL = (typeof STREAM_ORIGIN === 'string' && STREAM_ORIGIN ? STREAM_ORIGIN : PLAY_ORIGIN) + '/stream/' + SHORT_CODE;
+const BACKEND_STREAM_URL = HAS_DIRECT_TUNNEL ? PROXY_STREAM_URL : DIRECT_STREAM_URL;
 const RESUME_KEY = 'ddstream:pos:' + SHORT_CODE;
 let pendingResume = 0;
 try { pendingResume = parseFloat(localStorage.getItem(RESUME_KEY)) || 0; } catch (_) {}

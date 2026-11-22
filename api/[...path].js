@@ -46,7 +46,7 @@ async function getMongoClient() {
     const client = new MongoClient(uri, {
       serverSelectionTimeoutMS: 8000,
       connectTimeoutMS: 8000,
-      maxPoolSize: 8,
+      maxPoolSize: 25, minPoolSize: 2, maxIdleTimeMS: 30000,
     });
     mongoClientPromise = client.connect().catch((error) => {
       mongoClientPromise = null;
@@ -140,10 +140,10 @@ function sendJson(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
-function sendHtml(res, status, html) {
+function sendHtml(res, status, html, cacheControl = 'no-store, no-cache, must-revalidate, max-age=0') {
   res.statusCode = status;
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Cache-Control', cacheControl);
   res.end(html);
 }
 
@@ -2592,8 +2592,13 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
 const SHORT_CODE = ${safeJsonForScript(file.short_code)};
 const STREAM_ORIGIN = (${safeJsonForScript(cfOrigin)} || window.location.origin).replace(/[/]+$/, '');
 const PLAY_ORIGIN = window.location.origin;
-const STREAM_URL = PLAY_ORIGIN + '/stream/' + SHORT_CODE;
-const EXTERNAL_STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
+const PROXY_STREAM_URL = PLAY_ORIGIN + '/stream/' + SHORT_CODE;
+const DIRECT_STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
+const HAS_DIRECT_TUNNEL = /^https:\/\//i.test(STREAM_ORIGIN) && !STREAM_ORIGIN.includes('vercel.app');
+const STREAM_URL = HAS_DIRECT_TUNNEL ? DIRECT_STREAM_URL : PROXY_STREAM_URL;
+const FILE_NAME = ${safeJsonForScript(file.filename || 'video.mkv')};
+const EXT_FILE_PART = '/' + encodeURIComponent(FILE_NAME || 'video.mkv');
+const EXTERNAL_STREAM_URL = DIRECT_STREAM_URL + EXT_FILE_PART;
 const DOWNLOADS_ENABLED = ${safeJsonForScript(downloadsEnabled)};
 const FILESTORE_BOT = ${safeJsonForScript(fsUser)};
 const DL_URL = DOWNLOADS_ENABLED ? (PLAY_ORIGIN + '/dl/' + SHORT_CODE) : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (PLAY_ORIGIN + '/dl/' + SHORT_CODE));
@@ -2742,7 +2747,7 @@ const epDrawer = document.getElementById('episodesDrawer');
   });
 })();
 function androidIntent(url, pkg, mime) { const u = new URL(url); return 'intent://' + u.host + u.pathname + u.search + '#Intent;scheme=' + u.protocol.replace(':','') + ';action=android.intent.action.VIEW;type=' + (mime||'video/*') + ';package=' + pkg + ';S.browser_fallback_url=' + encodeURIComponent(url) + ';end'; }
-[['MX Player', androidIntent(EXTERNAL_STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME)], ['PLAYit', androidIntent(REMUX_URL + '?audio=0&aac=1', 'com.playit.videoplayer', 'video/mp4')], ['VLC', androidIntent(EXTERNAL_STREAM_URL, 'org.videolan.vlc', INTENT_MIME)]].forEach(([l, h]) => { const a = document.createElement('a'); a.href = h; a.textContent = l; lpList.appendChild(a); const b = document.createElement('a'); b.className = 'ext-btn'; b.href = h; b.textContent = l; document.getElementById('sideExtGrid')?.appendChild(b); });
+[['MX Player', androidIntent(EXTERNAL_STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME)], ['PLAYit', androidIntent(EXTERNAL_STREAM_URL, 'com.playit.videoplayer', INTENT_MIME)], ['VLC', androidIntent(EXTERNAL_STREAM_URL, 'org.videolan.vlc', INTENT_MIME)]].forEach(([l, h]) => { const a = document.createElement('a'); a.href = h; a.textContent = l; lpList.appendChild(a); const b = document.createElement('a'); b.className = 'ext-btn'; b.href = h; b.textContent = l; document.getElementById('sideExtGrid')?.appendChild(b); });
 lpBtn?.addEventListener('click', (e) => { e.stopPropagation(); swPop?.classList.remove('open'); epDrawer?.classList.remove('open'); lpPop.classList.toggle('open'); });
 document.getElementById('pcDownloadBtn')?.addEventListener('click', (e) => { e.stopPropagation(); const a = document.createElement('a'); a.href = DL_URL; if (DOWNLOADS_ENABLED) a.setAttribute('download', ''); else a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove(); showToast(DOWNLOADS_ENABLED ? 'Download started' : 'Opening Telegram bot…'); });
 document.getElementById('pcFitBtn')?.addEventListener('click', (e) => { e.stopPropagation(); const cover = mp.classList.toggle('player-fit-cover'); mp.classList.toggle('player-fit-contain', !cover); try { mp.style.objectFit = cover ? 'cover' : 'contain'; mp.shadowRoot?.querySelectorAll('video, canvas').forEach(v => { v.style.objectFit = cover ? 'cover' : 'contain'; }); } catch(_){} showToast(cover ? 'Fill mode' : 'Fit mode'); });
@@ -2923,7 +2928,7 @@ document.addEventListener('click', (e) => { const t = e.target; if (t?.closest &
 
 // Smooth Movi-Player v0.4.1 playback, resume position, and buffering/stall recovery
 let stallRetries = 0, lastProgressAt = Date.now(), recoveryInFlight = false, stallTimer = null, usedBackendFallback = false;
-const BACKEND_STREAM_URL = (typeof STREAM_ORIGIN === 'string' && STREAM_ORIGIN ? STREAM_ORIGIN : PLAY_ORIGIN) + '/stream/' + SHORT_CODE;
+const BACKEND_STREAM_URL = HAS_DIRECT_TUNNEL ? PROXY_STREAM_URL : DIRECT_STREAM_URL;
 const RESUME_KEY = 'ddstream:pos:' + SHORT_CODE;
 let pendingResume = 0;
 try { pendingResume = parseFloat(localStorage.getItem(RESUME_KEY)) || 0; } catch (_) {}
@@ -3914,7 +3919,7 @@ export default async function handler(req, res) {
             { name: 'Movies', slug: 'movies' },
             { name: 'Series', slug: 'series' },
           ];
-      sendHtml(res, 200, renderIndexHtml(initialItems, initialCategories, searchParams.get('q') || ''));
+      sendHtml(res, 200, renderIndexHtml(initialItems, initialCategories, searchParams.get('q') || ''), 'public, s-maxage=30, stale-while-revalidate=180');
       return;
     }
 

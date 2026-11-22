@@ -160,7 +160,14 @@ async def rewrite_all_stored_catalog_buttons(cloudflare_base: str | None) -> int
     return updated_count
 
 
+_SETTINGS_CACHE: dict = {'data': None, 'ts': 0.0}
+
+
 async def get_settings():
+    import time as _t
+    now = _t.monotonic()
+    if _SETTINGS_CACHE['data'] is not None and (now - _SETTINGS_CACHE['ts']) < 15.0:
+        return dict(_SETTINGS_CACHE['data'])
     doc = await site_settings.find_one({'_id': 'runtime'}) or {}
     rows = await settings_col.find(
         {'key': {'$in': ['base_url', 'backend_url', 'ngrok_url', 'cloudflare_url', 'vercel_url', 'website_urls']}},
@@ -174,7 +181,7 @@ async def get_settings():
         website_urls = [str(website_urls)] if website_urls else []
     website_urls = [u for u in website_urls if not is_trycloudflare_url(str(u))]
     fs_user = (doc.get('filestore_bot_username') or '').strip().lstrip('@')
-    return {
+    res = {
         'downloads_enabled': doc.get('downloads_enabled', True),
         'streaming_enabled': doc.get('streaming_enabled', True),
         'built_in_player_enabled': doc.get('built_in_player_enabled', True),
@@ -188,6 +195,9 @@ async def get_settings():
         'vercel_url': urls.get('vercel_url') or os.getenv('WEBSITE_URL', '') or (web_url if not is_trycloudflare_url(web_url) else ''),
         'website_urls': website_urls,
     }
+    _SETTINGS_CACHE['data'] = res
+    _SETTINGS_CACHE['ts'] = now
+    return dict(res)
 
 
 
