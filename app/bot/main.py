@@ -36,6 +36,7 @@ from app.utils.helpers import (
     generate_short_code,
     format_bytes,
     is_trycloudflare_url,
+    is_duckdns_url,
     normalize_public_base_url,
     extract_short_code_from_media_url,
     filestore_deep_link,
@@ -809,6 +810,7 @@ async def setup_bot_commands(bot):
             BotCommand("password", "Set website panel password (admin)"),
             BotCommand("backendurl", "Set backend / ngrok URL (admin)"),
             BotCommand("baseurl", "Set primary / ngrok URL (admin)"),
+            BotCommand("duckdns", "Configure DuckDNS dynamic DNS (admin)"),
             BotCommand("filestore", "Set FileStore bot for deep-link downloads (admin)"),
             BotCommand("fspanel", "FileStore panel: admins, fsub, auto-delete (admin)"),
             BotCommand("categories", "Manage categories (admin)"),
@@ -2241,6 +2243,47 @@ def register_handlers(bot):
             logger.exception("Failed to save backend URL")
             await message.reply("❌ Could not save backend URL. Check the MongoDB connection.")
 
+
+    @bot.on_message(filters.command("duckdns"))
+    async def duckdns_handler(client, message: Message):
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        if not _is_admin_user(user.id):
+            return await message.reply("🚫 **Unauthorized Access**")
+        from app.utils.duckdns import get_duckdns_config, normalize_duckdns_domain, update_duckdns_once
+        args = (message.text or "").split()
+        if len(args) < 2:
+            dom, tok = await get_duckdns_config()
+            masked = (tok[:4] + "..." + tok[-4:]) if len(tok) > 8 else ("set" if tok else "not set")
+            return await message.reply(
+                "🦆 **DuckDNS Dynamic DNS**\n\n"
+                f"> 🌐 **Domain:** `{dom + '.duckdns.org' if dom else 'Not configured'}`\n"
+                f"> 🔑 **Token:** `{masked}`\n\n"
+                "**Usage:**\n"
+                "• `/duckdns <subdomain> <token>` — Set & update DuckDNS\n"
+                "• `/duckdns off` — Disable DuckDNS updater\n"
+                "• Then run `/baseurl https://<subdomain>.duckdns.org` if streaming via DuckDNS"
+            )
+        if args[1].lower() in ("off", "disable", "clear"):
+            await settings_col.delete_many({"key": {"$in": ["duckdns_domain", "duckdns_token"]}})
+            return await message.reply("🦆 DuckDNS updater disabled.")
+        if len(args) < 3:
+            return await message.reply("⚠️ Usage: `/duckdns <subdomain> <token>`")
+        dom = normalize_duckdns_domain(args[1])
+        tok = args[2].strip()
+        ok, res = await update_duckdns_once(dom, tok)
+        if not ok:
+            return await message.reply(f"❌ **DuckDNS update failed:** `{res}`")
+        now = datetime.datetime.utcnow()
+        await settings_col.update_one({"key": "duckdns_domain"}, {"$set": {"value": dom, "updated_by": user.id, "updated_at": now}}, upsert=True)
+        await settings_col.update_one({"key": "duckdns_token"}, {"$set": {"value": tok, "updated_by": user.id, "updated_at": now}}, upsert=True)
+        await message.reply(
+            "✅ **DuckDNS Configured & Updated!**\n\n"
+            f"> 🌐 **Host:** `{dom}.duckdns.org` (`{res}`)\n"
+            f"> 💡 Run `/baseurl https://{dom}.duckdns.org` to route streams through DuckDNS."
+        )
+
     @bot.on_message(filters.command("baseurl"))
     async def baseurl_handler(client, message: Message):
         user = message.from_user
@@ -2279,7 +2322,7 @@ def register_handlers(bot):
             settings.BASE_URL = new_url
             os.environ["BASE_URL"] = new_url
             rewritten = 0
-            if is_trycloudflare_url(new_url) or (not is_vercel_url(new_url) and (not settings.BACKEND_URL or is_trycloudflare_url(settings.BACKEND_URL))):
+            if is_trycloudflare_url(new_url) or is_duckdns_url(new_url) or (not is_vercel_url(new_url) and (not settings.BACKEND_URL or is_trycloudflare_url(settings.BACKEND_URL))):
                 settings.BACKEND_URL = new_url
                 await settings_col.update_one(
                     {"key": "backend_url"},

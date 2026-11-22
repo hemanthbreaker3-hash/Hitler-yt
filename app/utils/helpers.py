@@ -133,8 +133,21 @@ def is_trycloudflare_url(value: str | None) -> bool:
             host == "ngrok-free.app" or host.endswith(".ngrok-free.app")
             or host == "ngrok-free.dev" or host.endswith(".ngrok-free.dev")
             or host == "ngrok.io" or host.endswith(".ngrok.io")
-            or host == "trycloudflare.com" or host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok-free.dev", ".ngrok.io"))
+            or host == "trycloudflare.com" or host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok-free.dev", ".ngrok.io", ".duckdns.org"))
         )
+    except Exception:
+        return False
+
+
+def is_duckdns_url(value: str | None) -> bool:
+    if not value or not isinstance(value, str):
+        return False
+    try:
+        raw = value.strip()
+        if not raw.startswith(("http://", "https://")):
+            raw = "https://" + raw
+        host = (urlparse(raw).hostname or "").lower().rstrip(".")
+        return host == "duckdns.org" or host.endswith(".duckdns.org")
     except Exception:
         return False
 
@@ -179,7 +192,7 @@ def rewrite_media_or_button_url(target_url: str, cloudflare_base: str | None, fo
     should_replace_domain = (
         force_replace_domain
         or parsed.path.startswith(media_prefixes)
-        or host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok-free.dev", ".ngrok.io"))
+        or host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok-free.dev", ".ngrok.io", ".duckdns.org"))
         or host.endswith((".vercel.app", ".pages.dev"))
     )
     if should_replace_domain:
