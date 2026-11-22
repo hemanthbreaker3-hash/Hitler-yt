@@ -8,3 +8,6 @@ __pycache__
 .env.*
 !/.env.example
 app/static/*.mp4
+functions
+wrangler.toml
+cloudflare

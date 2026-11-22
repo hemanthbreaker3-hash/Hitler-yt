@@ -1,11 +1,19 @@
-# Cloudflare Pages deployment (same website as Vercel)
+# Cloudflare Pages Deployment (Full Website + Edge Caching)
 
-This Pages project is a thin reverse-proxy to the same always-on FastAPI backend used by Vercel. It serves the exact same templates, title pages, admin panel, catalog APIs, player and download routes; MongoDB remains the shared source of truth. It does not run the Telegram bot inside Pages.
+This project supports **Cloudflare Pages** directly from the repository root (recommended) or from `cloudflare/pages`.
 
-1. Create a Cloudflare Pages project and connect this repository.
-2. Set the Pages project root/build output to `cloudflare/pages` (no build command; output directory `public`).
-3. Add the Pages environment variable `BACKEND_URL` with the public HTTPS ngrok tunnel/VPS backend origin, e.g. `https://your-tunnel.example.com`. Do not point it at the Pages domain itself.
-4. Deploy and test `/health`, `/`, `/panel`, `/api/site-settings`, `/watch/<code>` and `/dl/<code>`.
-5. Keep the VPS backend and MongoDB running. Download/watch traffic is streamed from the VPS backend; Pages is not a media-storage service.
+## Option 1: Deploy from Repository Root (Recommended)
+1. Push this project to GitHub/GitLab and connect it in **Cloudflare Dashboard → Workers & Pages → Create → Pages → Connect to Git**.
+2. Configure build settings:
+   - **Framework preset**: `None`
+   - **Build command**: *(leave empty)*
+   - **Build output directory**: `public`
+   - **Root directory**: `/` *(default)*
+3. Add Environment Variable in **Settings → Environment variables** (Production & Preview):
+   - `BACKEND_URL` = your active HTTPS backend/tunnel URL (e.g. `https://your-tunnel.trycloudflare.com` or your VPS/Vercel origin). Do **not** point it at the `*.pages.dev` domain itself.
+4. Deploy! Cloudflare Pages automatically serves `/static/*` from its global CDN and routes `/`, `/title/*`, `/watch/*`, `/panel`, `/stream/*`, `/dl/*`, `/remux/*`, and `/api/*` through `functions/[[path]].js` with Edge caching.
 
-The `BACKEND_URL` must be stable and reachable from Cloudflare. For production, use a named ngrok tunnel hostname rather than an ephemeral `ngrok-free.app` quick tunnel.
+## Option 2: CLI Deploy with Wrangler
+```bash
+npx wrangler pages deploy public --project-name=hitler-yt-pages
+```

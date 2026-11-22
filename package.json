@@ -8,5 +8,9 @@
   },
   "dependencies": {
     "mongodb": "^6.13.0"
+  },
+  "scripts": {
+    "pages:deploy": "wrangler pages deploy public --project-name=hitler-yt-pages",
+    "pages:dev": "wrangler pages dev public"
   }
 }
