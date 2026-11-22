@@ -147,7 +147,7 @@ def is_vercel_url(value: str | None) -> bool:
         if not raw.startswith(("http://", "https://")):
             raw = "https://" + raw
         host = (urlparse(raw).hostname or "").lower().rstrip(".")
-        return host == "vercel.app" or host.endswith(".vercel.app")
+        return host in ("vercel.app", "pages.dev") or host.endswith((".vercel.app", ".pages.dev"))
     except Exception:
         return False
 
@@ -180,7 +180,7 @@ def rewrite_media_or_button_url(target_url: str, cloudflare_base: str | None, fo
         force_replace_domain
         or parsed.path.startswith(media_prefixes)
         or host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok-free.dev", ".ngrok.io"))
-        or host.endswith(".vercel.app")
+        or host.endswith((".vercel.app", ".pages.dev"))
     )
     if should_replace_domain:
         return urlunparse((

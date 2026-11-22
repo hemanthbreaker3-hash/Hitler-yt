@@ -2279,7 +2279,7 @@ def register_handlers(bot):
             settings.BASE_URL = new_url
             os.environ["BASE_URL"] = new_url
             rewritten = 0
-            if is_trycloudflare_url(new_url) or not settings.BACKEND_URL or is_trycloudflare_url(settings.BACKEND_URL):
+            if is_trycloudflare_url(new_url) or (not is_vercel_url(new_url) and (not settings.BACKEND_URL or is_trycloudflare_url(settings.BACKEND_URL))):
                 settings.BACKEND_URL = new_url
                 await settings_col.update_one(
                     {"key": "backend_url"},
