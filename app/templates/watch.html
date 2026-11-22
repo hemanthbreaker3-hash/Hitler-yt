@@ -269,7 +269,7 @@
 <div class="p4u-stage" id="playerWrapper">
   {% if _bg %}<div class="p4u-backdrop" style="background-image:url('{{ _bg }}')"></div>{% endif %}
 
-  <movi-player id="moviPlayer" playsinline autoplay muted preload="metadata" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
+  <movi-player id="moviPlayer" playsinline autoplay muted preload="auto" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
 
   <div class="p4u-loading" id="playerLoading"><div class="p4u-spinner"></div></div>
 
@@ -335,7 +335,7 @@
         {% if _wg and _wg|length > 1 %}
         <button type="button" class="p4u-up-btn" id="episodesDrawerBtn">^ EPISODES</button>
         {% endif %}
-        <button type="button" class="p4u-up-btn" id="pcSwitchBtn">^ {{ _cur_btn_name }}</button>
+        <button type="button" class="p4u-up-btn" id="pcSwitchBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg> Switch</button>
         <button type="button" class="p4u-icon-btn" id="pcFullscreenBtn" aria-label="Fullscreen">
           <svg id="fsIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
         </button>
@@ -729,6 +729,115 @@ document.addEventListener('click', (e) => {
   }
   search?.addEventListener('input', render);
   render();
+})();
+
+
+// Smooth Movi-Player v0.4.1 playback, resume position, and buffering/stall recovery
+let stallRetries = 0, lastProgressAt = Date.now(), recoveryInFlight = false, stallTimer = null, usedBackendFallback = false;
+const BACKEND_STREAM_URL = (typeof STREAM_ORIGIN === 'string' && STREAM_ORIGIN ? STREAM_ORIGIN : PLAY_ORIGIN) + '/stream/' + SHORT_CODE;
+const RESUME_KEY = 'ddstream:pos:' + SHORT_CODE;
+let pendingResume = 0;
+try { pendingResume = parseFloat(localStorage.getItem(RESUME_KEY)) || 0; } catch (_) {}
+
+function savePosition() {
+  try {
+    const t = Number(mp && mp.currentTime);
+    if (t && isFinite(t) && t > 2) localStorage.setItem(RESUME_KEY, String(t));
+  } catch (_) {}
+}
+setInterval(savePosition, 3000);
+window.addEventListener('beforeunload', savePosition);
+
+function clearStallWatch() { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } }
+function scheduleStallRecovery() {
+  clearStallWatch();
+  if (!mp || mp.paused || mp.ended || recoveryInFlight) return;
+  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  const eff = String((conn && conn.effectiveType) || '').toLowerCase();
+  const waitMs = (conn && conn.saveData) || eff === '2g' || eff === 'slow-2g' ? 45000 : 35000;
+  stallTimer = setTimeout(() => {
+    if (!mp || mp.paused || mp.ended) return;
+    if (Date.now() - lastProgressAt < waitMs) { scheduleStallRecovery(); return; }
+    if (stallRetries >= 2) {
+      if (!usedBackendFallback && BACKEND_STREAM_URL !== STREAM_URL) {
+        usedBackendFallback = true;
+        stallRetries = 0;
+        showToast('Switching to direct stream for smoother playback…');
+        recoverStream(BACKEND_STREAM_URL);
+      } else {
+        hideLoading();
+        showToast('Buffering slow — tap Retry or use External Player');
+      }
+      return;
+    }
+    stallRetries += 1;
+    recoverStream(usedBackendFallback ? BACKEND_STREAM_URL : STREAM_URL);
+  }, waitMs);
+}
+
+function recoverStream(url) {
+  if (!mp || recoveryInFlight) return;
+  recoveryInFlight = true;
+  const t = Number(mp.currentTime) || 0;
+  showLoading();
+  try {
+    mp.src = url;
+    if (typeof mp.load === 'function') mp.load();
+    const restore = () => {
+      recoveryInFlight = false;
+      if (t > 1) { try { mp.currentTime = t; } catch (_) {} }
+      mp.play()?.catch(() => {});
+    };
+    mp.addEventListener('loadedmetadata', restore, { once: true });
+    setTimeout(() => { if (recoveryInFlight) { recoveryInFlight = false; hideLoading(); } }, 12000);
+  } catch (_) {
+    recoveryInFlight = false;
+    hideLoading();
+  }
+}
+
+mp.addEventListener('timeupdate', () => { lastProgressAt = Date.now(); if (!mp.paused && !recoveryInFlight) scheduleStallRecovery(); });
+mp.addEventListener('playing', () => { stallRetries = 0; lastProgressAt = Date.now(); hideLoading(); scheduleStallRecovery(); });
+mp.addEventListener('waiting', () => { showLoading(); if (!recoveryInFlight) scheduleStallRecovery(); });
+mp.addEventListener('stalled', () => { showLoading(); if (!recoveryInFlight) scheduleStallRecovery(); });
+mp.addEventListener('pause', clearStallWatch);
+mp.addEventListener('ended', clearStallWatch);
+mp.addEventListener('error', () => {
+  clearStallWatch();
+  if (!usedBackendFallback && BACKEND_STREAM_URL !== STREAM_URL) {
+    usedBackendFallback = true;
+    showToast('Trying direct backup stream…');
+    recoverStream(BACKEND_STREAM_URL);
+  } else {
+    hideLoading();
+    showToast('Stream error — tap Retry or use External Player');
+  }
+});
+mp.addEventListener('loadedmetadata', () => {
+  if (pendingResume > 5) {
+    try { mp.currentTime = pendingResume; } catch (_) {}
+    pendingResume = 0;
+  }
+}, { once: true });
+
+// Register playback view once
+(function wireViews(){
+  let reg = false;
+  const key = 'amz-play-view-' + SHORT_CODE;
+  let tok = '';
+  try {
+    tok = localStorage.getItem(key) || ((crypto.randomUUID ? crypto.randomUUID() : 'v-' + Date.now()) + '-visitor');
+    localStorage.setItem(key, tok);
+  } catch (_) { tok = 'v-' + Date.now() + '-visitor'; }
+  const send = () => {
+    if (reg) return; reg = true;
+    fetch('/api/views/' + encodeURIComponent(SHORT_CODE), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_token: tok })
+    }).catch(() => {});
+  };
+  mp.addEventListener('play', send, { once: true });
+  mp.addEventListener('playing', send, { once: true });
 })();
 
 // Boot Movi-Player

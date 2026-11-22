@@ -2488,7 +2488,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   const content = `
 <div class="p4u-stage" id="playerWrapper">
   ${posterUrl ? `<div class="p4u-backdrop" style="background-image:url('${escapeHtml(posterUrl)}')"></div>` : ''}
-  <movi-player id="moviPlayer" playsinline autoplay muted preload="metadata" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
+  <movi-player id="moviPlayer" playsinline autoplay muted preload="auto" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
   <div class="p4u-loading" id="playerLoading"><div class="p4u-spinner"></div></div>
   <button type="button" class="p4u-center-play" id="centerPlayBtn" aria-label="Play video"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
   <div class="p4u-top">
@@ -2527,7 +2527,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
       </div>
       <div class="p4u-bar-right">
         ${watchGroups.length > 1 ? '<button type="button" class="p4u-up-btn" id="episodesDrawerBtn">^ EPISODES</button>' : ''}
-        <button type="button" class="p4u-up-btn" id="pcSwitchBtn">^ ${escapeHtml(curBtnName)}</button>
+        <button type="button" class="p4u-up-btn" id="pcSwitchBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg> Switch</button>
         <button type="button" class="p4u-icon-btn" id="pcFullscreenBtn"><svg id="fsIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
       </div>
     </div>
@@ -2539,7 +2539,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
 <div class="toast" id="toast"><span id="toast-message">Done</span></div>
 <script>
 const SHORT_CODE = ${safeJsonForScript(file.short_code)};
-const STREAM_ORIGIN = (${safeJsonForScript(cfOrigin)} || window.location.origin).replace(/\/+$/, '');
+const STREAM_ORIGIN = (${safeJsonForScript(cfOrigin)} || window.location.origin).replace(/[/]+$/, '');
 const PLAY_ORIGIN = window.location.origin;
 const STREAM_URL = PLAY_ORIGIN + '/stream/' + SHORT_CODE;
 const EXTERNAL_STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
@@ -2560,7 +2560,7 @@ function showToast(msg) { const t = document.getElementById('toast'); document.g
 function showLoading() { loadingEl?.classList.add('active'); }
 function hideLoading() { loadingEl?.classList.remove('active'); }
 function fmtTime(sec) { sec = Math.max(0, Math.floor(Number(sec) || 0)); const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60; return h > 0 ? h+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0') : m+':'+String(s).padStart(2,'0'); }
-function extractWatchCode(url) { if (!url) return null; const s = String(url); const m = s.match(/(?:^|\/)watch\/([A-Za-z0-9_-]{3,64})(?:\/|$|\?|#)/i); if (m) return m[1]; const q = s.match(/[?&]path=([A-Za-z0-9_-]{3,64})(?:&|$|#)/i); return q ? q[1] : null; }
+function extractWatchCode(url) { if (!url) return null; try { const u = new URL(String(url), window.location.origin); const parts = u.pathname.split('/').filter(Boolean); const wi = parts.findIndex(x => x.toLowerCase() === 'watch'); if (wi >= 0 && parts[wi + 1]) return parts[wi + 1]; return u.searchParams.get('path') || null; } catch (_) { return null; } }
 function preferredButtonForGroup(gi) { const g = WATCH_GROUPS[gi]; const btns = (g && g.buttons) || []; return !btns.length ? 0 : (BUTTON_INDEX < btns.length ? BUTTON_INDEX : 0); }
 function watchHrefFor(gi, bi) { const g = WATCH_GROUPS[gi]; if (!g || !g.buttons || !g.buttons[bi]) return null; const code = extractWatchCode(g.buttons[bi].url); if (!code) return g.buttons[bi].url; const p = new URLSearchParams(); if (TITLE_SLUG) p.set('title', TITLE_SLUG); p.set('g', String(gi)); p.set('b', String(bi)); return '/watch/' + code + '?' + p.toString(); }
 function goToGroupButton(gi, bi) { const h = watchHrefFor(gi, bi); if (h) window.location.href = h; }
@@ -2629,6 +2629,115 @@ document.addEventListener('click', (e) => { const t = e.target; if (t?.closest &
   function render() { const q = (search?.value||'').trim().toLowerCase(); list.innerHTML = ''; rows.filter(r => (selected === 'all' || !seasons.length || (r.p && String(r.p.s) === selected)) && (!q || String(r.g.name||'').toLowerCase().includes(q))).forEach(r => { const a = document.createElement('a'); a.className = 'p4u-ep-item' + (r.idx === GROUP_INDEX ? ' active' : ''); a.href = watchHrefFor(r.idx, preferredButtonForGroup(r.idx)) || '#'; a.innerHTML = '<span class="p4u-ep-tag">' + (r.p ? 'S'+String(r.p.s).padStart(2,'0')+'·E'+String(r.p.e).padStart(2,'0') : 'EP') + '</span><span class="p4u-ep-name">' + (r.g.name || ('Group '+(r.idx+1))).replace(/</g,'&lt;') + '</span>'; list.appendChild(a); }); }
   search?.addEventListener('input', render); render();
 })();
+
+// Smooth Movi-Player v0.4.1 playback, resume position, and buffering/stall recovery
+let stallRetries = 0, lastProgressAt = Date.now(), recoveryInFlight = false, stallTimer = null, usedBackendFallback = false;
+const BACKEND_STREAM_URL = (typeof STREAM_ORIGIN === 'string' && STREAM_ORIGIN ? STREAM_ORIGIN : PLAY_ORIGIN) + '/stream/' + SHORT_CODE;
+const RESUME_KEY = 'ddstream:pos:' + SHORT_CODE;
+let pendingResume = 0;
+try { pendingResume = parseFloat(localStorage.getItem(RESUME_KEY)) || 0; } catch (_) {}
+
+function savePosition() {
+  try {
+    const t = Number(mp && mp.currentTime);
+    if (t && isFinite(t) && t > 2) localStorage.setItem(RESUME_KEY, String(t));
+  } catch (_) {}
+}
+setInterval(savePosition, 3000);
+window.addEventListener('beforeunload', savePosition);
+
+function clearStallWatch() { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } }
+function scheduleStallRecovery() {
+  clearStallWatch();
+  if (!mp || mp.paused || mp.ended || recoveryInFlight) return;
+  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  const eff = String((conn && conn.effectiveType) || '').toLowerCase();
+  const waitMs = (conn && conn.saveData) || eff === '2g' || eff === 'slow-2g' ? 45000 : 35000;
+  stallTimer = setTimeout(() => {
+    if (!mp || mp.paused || mp.ended) return;
+    if (Date.now() - lastProgressAt < waitMs) { scheduleStallRecovery(); return; }
+    if (stallRetries >= 2) {
+      if (!usedBackendFallback && BACKEND_STREAM_URL !== STREAM_URL) {
+        usedBackendFallback = true;
+        stallRetries = 0;
+        showToast('Switching to direct stream for smoother playback…');
+        recoverStream(BACKEND_STREAM_URL);
+      } else {
+        hideLoading();
+        showToast('Buffering slow — tap Retry or use External Player');
+      }
+      return;
+    }
+    stallRetries += 1;
+    recoverStream(usedBackendFallback ? BACKEND_STREAM_URL : STREAM_URL);
+  }, waitMs);
+}
+
+function recoverStream(url) {
+  if (!mp || recoveryInFlight) return;
+  recoveryInFlight = true;
+  const t = Number(mp.currentTime) || 0;
+  showLoading();
+  try {
+    mp.src = url;
+    if (typeof mp.load === 'function') mp.load();
+    const restore = () => {
+      recoveryInFlight = false;
+      if (t > 1) { try { mp.currentTime = t; } catch (_) {} }
+      mp.play()?.catch(() => {});
+    };
+    mp.addEventListener('loadedmetadata', restore, { once: true });
+    setTimeout(() => { if (recoveryInFlight) { recoveryInFlight = false; hideLoading(); } }, 12000);
+  } catch (_) {
+    recoveryInFlight = false;
+    hideLoading();
+  }
+}
+
+mp.addEventListener('timeupdate', () => { lastProgressAt = Date.now(); if (!mp.paused && !recoveryInFlight) scheduleStallRecovery(); });
+mp.addEventListener('playing', () => { stallRetries = 0; lastProgressAt = Date.now(); hideLoading(); scheduleStallRecovery(); });
+mp.addEventListener('waiting', () => { showLoading(); if (!recoveryInFlight) scheduleStallRecovery(); });
+mp.addEventListener('stalled', () => { showLoading(); if (!recoveryInFlight) scheduleStallRecovery(); });
+mp.addEventListener('pause', clearStallWatch);
+mp.addEventListener('ended', clearStallWatch);
+mp.addEventListener('error', () => {
+  clearStallWatch();
+  if (!usedBackendFallback && BACKEND_STREAM_URL !== STREAM_URL) {
+    usedBackendFallback = true;
+    showToast('Trying direct backup stream…');
+    recoverStream(BACKEND_STREAM_URL);
+  } else {
+    hideLoading();
+    showToast('Stream error — tap Retry or use External Player');
+  }
+});
+mp.addEventListener('loadedmetadata', () => {
+  if (pendingResume > 5) {
+    try { mp.currentTime = pendingResume; } catch (_) {}
+    pendingResume = 0;
+  }
+}, { once: true });
+
+// Register playback view once
+(function wireViews(){
+  let reg = false;
+  const key = 'amz-play-view-' + SHORT_CODE;
+  let tok = '';
+  try {
+    tok = localStorage.getItem(key) || ((crypto.randomUUID ? crypto.randomUUID() : 'v-' + Date.now()) + '-visitor');
+    localStorage.setItem(key, tok);
+  } catch (_) { tok = 'v-' + Date.now() + '-visitor'; }
+  const send = () => {
+    if (reg) return; reg = true;
+    fetch('/api/views/' + encodeURIComponent(SHORT_CODE), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_token: tok })
+    }).catch(() => {});
+  };
+  mp.addEventListener('play', send, { once: true });
+  mp.addEventListener('playing', send, { once: true });
+})();
+
 function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.async = true; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
 (async () => {
   showLoading();
