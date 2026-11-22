@@ -2435,7 +2435,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .p4u-stage movi-player{position:relative;z-index:1;width:100%;height:100%;display:block;background:transparent;object-fit:contain}
     movi-player.player-fit-cover,movi-player.player-fit-cover::part(video){object-fit:cover!important}
     movi-player.player-fit-contain,movi-player.player-fit-contain::part(video){object-fit:contain!important}
-    movi-player::part(chrome),movi-player::part(controls),movi-player::part(bottom-controls),movi-player::part(control-bar),movi-player::part(bottom-bar),movi-player::part(progress-container),movi-player::part(overlay-controls),movi-player::part(controls-overlay){opacity:0!important;pointer-events:none!important}
+       /* Show Movi-Player's built-in controls (audio/subtitles/seek/speed) when visible; hide on tap */   #playerWrapper:not(.controls-hidden) movi-player::part(chrome),   #playerWrapper:not(.controls-hidden) movi-player::part(controls),   #playerWrapper:not(.controls-hidden) movi-player::part(bottom-controls),   #playerWrapper:not(.controls-hidden) movi-player::part(control-bar),   #playerWrapper:not(.controls-hidden) movi-player::part(bottom-bar),   #playerWrapper:not(.controls-hidden) movi-player::part(progress-container) {     opacity: 1 !important;     visibility: visible !important;     pointer-events: auto !important;   }   .p4u-below-bar {     display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;     margin-top: 10px;   }   .p4u-below-bar .p4u-ep-pill, .p4u-below-bar .p4u-up-btn {     padding: 8px 14px; font-size: 12px; border-radius: 10px;   }   @media (max-width: 600px) {     .p4u-top { padding: 8px 10px 12px !important; }     .p4u-circle-btn, .p4u-back-btn { width: 32px !important; height: 32px !important; }     .p4u-below-bar { gap: 6px; }     .p4u-below-bar .p4u-ep-pill, .p4u-below-bar .p4u-up-btn { padding: 7px 10px; font-size: 11px; }   } 
     .p4u-center-play{position:absolute;z-index:15;left:50%;top:50%;transform:translate(-50%,-50%);width:72px;height:72px;border:0;background:transparent;color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;filter:drop-shadow(0 6px 24px rgba(0,0,0,.75));transition:transform .18s,opacity .2s}
     .p4u-center-play svg{width:52px;height:52px;fill:#fff}
     .p4u-stage.is-playing .p4u-center-play{opacity:0;pointer-events:none}
@@ -2512,9 +2512,9 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   <div>
     <div class="p4u-stage" id="playerWrapper">
   ${posterUrl ? `<div class="p4u-backdrop" style="background-image:url('${escapeHtml(posterUrl)}')"></div>` : ''}
-  <movi-player id="moviPlayer" playsinline preload="auto" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
+  <movi-player id="moviPlayer" playsinline controls preload="auto" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
   <div class="p4u-loading" id="playerLoading"><div class="p4u-spinner"></div></div>
-  <button type="button" class="p4u-center-play" id="centerPlayBtn" aria-label="Play video"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+  
   <div class="p4u-top">
     <div class="p4u-title-wrap">
       <a class="p4u-back-btn" href="${titleSlug ? '/title/' + encodeURIComponent(titleSlug) : '/'}" title="Back" aria-label="Back">
@@ -2533,32 +2533,17 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
       <button type="button" class="p4u-circle-btn" id="pcShareBtn" title="Share"><svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>
     </div>
   </div>
-  <div class="p4u-bottom">
-    <div class="p4u-ep-nav">
-      <button type="button" class="p4u-ep-pill" id="prevGroupBtn" disabled>← Previous</button>
-      <button type="button" class="p4u-ep-pill" id="nextGroupBtn" disabled>Next Episode →</button>
-    </div>
-    <div class="p4u-progress-row">
-      <span class="p4u-time" id="curTimeLabel">0:00</span>
-      <div class="p4u-scrub" id="scrubTrack"><div class="p4u-scrub-fill" id="scrubFill"></div><div class="p4u-scrub-thumb" id="scrubThumb"></div></div>
-      <span class="p4u-time right" id="durTimeLabel">0:00</span>
-    </div>
-    <div class="p4u-bar">
-      <div class="p4u-bar-left">
-        <button type="button" class="p4u-icon-btn" id="playPauseBtn"><svg id="playPauseIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
-        <button type="button" class="p4u-icon-btn" id="muteBtn"><svg viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4V5z"/></svg></button>
-        <input type="range" class="p4u-vol-range" id="volRange" min="0" max="1" step="0.05" value="1">
-      </div>
-      <div class="p4u-bar-right">
-        ${watchGroups.length > 1 ? '<button type="button" class="p4u-up-btn" id="episodesDrawerBtn">^ EPISODES</button>' : ''}
-        <button type="button" class="p4u-up-btn" id="pcSwitchBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg> Switch</button>
-        <button type="button" class="p4u-icon-btn" id="pcFullscreenBtn"><svg id="fsIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
-      </div>
-    </div>
-  </div>
   <div class="p4u-pop quality-pop" id="switchPop"><div class="pop-title">Switch Quality / Source</div><div id="switchPopList"></div></div>
   <div class="p4u-pop external-pop" id="laptopPop"><div class="pop-title">Open in External Player</div><div id="laptopPopList"></div></div>
   ${watchGroups.length > 1 ? `<div class="p4u-drawer" id="episodesDrawer"><div class="p4u-drawer-head"><span>Episodes / Seasons</span><button type="button" class="p4u-icon-btn" id="closeDrawerBtn">✕</button></div><div class="p4u-season-bar" id="sideSeasonBar"></div><div class="p4u-drawer-tools"><select id="seasonFilter"><option value="all">All Seasons</option></select><input id="episodeSearch" type="search" placeholder="Search EP…"></div><div class="p4u-ep-list" id="sideEpList"></div></div>` : ''}
+    </div>
+    <div class="p4u-below-bar">
+      <button type="button" class="p4u-ep-pill" id="prevGroupBtn" disabled>← Previous</button>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${watchGroups.length > 1 ? '<button type="button" class="p4u-up-btn" id="episodesDrawerBtn">^ EPISODES</button>' : ''}
+        <button type="button" class="p4u-up-btn" id="pcSwitchBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg> Switch</button>
+      </div>
+      <button type="button" class="p4u-ep-pill" id="nextGroupBtn" disabled>Next Episode →</button>
     </div>
     <div class="watch-info-card">
       <h1>${escapeHtml(file.filename || 'Media')}</h1>
@@ -2631,6 +2616,7 @@ function goToGroupButton(gi, bi) { const h = watchHrefFor(gi, bi); if (h) window
   function setVisible(on) {
     visible = !!on;
     wrapper.classList.toggle('controls-hidden', !visible);
+    try { if (visible) mp.setAttribute('controls', ''); else mp.removeAttribute('controls'); } catch(_){}
     syncMoviShadow(visible);
     if (!visible) {
       document.getElementById('switchPop')?.classList.remove('open');
@@ -2648,6 +2634,8 @@ function goToGroupButton(gi, bi) { const h = watchHrefFor(gi, bi); if (h) window
     const path = (typeof e.composedPath === 'function') ? e.composedPath() : [e.target];
     const hitControl = path.some(node => node && node.nodeType === 1 && node.matches && node.matches('button, a, input, select, .p4u-scrub, .p4u-pop, .p4u-drawer'));
     if (hitControl) return;
+    const rect = wrapper.getBoundingClientRect();
+    if (e.clientY && rect.height > 140 && e.clientY > rect.bottom - 64) return;
     e.stopPropagation();
     setVisible(false);
   }, true);
