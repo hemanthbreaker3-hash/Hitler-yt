@@ -2492,6 +2492,17 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .p4u-ep-item.active{border-color:#3b82f6;background:rgba(59,130,246,.2);color:#fff}
     .p4u-ep-tag{background:rgba(139,92,246,.25);color:#c4b5fd;padding:2px 7px;border-radius:6px;font-size:10px;font-weight:800;flex:0 0 auto}
     .p4u-ep-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* Allow taps on empty top/bottom gradient areas to toggle controls; only buttons capture clicks */
+  .p4u-top, .p4u-bottom { pointer-events: none !important; }
+  .p4u-top button, .p4u-top a, .p4u-bottom button, .p4u-bottom input, .p4u-bottom .p4u-scrub { pointer-events: auto !important; }
+  @media (max-width: 600px) {
+    .p4u-top { padding: 8px 10px 14px !important; }
+    .p4u-bottom { padding: 18px 10px 8px !important; gap: 6px !important; }
+    .p4u-circle-btn, .p4u-back-btn { width: 32px !important; height: 32px !important; }
+    .p4u-ep-pill { padding: 4px 10px !important; font-size: 11px !important; }
+  }
+
     .toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:rgba(12,16,26,.95);border:1px solid rgba(59,130,246,.45);color:#fff;padding:9px 16px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:100}
     .toast.active{opacity:1}
   </style>`;
@@ -2501,7 +2512,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   <div>
     <div class="p4u-stage" id="playerWrapper">
   ${posterUrl ? `<div class="p4u-backdrop" style="background-image:url('${escapeHtml(posterUrl)}')"></div>` : ''}
-  <movi-player id="moviPlayer" playsinline autoplay muted preload="auto" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
+  <movi-player id="moviPlayer" playsinline preload="auto" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
   <div class="p4u-loading" id="playerLoading"><div class="p4u-spinner"></div></div>
   <button type="button" class="p4u-center-play" id="centerPlayBtn" aria-label="Play video"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
   <div class="p4u-top">
@@ -2600,11 +2611,43 @@ function watchHrefFor(gi, bi) { const g = WATCH_GROUPS[gi]; if (!g || !g.buttons
 function goToGroupButton(gi, bi) { const h = watchHrefFor(gi, bi); if (h) window.location.href = h; }
 (function setupTapToggle(){
   let visible = true;
-  function setVisible(on) { visible = !!on; wrapper.classList.toggle('controls-hidden', !visible); if (!visible) { document.getElementById('switchPop')?.classList.remove('open'); document.getElementById('laptopPop')?.classList.remove('open'); document.getElementById('episodesDrawer')?.classList.remove('open'); } }
+  function syncMoviShadow(show) {
+    try {
+      const sr = mp && mp.shadowRoot;
+      if (!sr) return;
+      let st = sr.getElementById('amz-hide-controls-style');
+      if (!show) {
+        if (!st) {
+          st = document.createElement('style');
+          st.id = 'amz-hide-controls-style';
+          st.textContent = '[part*="control"],[part*="chrome"],[part*="progress"],[part*="bar"],[part*="overlay"],[class*="control"],[class*="chrome"],[class*="progress"],[class*="seek"],[class*="overlay"],button{opacity:0!important;visibility:hidden!important;pointer-events:none!important;display:none!important}';
+          sr.appendChild(st);
+        }
+      } else if (st) {
+        st.remove();
+      }
+    } catch (_) {}
+  }
+  function setVisible(on) {
+    visible = !!on;
+    wrapper.classList.toggle('controls-hidden', !visible);
+    syncMoviShadow(visible);
+    if (!visible) {
+      document.getElementById('switchPop')?.classList.remove('open');
+      document.getElementById('laptopPop')?.classList.remove('open');
+      document.getElementById('episodesDrawer')?.classList.remove('open');
+    }
+  }
+  wrapper.addEventListener('pointerdown', () => { if (mp && mp.muted) forceUnmuteMovi(); }, { once: true, capture: true });
   wrapper.addEventListener('click', (e) => {
-    if (!visible) { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); setVisible(true); return; }
-    const t = e.target; if (!t || !t.closest) return;
-    if (t.closest('.p4u-top') || t.closest('.p4u-bottom') || t.closest('.p4u-center-play') || t.closest('.p4u-pop') || t.closest('.p4u-drawer')) return;
+    if (!visible) {
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+      setVisible(true);
+      return;
+    }
+    const path = (typeof e.composedPath === 'function') ? e.composedPath() : [e.target];
+    const hitControl = path.some(node => node && node.nodeType === 1 && node.matches && node.matches('button, a, input, select, .p4u-scrub, .p4u-pop, .p4u-drawer'));
+    if (hitControl) return;
     e.stopPropagation();
     setVisible(false);
   }, true);
@@ -2613,7 +2656,26 @@ const centerPlayBtn = document.getElementById('centerPlayBtn'), playPauseBtn = d
 const muteBtn = document.getElementById('muteBtn'), volRange = document.getElementById('volRange');
 const scrubTrack = document.getElementById('scrubTrack'), scrubFill = document.getElementById('scrubFill'), scrubThumb = document.getElementById('scrubThumb');
 const curTimeLabel = document.getElementById('curTimeLabel'), durTimeLabel = document.getElementById('durTimeLabel');
-function togglePlay() { if (!mp) return; if (mp.paused) { mp.muted = false; mp.removeAttribute('muted'); mp.play()?.catch(()=>{}); } else mp.pause(); }
+
+// Ensure Movi-Player unmutes cleanly on user interaction + offer AAC Remux in Switch menu
+function forceUnmuteMovi() {
+  if (!mp) return;
+  try {
+    mp.muted = false;
+    mp.removeAttribute('muted');
+    if (!mp.volume || mp.volume === 0) mp.volume = 1;
+    if (mp.shadowRoot) {
+      mp.shadowRoot.querySelectorAll('video, audio').forEach(el => {
+        el.muted = false;
+        el.removeAttribute('muted');
+        if (!el.volume || el.volume === 0) el.volume = 1;
+      });
+    }
+    if (volRange) volRange.value = String(mp.volume || 1);
+  } catch (_) {}
+}
+
+function togglePlay() { if (!mp) return; if (mp.paused) { forceUnmuteMovi(); mp.play()?.catch(()=>{}); } else mp.pause(); }
 centerPlayBtn?.addEventListener('click', (e) => { e.stopPropagation(); togglePlay(); });
 playPauseBtn?.addEventListener('click', (e) => { e.stopPropagation(); togglePlay(); });
 function syncPlayUI() { const playing = mp && !mp.paused && !mp.ended; wrapper.classList.toggle('is-playing', playing); if (playPauseIcon) playPauseIcon.innerHTML = playing ? '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>' : '<path d="M8 5v14l11-7z"/>'; }
@@ -2635,6 +2697,25 @@ const epDrawer = document.getElementById('episodesDrawer');
     const hdr = document.createElement('div'); hdr.className = 'pop-title'; hdr.textContent = 'Episodes / Groups'; swList.appendChild(hdr);
     WATCH_GROUPS.forEach((grp, gi) => { if (!grp.buttons?.length) return; const el = document.createElement('button'); el.type = 'button'; el.textContent = (grp.name || ('Group '+(gi+1))) + (gi === GROUP_INDEX ? ' ✓' : ''); el.onclick = (e) => { e.stopPropagation(); swPop.classList.remove('open'); if (gi !== GROUP_INDEX) goToGroupButton(gi, preferredButtonForGroup(gi)); }; swList.appendChild(el); count++; });
   }
+  const aacBtn = document.createElement('button');
+  aacBtn.type = 'button';
+  aacBtn.textContent = '🔊 Fix Audio (AAC Remux)';
+  aacBtn.onclick = (e) => {
+    e.stopPropagation();
+    swPop.classList.remove('open');
+    const t = Number(mp.currentTime) || 0;
+    showLoading();
+    mp.src = REMUX_URL + '?audio=0&aac=1';
+    if (typeof mp.load === 'function') mp.load();
+    mp.addEventListener('loadedmetadata', () => {
+      try { mp.currentTime = t; } catch (_) {}
+      forceUnmuteMovi();
+      mp.play()?.catch(() => {});
+    }, { once: true });
+    showToast('Switched to AAC audio stream');
+  };
+  swList.appendChild(aacBtn);
+  count++;
   swBtn?.addEventListener('click', (e) => { e.stopPropagation(); lpPop?.classList.remove('open'); epDrawer?.classList.remove('open'); if (count <= 1) return showToast('Only 1 source available'); swPop.classList.toggle('open'); });
 })();
 function androidIntent(url, pkg, mime) { const u = new URL(url); return 'intent://' + u.host + u.pathname + u.search + '#Intent;scheme=' + u.protocol.replace(':','') + ';action=android.intent.action.VIEW;type=' + (mime||'video/*') + ';package=' + pkg + ';S.browser_fallback_url=' + encodeURIComponent(url) + ';end'; }
@@ -2780,10 +2861,34 @@ function loadScript(src) { return new Promise((res, rej) => { const s = document
     try { await loadScript('https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js'); }
     catch (_) { await loadScript('https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js'); }
     await customElements.whenDefined('movi-player');
+    mp.muted = false;
+    mp.removeAttribute('muted');
+    mp.volume = 1;
+    let gotMeta = false;
+    mp.addEventListener('loadedmetadata', () => { gotMeta = true; hideLoading(); }, { once: true });
     mp.src = STREAM_URL;
     if (typeof mp.load === 'function') mp.load();
-    mp.play()?.catch(() => hideLoading());
-  } catch (_) { hideLoading(); showToast('Player failed to load — tap Retry'); }
+    // If proxy doesn't deliver metadata within 5s, switch to direct backend tunnel automatically
+    setTimeout(() => {
+      if (!gotMeta && !usedBackendFallback && BACKEND_STREAM_URL && BACKEND_STREAM_URL !== STREAM_URL) {
+        usedBackendFallback = true;
+        mp.src = BACKEND_STREAM_URL;
+        if (typeof mp.load === 'function') mp.load();
+        mp.muted = false;
+        mp.play()?.catch(() => { syncPlayUI(); hideLoading(); });
+      }
+    }, 5000);
+    // Attempt unmuted playback; if browser blocks unmuted autoplay, stay unmuted & show Play button
+    mp.play()?.catch(() => {
+      try { mp.pause(); } catch (_) {}
+      mp.muted = false;
+      syncPlayUI();
+      hideLoading();
+    });
+  } catch (_) {
+    hideLoading();
+    showToast('Player failed to load — tap Retry');
+  }
 })();
 </script>`;
 

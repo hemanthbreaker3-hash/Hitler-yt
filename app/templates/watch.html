@@ -239,6 +239,17 @@
   .p4u-ep-tag { background: rgba(139,92,246,.25); color: #c4b5fd; padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 800; flex: 0 0 auto; }
   .p4u-ep-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+
+  /* Allow taps on empty top/bottom gradient areas to toggle controls; only buttons capture clicks */
+  .p4u-top, .p4u-bottom { pointer-events: none !important; }
+  .p4u-top button, .p4u-top a, .p4u-bottom button, .p4u-bottom input, .p4u-bottom .p4u-scrub { pointer-events: auto !important; }
+  @media (max-width: 600px) {
+    .p4u-top { padding: 8px 10px 14px !important; }
+    .p4u-bottom { padding: 18px 10px 8px !important; gap: 6px !important; }
+    .p4u-circle-btn, .p4u-back-btn { width: 32px !important; height: 32px !important; }
+    .p4u-ep-pill { padding: 4px 10px !important; font-size: 11px !important; }
+  }
+
   .toast {
     position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%);
     background: rgba(12,16,26,.95); border: 1px solid rgba(59,130,246,.45);
@@ -282,7 +293,7 @@
     <div class="p4u-stage" id="playerWrapper">
   {% if _bg %}<div class="p4u-backdrop" style="background-image:url('{{ _bg }}')"></div>{% endif %}
 
-  <movi-player id="moviPlayer" playsinline autoplay muted preload="auto" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
+  <movi-player id="moviPlayer" playsinline preload="auto" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
 
   <div class="p4u-loading" id="playerLoading"><div class="p4u-spinner"></div></div>
 
@@ -488,24 +499,43 @@ function goToGroupButton(gi, bi) {
 // Tap anywhere on video surface to hide/show ALL controls
 (function setupTapToggle(){
   let visible = true;
+  function syncMoviShadow(show) {
+    try {
+      const sr = mp && mp.shadowRoot;
+      if (!sr) return;
+      let st = sr.getElementById('amz-hide-controls-style');
+      if (!show) {
+        if (!st) {
+          st = document.createElement('style');
+          st.id = 'amz-hide-controls-style';
+          st.textContent = '[part*="control"],[part*="chrome"],[part*="progress"],[part*="bar"],[part*="overlay"],[class*="control"],[class*="chrome"],[class*="progress"],[class*="seek"],[class*="overlay"],button{opacity:0!important;visibility:hidden!important;pointer-events:none!important;display:none!important}';
+          sr.appendChild(st);
+        }
+      } else if (st) {
+        st.remove();
+      }
+    } catch (_) {}
+  }
   function setVisible(on) {
     visible = !!on;
     wrapper.classList.toggle('controls-hidden', !visible);
+    syncMoviShadow(visible);
     if (!visible) {
       document.getElementById('switchPop')?.classList.remove('open');
       document.getElementById('laptopPop')?.classList.remove('open');
       document.getElementById('episodesDrawer')?.classList.remove('open');
     }
   }
+  wrapper.addEventListener('pointerdown', () => { if (mp && mp.muted) forceUnmuteMovi(); }, { once: true, capture: true });
   wrapper.addEventListener('click', (e) => {
-    const t = e.target;
     if (!visible) {
       e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
       setVisible(true);
       return;
     }
-    if (!t || !t.closest) return;
-    if (t.closest('.p4u-top') || t.closest('.p4u-bottom') || t.closest('.p4u-center-play') || t.closest('.p4u-pop') || t.closest('.p4u-drawer')) return;
+    const path = (typeof e.composedPath === 'function') ? e.composedPath() : [e.target];
+    const hitControl = path.some(node => node && node.nodeType === 1 && node.matches && node.matches('button, a, input, select, .p4u-scrub, .p4u-pop, .p4u-drawer'));
+    if (hitControl) return;
     e.stopPropagation();
     setVisible(false);
   }, true);
@@ -523,11 +553,28 @@ const scrubThumb = document.getElementById('scrubThumb');
 const curTimeLabel = document.getElementById('curTimeLabel');
 const durTimeLabel = document.getElementById('durTimeLabel');
 
+
+// Ensure Movi-Player unmutes cleanly on user interaction + offer AAC Remux in Switch menu
+function forceUnmuteMovi() {
+  if (!mp) return;
+  try {
+    forceUnmuteMovi();
+    if (!mp.volume || mp.volume === 0) mp.volume = 1;
+    if (mp.shadowRoot) {
+      mp.shadowRoot.querySelectorAll('video, audio').forEach(el => {
+        el.muted = false;
+        el.removeAttribute('muted');
+        if (!el.volume || el.volume === 0) el.volume = 1;
+      });
+    }
+    if (volRange) volRange.value = String(mp.volume || 1);
+  } catch (_) {}
+}
+
 function togglePlay() {
   if (!mp) return;
   if (mp.paused) {
-    mp.muted = false;
-    mp.removeAttribute('muted');
+    forceUnmuteMovi();
     const p = mp.play(); if (p && p.catch) p.catch(() => {});
   } else {
     mp.pause();
@@ -617,6 +664,25 @@ const epDrawer = document.getElementById('episodesDrawer');
       count++;
     });
   }
+  const aacBtn = document.createElement('button');
+  aacBtn.type = 'button';
+  aacBtn.textContent = '🔊 Fix Audio (AAC Remux)';
+  aacBtn.onclick = (e) => {
+    e.stopPropagation();
+    swPop.classList.remove('open');
+    const t = Number(mp.currentTime) || 0;
+    showLoading();
+    mp.src = REMUX_URL + '?audio=0&aac=1';
+    if (typeof mp.load === 'function') mp.load();
+    mp.addEventListener('loadedmetadata', () => {
+      try { mp.currentTime = t; } catch (_) {}
+      forceUnmuteMovi();
+      mp.play()?.catch(() => {});
+    }, { once: true });
+    showToast('Switched to AAC audio stream');
+  };
+  swList.appendChild(aacBtn);
+  count++;
   swBtn?.addEventListener('click', (e) => {
     e.stopPropagation();
     lpPop?.classList.remove('open');
@@ -884,22 +950,40 @@ mp.addEventListener('loadedmetadata', () => {
   mp.addEventListener('playing', send, { once: true });
 })();
 
-// Boot Movi-Player
-function loadScript(src) {
-  return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.async = true; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
-}
+// Boot Movi-Player (sound ON by default)
 (async () => {
   showLoading();
   try {
-    try { await loadScript(window.__HITLERYTPlayer.script); }
-    catch (_) { await loadScript(window.__HITLERYTPlayer.scriptFallback); }
+    try { await loadScript('https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js'); }
+    catch (_) { await loadScript('https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js'); }
     await customElements.whenDefined('movi-player');
+    mp.muted = false;
+    mp.removeAttribute('muted');
+    mp.volume = 1;
+    let gotMeta = false;
+    mp.addEventListener('loadedmetadata', () => { gotMeta = true; hideLoading(); }, { once: true });
     mp.src = STREAM_URL;
     if (typeof mp.load === 'function') mp.load();
-    mp.play()?.catch(() => hideLoading());
-  } catch (err) {
+    // If proxy doesn't deliver metadata within 5s, switch to direct backend tunnel automatically
+    setTimeout(() => {
+      if (!gotMeta && !usedBackendFallback && BACKEND_STREAM_URL && BACKEND_STREAM_URL !== STREAM_URL) {
+        usedBackendFallback = true;
+        mp.src = BACKEND_STREAM_URL;
+        if (typeof mp.load === 'function') mp.load();
+        mp.muted = false;
+        mp.play()?.catch(() => { syncPlayUI(); hideLoading(); });
+      }
+    }, 5000);
+    // Attempt unmuted playback; if browser blocks unmuted autoplay, stay unmuted & show Play button
+    mp.play()?.catch(() => {
+      try { mp.pause(); } catch (_) {}
+      mp.muted = false;
+      syncPlayUI();
+      hideLoading();
+    });
+  } catch (_) {
     hideLoading();
-    showToast('Player failed to load — tap Retry or use External Player');
+    showToast('Player failed to load — tap Retry');
   }
 })();
 </script>
