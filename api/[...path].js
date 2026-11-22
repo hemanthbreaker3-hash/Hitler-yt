@@ -2415,10 +2415,21 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   const curBtnName = (watchGroups[groupIndex] && watchGroups[groupIndex].buttons && watchGroups[groupIndex].buttons[buttonIndex] && watchGroups[groupIndex].buttons[buttonIndex].name) || 'Auto';
 
   const headExtra = `<style>
-    .topbar,.footer{display:none!important}
-    main.wrap{width:100%!important;max-width:none!important;padding:0!important;margin:0!important}
-    body{background:#000!important;overflow-x:hidden}
-    .p4u-stage{position:relative;width:100vw;height:100dvh;min-height:360px;background:#000;overflow:hidden;user-select:none;-webkit-tap-highlight-color:transparent}
+    .watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:18px;margin-top:14px;align-items:start}
+    @media(max-width:960px){.watch-grid{grid-template-columns:1fr}}
+    .p4u-stage{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.12);box-shadow:0 20px 50px rgba(0,0,0,.55);user-select:none;-webkit-tap-highlight-color:transparent}
+    .p4u-stage:fullscreen,.p4u-stage:-webkit-full-screen{width:100vw!important;height:100dvh!important;aspect-ratio:auto!important;border-radius:0!important;border:0!important}
+    .watch-info-card{background:var(--bg-card,#121722);border:1px solid var(--line,rgba(255,255,255,.08));border-radius:16px;padding:18px;margin-top:14px}
+    .watch-info-card h1{font-size:clamp(1.15rem,2.6vw,1.55rem);margin-bottom:8px;word-break:break-word}
+    .watch-meta-pills{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px}
+    .watch-meta-pills span{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);padding:4px 11px;border-radius:999px;font-size:12px;color:#cbd5e1}
+    .watch-tools{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+    .watch-side{display:flex;flex-direction:column;gap:14px}
+    .watch-side-card{background:var(--bg-card,#121722);border:1px solid var(--line,rgba(255,255,255,.08));border-radius:16px;padding:16px}
+    .watch-side-card h3{font-size:14px;margin-bottom:10px;color:#fff}
+    .ext-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+    .ext-btn{display:flex;align-items:center;justify-content:center;padding:10px;border-radius:10px;background:#161d2c;border:1px solid rgba(255,255,255,.12);color:#fff;font-size:12px;font-weight:700;text-decoration:none}
+    .ext-btn:hover{border-color:#3b82f6;background:#1c2538}
     .p4u-backdrop{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(18px) brightness(.45) saturate(1.2);transform:scale(1.08);z-index:0;pointer-events:none;transition:opacity .35s ease}
     .p4u-stage.is-playing .p4u-backdrop{opacity:0}
     .p4u-stage movi-player{position:relative;z-index:1;width:100%;height:100%;display:block;background:transparent;object-fit:contain}
@@ -2486,7 +2497,9 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   </style>`;
 
   const content = `
-<div class="p4u-stage" id="playerWrapper">
+<div class="watch-grid">
+  <div>
+    <div class="p4u-stage" id="playerWrapper">
   ${posterUrl ? `<div class="p4u-backdrop" style="background-image:url('${escapeHtml(posterUrl)}')"></div>` : ''}
   <movi-player id="moviPlayer" playsinline autoplay muted preload="auto" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
   <div class="p4u-loading" id="playerLoading"><div class="p4u-spinner"></div></div>
@@ -2535,6 +2548,27 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   <div class="p4u-pop quality-pop" id="switchPop"><div class="pop-title">Switch Quality / Source</div><div id="switchPopList"></div></div>
   <div class="p4u-pop external-pop" id="laptopPop"><div class="pop-title">Open in External Player</div><div id="laptopPopList"></div></div>
   ${watchGroups.length > 1 ? `<div class="p4u-drawer" id="episodesDrawer"><div class="p4u-drawer-head"><span>Episodes / Seasons</span><button type="button" class="p4u-icon-btn" id="closeDrawerBtn">✕</button></div><div class="p4u-season-bar" id="sideSeasonBar"></div><div class="p4u-drawer-tools"><select id="seasonFilter"><option value="all">All Seasons</option></select><input id="episodeSearch" type="search" placeholder="Search EP…"></div><div class="p4u-ep-list" id="sideEpList"></div></div>` : ''}
+    </div>
+    <div class="watch-info-card">
+      <h1>${escapeHtml(file.filename || 'Media')}</h1>
+      <div class="watch-meta-pills">
+        <span>${escapeHtml(sizeMb)} MB</span>
+        <span>${escapeHtml(file.access_count || 0)} views</span>
+        ${groupName ? `<span>${escapeHtml(groupName)}</span>` : ''}
+      </div>
+      <div class="watch-tools">
+        <a class="btn btn-accent" href="${escapeHtml(dlHref)}" ${downloadsEnabled ? 'download' : 'target="_blank" rel="noopener"'}>⬇ Download</a>
+        <button type="button" class="btn" onclick="navigator.clipboard?.writeText(location.href).then(()=>showToast('Watch link copied!'))">Copy Watch Link</button>
+        <button type="button" class="btn" onclick="navigator.clipboard?.writeText(STREAM_URL).then(()=>showToast('Stream URL copied!'))">Copy Stream URL</button>
+      </div>
+    </div>
+  </div>
+  <aside class="watch-side">
+    <div class="watch-side-card">
+      <h3>Open in External Player</h3>
+      <div class="ext-grid" id="sideExtGrid"></div>
+    </div>
+  </aside>
 </div>
 <div class="toast" id="toast"><span id="toast-message">Done</span></div>
 <script>
@@ -2568,9 +2602,10 @@ function goToGroupButton(gi, bi) { const h = watchHrefFor(gi, bi); if (h) window
   let visible = true;
   function setVisible(on) { visible = !!on; wrapper.classList.toggle('controls-hidden', !visible); if (!visible) { document.getElementById('switchPop')?.classList.remove('open'); document.getElementById('laptopPop')?.classList.remove('open'); document.getElementById('episodesDrawer')?.classList.remove('open'); } }
   wrapper.addEventListener('click', (e) => {
-    if (!visible) { e.preventDefault(); e.stopPropagation(); setVisible(true); return; }
+    if (!visible) { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); setVisible(true); return; }
     const t = e.target; if (!t || !t.closest) return;
     if (t.closest('.p4u-top') || t.closest('.p4u-bottom') || t.closest('.p4u-center-play') || t.closest('.p4u-pop') || t.closest('.p4u-drawer')) return;
+    e.stopPropagation();
     setVisible(false);
   }, true);
 })();
@@ -2603,7 +2638,7 @@ const epDrawer = document.getElementById('episodesDrawer');
   swBtn?.addEventListener('click', (e) => { e.stopPropagation(); lpPop?.classList.remove('open'); epDrawer?.classList.remove('open'); if (count <= 1) return showToast('Only 1 source available'); swPop.classList.toggle('open'); });
 })();
 function androidIntent(url, pkg, mime) { const u = new URL(url); return 'intent://' + u.host + u.pathname + u.search + '#Intent;scheme=' + u.protocol.replace(':','') + ';action=android.intent.action.VIEW;type=' + (mime||'video/*') + ';package=' + pkg + ';S.browser_fallback_url=' + encodeURIComponent(url) + ';end'; }
-[['MX Player', androidIntent(EXTERNAL_STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME)], ['PLAYit', androidIntent(REMUX_URL + '?audio=0&aac=1', 'com.playit.videoplayer', 'video/mp4')], ['VLC', androidIntent(EXTERNAL_STREAM_URL, 'org.videolan.vlc', INTENT_MIME)]].forEach(([l, h]) => { const a = document.createElement('a'); a.href = h; a.textContent = l; lpList.appendChild(a); });
+[['MX Player', androidIntent(EXTERNAL_STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME)], ['PLAYit', androidIntent(REMUX_URL + '?audio=0&aac=1', 'com.playit.videoplayer', 'video/mp4')], ['VLC', androidIntent(EXTERNAL_STREAM_URL, 'org.videolan.vlc', INTENT_MIME)]].forEach(([l, h]) => { const a = document.createElement('a'); a.href = h; a.textContent = l; lpList.appendChild(a); const b = document.createElement('a'); b.className = 'ext-btn'; b.href = h; b.textContent = l; document.getElementById('sideExtGrid')?.appendChild(b); });
 lpBtn?.addEventListener('click', (e) => { e.stopPropagation(); swPop?.classList.remove('open'); epDrawer?.classList.remove('open'); lpPop.classList.toggle('open'); });
 document.getElementById('pcDownloadBtn')?.addEventListener('click', (e) => { e.stopPropagation(); const a = document.createElement('a'); a.href = DL_URL; if (DOWNLOADS_ENABLED) a.setAttribute('download', ''); else a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove(); showToast(DOWNLOADS_ENABLED ? 'Download started' : 'Opening Telegram bot…'); });
 document.getElementById('pcFitBtn')?.addEventListener('click', (e) => { e.stopPropagation(); const cover = mp.classList.toggle('player-fit-cover'); mp.classList.toggle('player-fit-contain', !cover); try { mp.style.objectFit = cover ? 'cover' : 'contain'; mp.shadowRoot?.querySelectorAll('video, canvas').forEach(v => { v.style.objectFit = cover ? 'cover' : 'contain'; }); } catch(_){} showToast(cover ? 'Fill mode' : 'Fit mode'); });
