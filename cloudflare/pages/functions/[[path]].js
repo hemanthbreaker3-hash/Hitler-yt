@@ -2,6 +2,7 @@ import { PassThrough, Readable } from 'node:stream';
 import handler from '../api/[...path].js';
 
 function syncEnvToProcess(env) {
+  process.env.CF_PAGES = '1';
   if (!env || typeof env !== 'object') return;
   for (const [k, v] of Object.entries(env)) {
     if (typeof v === 'string' && v.length > 0 && !process.env[k]) {

@@ -43,7 +43,15 @@ function extractDbNameFromUri(uri) {
 
 async function getMongoClient() {
   const uri = getMongoUri();
-  if (!uri) throw new Error('MONGODB_URI is not configured in Vercel');
+  if (!uri) throw new Error('MONGODB_URI is not configured');
+  if (process.env.CF_PAGES === '1') {
+    const client = new MongoClient(uri, {
+      serverSelectionTimeoutMS: 8000,
+      connectTimeoutMS: 8000,
+      maxPoolSize: 4,
+    });
+    return client.connect();
+  }
   if (!mongoClientPromise) {
     const client = new MongoClient(uri, {
       serverSelectionTimeoutMS: 8000,
