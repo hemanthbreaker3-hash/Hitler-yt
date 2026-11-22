@@ -272,6 +272,20 @@ function serializeCatalogDoc(doc, cloudflareBase) {
     else copy[k] = v;
   }
   copy.groups = normalizeAndRewritePageGroups(copy.groups || [], cloudflareBase);
+  let wbLabel = '';
+  for (const g of copy.groups) {
+    if (!g || typeof g !== 'object') continue;
+    const box = String(g.box || 'watch').trim().toLowerCase();
+    if (box && box !== 'watch') continue;
+    const btns = (Array.isArray(g.buttons) ? g.buttons : [])
+      .map(b => String((b && (b.name || b.text)) || '').trim())
+      .filter(Boolean);
+    if (btns.length) {
+      wbLabel = btns.join(' . ');
+      break;
+    }
+  }
+  copy.watch_buttons_label = wbLabel;
   return copy;
 }
 
@@ -762,6 +776,39 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     .bg-portrait-layer{position:absolute;inset:0;background-size:cover;background-position:center 18%;opacity:0;transition:opacity 1.2s ease;filter:blur(2px) saturate(1.18);transform:scale(1.03)}
     .bg-portrait-layer.active{opacity:.24}
     #bg-portrait-scrim{position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(ellipse 75% 45% at 15% 0%,rgba(139,92,246,.22),transparent 60%),radial-gradient(ellipse 65% 40% at 88% 10%,rgba(59,130,246,.18),transparent 58%),radial-gradient(ellipse 60% 40% at 50% 100%,rgba(239,68,68,.12),transparent 60%),linear-gradient(180deg,rgba(7,9,14,.76),rgba(7,9,14,.88) 55%,rgba(7,9,14,.96))}
+
+    @media(max-width:600px){
+      .topbar-inner{gap:8px!important;padding:8px 0!important}
+      .topbar-links{width:100%;justify-content:flex-start;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+      .topbar-links::-webkit-scrollbar{display:none}
+      .topbar-links a{flex:0 0 auto;white-space:nowrap}
+    }
+
+
+    /* Centered CineXPro-style header with project branding */
+    .topbar-inner{flex-direction:column!important;justify-content:center!important;align-items:center!important;gap:8px!important;padding:12px 0 10px!important;text-align:center}
+    .topbar-logo{justify-content:center!important}
+    .brand-lockup{flex-direction:column!important;align-items:center!important;gap:4px!important;max-width:none!important;max-height:none!important}
+    .brand-mark{display:none!important}
+    .brand-word{font-size:clamp(1.35rem,4.5vw,1.9rem)!important;letter-spacing:.14em!important;line-height:1.05!important}
+    .brand-sub{font-size:10px;font-weight:700;letter-spacing:.26em;text-transform:uppercase;color:var(--muted);opacity:.88}
+    .topbar-links{justify-content:center!important;width:auto!important}
+
+    /* Reference-matched 16:9 landscape card with overlaid badges & clean title/year below */
+    .cat-nav{justify-content:center!important;gap:10px!important;margin:0 auto 20px!important;max-width:680px}
+    .cat-nav .chip{padding:10px 20px!important;font-size:13px!important;background:#131722!important;border:1px solid rgba(255,255,255,.12)!important}
+    .cat-nav .chip.active{background:linear-gradient(125deg,#3b82f6,#8b5cf6)!important;color:#fff!important;box-shadow:0 6px 22px rgba(139,92,246,.38)!important}
+    .poster-card{background:transparent!important;border:0!important;box-shadow:none!important;border-radius:0!important}
+    .poster-card:hover{transform:translateY(-3px)!important;box-shadow:none!important}
+    .poster-card .card-media{border-radius:14px!important;border:1px solid rgba(255,255,255,.12)!important;box-shadow:0 10px 24px rgba(0,0,0,.42)!important}
+    .poster-card:hover .card-media{border-color:rgba(139,92,246,.6)!important;box-shadow:0 14px 30px rgba(59,130,246,.22)!important}
+    .poster-card .card-badges{position:absolute;left:8px;right:8px;bottom:8px;z-index:3;display:flex;align-items:center;gap:6px;flex-wrap:wrap;pointer-events:none}
+    .poster-card .badge-quality{background:rgba(7,9,14,.84);color:#f8fafc;border:1px solid rgba(255,255,255,.24);border-radius:10px;padding:3px 8px;font-size:clamp(8.5px,2vw,10px);font-weight:800;letter-spacing:.03em;line-height:1.25;white-space:normal;word-break:break-word;max-width:100%;backdrop-filter:blur(6px)}
+    .poster-card .badge-genre{background:linear-gradient(125deg,#3b82f6,#8b5cf6);color:#fff;border-radius:999px;padding:3px 10px;font-size:10px;font-weight:800;letter-spacing:.04em;box-shadow:0 4px 12px rgba(59,130,246,.32)}
+    .poster-card .info{padding:8px 2px 2px!important;background:transparent!important}
+    .poster-card .title{font-size:14px!important;font-weight:700!important;color:#f8fafc!important;margin-bottom:2px!important}
+    .poster-card .meta{font-size:12px!important;color:#94a3b8!important}
+
   </style>
   ${headExtra}
 </head>
@@ -776,7 +823,7 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     <a class="topbar-logo" href="/" title="HITLER YT Home">
       <span class="brand-lockup">
         <span class="brand-mark" aria-hidden="true"><span>HYT</span></span>
-        <span class="brand-word">HITLER YT</span>
+        <span class="brand-word">HITLER YT</span><span class="brand-sub">MOVIES · SERIES · BEYOND LIMITS</span>
       </span>
     </a>
     <nav class="topbar-links" aria-label="Primary">
@@ -859,7 +906,7 @@ function renderIndexHtml(initialItems, initialCategories, queryStr = '') {
   const content = `
 <form class="search-bar" action="/search" method="get">
   <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
-  <input name="q" value="${escapeHtml(queryStr)}" placeholder="Search movies, series, or keywords…" autocomplete="off">
+  <input name="q" value="${escapeHtml(queryStr)}" placeholder="Search your favourite content…" autocomplete="off">
   <button type="submit">Search</button>
 </form>
 
@@ -1013,17 +1060,17 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
       const media = document.createElement('div');
       media.className = 'card-media';
       const play = document.createElement('div'); play.className = 'play-hint'; play.innerHTML = '<span>▶</span>';
-      media.append(img, play);
-      const badges = document.createElement('div');
-      badges.className = 'badge-row';
+      const cardBadges = document.createElement('div');
+      cardBadges.className = 'card-badges';
+      if (p.watch_buttons_label) {
+        const qPill = document.createElement('span'); qPill.className = 'badge-quality'; qPill.textContent = String(p.watch_buttons_label);
+        cardBadges.appendChild(qPill);
+      }
       if (Array.isArray(p.genres) && p.genres.length) {
-        const g = document.createElement('span'); g.className = 'badge badge-genre'; g.textContent = String(p.genres[0]).toUpperCase();
-        badges.appendChild(g);
+        const g = document.createElement('span'); g.className = 'badge-genre'; g.textContent = String(p.genres[0]).toUpperCase();
+        cardBadges.appendChild(g);
       }
-      if (p.rating != null && Number(p.rating) > 0) {
-        const rt = document.createElement('span'); rt.className = 'badge badge-rating'; rt.textContent = '★ ' + Number(p.rating).toFixed(1);
-        badges.appendChild(rt);
-      }
+      media.append(img, play, cardBadges);
       const info = document.createElement('div');
       info.className = 'info';
       const t = document.createElement('div');
@@ -1032,10 +1079,9 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
       const m = document.createElement('div');
       m.className = 'meta';
       const year = (p.release_date || p.first_air_date || '').toString().slice(0, 4);
-      const mt = p.media_type ? String(p.media_type).toUpperCase() : '';
-      m.textContent = [year, mt].filter(Boolean).join(' · ');
+      const isSeries = String(p.media_type || '').toLowerCase() === 'tv';
+      m.textContent = year || (isSeries ? 'SERIES' : 'MOVIE');
       info.append(t, m);
-      if (badges.childElementCount) info.append(badges);
       a.append(media, info);
       el.append(a);
       }
@@ -2489,29 +2535,11 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     }
     .player-pop button:hover,.player-pop a:hover{background:rgba(139,92,246,.14)!important}
     .player-pop .pop-title{font-size:10px!important;color:#9a9aab!important;padding:4px 10px 6px!important;text-transform:uppercase!important;letter-spacing:.05em!important}
-    .controls-toggle{
-      position:absolute!important;z-index:35!important;
-      left:10px!important;bottom:10px!important;top:auto!important;right:auto!important;
-      opacity:1!important;pointer-events:auto!important;visibility:visible!important;
-      width:auto!important;height:auto!important;overflow:visible!important;
-      padding:6px 10px!important;border-radius:8px!important;
-      border:1px solid rgba(255,255,255,.18)!important;
-      background:rgba(8,8,14,.75)!important;color:rgba(255,255,255,.85)!important;
-      font:700 11px system-ui!important;cursor:pointer!important;
-      transform:none!important;
-    }
     .player-wrapper.controls-hidden .player-chrome-left,
     .player-wrapper.controls-hidden .player-chrome-right,
     .player-wrapper.controls-hidden .player-chrome-btn,
     .player-wrapper.controls-hidden .player-pop{
       opacity:0!important;visibility:hidden!important;pointer-events:none!important;
-    }
-    .player-wrapper.controls-hidden .controls-toggle{
-      left:50%!important;bottom:auto!important;top:50%!important;
-      transform:translate(-50%,-50%)!important;
-      padding:12px 18px!important;border-radius:999px!important;
-      background:rgba(8,8,14,.92)!important;color:#fff!important;
-      font:800 14px system-ui!important;border-color:rgba(255,255,255,.28)!important;
     }
     .player-wrapper:fullscreen,
     .player-wrapper:-webkit-full-screen{
@@ -2579,8 +2607,6 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
 
     .player-wrapper.controls-hidden .player-chrome-btn{opacity:0;pointer-events:none;transition:opacity .18s ease}
     .player-wrapper.controls-hidden movi-player::part(chrome),.player-wrapper.controls-hidden movi-player::part(controls),.player-wrapper.controls-hidden movi-player::part(bottom-controls),.player-wrapper.controls-hidden movi-player::part(progress-container),.player-wrapper.controls-hidden movi-player::part(progress),.player-wrapper.controls-hidden movi-player::part(seek),.player-wrapper.controls-hidden movi-player::part(control-bar),.player-wrapper.controls-hidden movi-player::part(bottom-bar){opacity:0!important;visibility:hidden!important;pointer-events:none!important}
-    .player-wrapper .controls-toggle{position:absolute;z-index:2147483002;top:12px;right:12px;opacity:0!important;pointer-events:auto!important;visibility:visible!important;width:150px;height:44px;padding:8px 12px;border:0;background:transparent;color:transparent;font:600 13px system-ui;cursor:pointer}
-    
     /* Hide/show controls on toggle */
     .player-wrapper.controls-hidden .player-chrome-btn,
     .player-wrapper.controls-hidden .player-chrome-left,
@@ -2594,18 +2620,6 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .player-wrapper.controls-hidden movi-player::part(control-bar),
     .player-wrapper.controls-hidden movi-player::part(progress-container){
       opacity:0!important;visibility:hidden!important;pointer-events:none!important
-    }
-    .player-wrapper .controls-toggle{
-      position:absolute!important;z-index:80!important;top:10px!important;right:10px!important;left:auto!important;bottom:auto!important;
-      display:none!important;pointer-events:none!important;border:0!important;transform:none!important;
-      background:transparent!important;color:transparent!important;cursor:pointer!important;width:auto!important;height:auto!important
-    }
-    .player-wrapper.controls-hidden .controls-toggle{
-      display:inline-flex!important;align-items:center!important;justify-content:center!important;
-      opacity:1!important;visibility:visible!important;pointer-events:auto!important;
-      color:#fff!important;background:rgba(8,8,14,.92)!important;
-      border:1px solid rgba(255,255,255,.25)!important;border-radius:999px!important;
-      font:700 12px system-ui!important;padding:8px 14px!important;width:auto!important;height:auto!important
     }
     .player-pop{z-index:2147483005!important;max-height:calc(100% - 58px)!important;overflow-y:auto!important}
 
@@ -2718,6 +2732,29 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   }
   @media(max-width:480px){.player-brand-float{display:none!important}}
 
+
+  /* Tap-to-hide ALL player controls (top chrome + Movi center/bottom controls) */
+  #playerWrapper.controls-hidden .player-chrome-left,
+  #playerWrapper.controls-hidden .player-chrome-right,
+  #playerWrapper.controls-hidden .player-chrome-btn,
+  #playerWrapper.controls-hidden .player-pop,
+  #playerWrapper.controls-hidden .player-brand-float,
+  #playerWrapper.controls-hidden .player-shortcut-hint,
+  #playerWrapper.controls-hidden movi-player::part(chrome),
+  #playerWrapper.controls-hidden movi-player::part(controls),
+  #playerWrapper.controls-hidden movi-player::part(bottom-controls),
+  #playerWrapper.controls-hidden movi-player::part(progress-container),
+  #playerWrapper.controls-hidden movi-player::part(progress),
+  #playerWrapper.controls-hidden movi-player::part(seek),
+  #playerWrapper.controls-hidden movi-player::part(control-bar),
+  #playerWrapper.controls-hidden movi-player::part(bottom-bar),
+  #playerWrapper.controls-hidden movi-player::part(overlay-controls),
+  #playerWrapper.controls-hidden movi-player::part(controls-overlay) {
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+  }
+
   </style>`;
 
   // Episodes / Seasons UI lives in the right side panel (sideEpList + season filter)
@@ -2733,7 +2770,6 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     <div class="player-shell">
       <div class="player-box">
         <div class="player-wrapper" id="playerWrapper">
-          <button type="button" class="controls-toggle" id="controlsToggle">Hide controls</button>
           <movi-player id="moviPlayer"
             playsinline controls autoplay muted preload="auto" resume
             theme="dark" themecolor="#8b5cf6"
@@ -2861,50 +2897,66 @@ function showToast(msg) {
   if (t) { t.classList.add('active'); setTimeout(() => t.classList.remove('active'), 2400); }
 }
 
-// ---- Built-in player: reliable load + controls ----
-(function setupPlayerChrome(){
+// ---- Built-in player: tap anywhere to hide/show all controls ----
+
+(function setupTapToToggleAllControls(){
   const wrapper = document.getElementById('playerWrapper');
-  if (!wrapper || !moviPlayer) return;
+  const mp = document.getElementById('moviPlayer');
+  if (!wrapper || !mp) return;
   let visible = true;
-  const toggle = document.getElementById('controlsToggle');
+  
+  function syncMoviShadowControls(show) {
+    try {
+      if (show) moviPlayer.setAttribute('controls', '');
+      else moviPlayer.removeAttribute('controls');
+      const sr = moviPlayer.shadowRoot;
+      if (!sr) return;
+      let st = sr.getElementById('amz-hide-controls-style');
+      if (!show) {
+        if (!st) {
+          st = document.createElement('style');
+          st.id = 'amz-hide-controls-style';
+          st.textContent = '[part*="control"],[part*="chrome"],[part*="progress"],[part*="bar"],[part*="overlay"],[class*="control"],[class*="chrome"],[class*="progress"],[class*="seek"],[class*="overlay"],button{opacity:0!important;visibility:hidden!important;pointer-events:none!important}';
+          sr.appendChild(st);
+        }
+      } else if (st) {
+        st.remove();
+      }
+    } catch (_) {}
+  }
+
   function setControlsVisible(on) {
     visible = !!on;
     wrapper.classList.toggle('controls-hidden', !visible);
-    try {
-      if (visible) moviPlayer.setAttribute('controls', '');
-      else moviPlayer.removeAttribute('controls');
-    } catch(_){}
-    if (toggle) {
-      toggle.textContent = visible ? 'Hide controls' : 'Show controls';
-      toggle.setAttribute('aria-label', visible ? 'Hide controls' : 'Show controls');
-    }
+    wrapper.setAttribute('data-controls-visible', visible ? 'true' : 'false');
+    syncMoviShadowControls(visible);
     if (!visible) {
       document.getElementById('switchPop')?.classList.remove('open');
       document.getElementById('laptopPop')?.classList.remove('open');
     }
   }
   setControlsVisible(true);
-  if (toggle && !toggle.dataset.boundToggle) {
-    toggle.dataset.boundToggle = '1';
-    toggle.addEventListener('click', (e) => {
-      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-      setControlsVisible(!visible);
-    });
-  }
-  // Tap player surface (not buttons) toggles chrome
-  if (!wrapper.dataset.boundTap) {
-    wrapper.dataset.boundTap = '1';
-    wrapper.addEventListener('click', (e) => {
-      const t = e.target;
-      if (!t || !t.closest) return;
-      if (t.closest('.player-chrome-btn') || t.closest('.player-pop') || t.closest('#controlsToggle') || t.closest('#playGate')) return;
-      if (t === wrapper || t === moviPlayer || (t.tagName && String(t.tagName).toLowerCase() === 'movi-player')) {
-        setControlsVisible(!visible);
-      }
-    });
-  }
+  // When controls are hidden, tapping anywhere on the player reveals all controls cleanly
+  wrapper.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!visible) {
+      e.preventDefault();
+      e.stopPropagation();
+      setControlsVisible(true);
+      return;
+    }
+    if (!t || !t.closest) return;
+    if (t.closest('.player-chrome-btn') || t.closest('.player-pop') || t.closest('#playGate')) return;
+    // Ignore bottom 68px seek/control bar zone when controls are visible so seek/volume/play taps work normally
+    const rect = wrapper.getBoundingClientRect();
+    if (e.clientY && rect.height > 140 && e.clientY > rect.bottom - 68) return;
+    if (t === wrapper || t === mp || (t.tagName && String(t.tagName).toLowerCase() === 'movi-player')) {
+      setControlsVisible(false);
+    }
+  }, true);
   window.__setPlayerControlsVisible = setControlsVisible;
 })();
+
 
 let wasmLoading = false, wasmLoaded = false, wasmWired = false;
 let moviStallRetries = 0, moviLastProgressAt = Date.now(), moviStallTimer = null;
@@ -4250,7 +4302,16 @@ export default async function handler(req, res) {
             }
           }
           if (!data) return json(res, 502, { error: 'TMDB fetch failed' });
-          const backdrop = data.backdrop_path || '';
+          let backdrop = data.backdrop_path || '';
+          try {
+            const imgRes = await fetch('https://api.themoviedb.org/3/' + (data.media_type === 'tv' || mediaType === 'tv' ? 'tv' : 'movie') + '/' + (resolvedId || id) + '/images?api_key=' + encodeURIComponent(tmdbKey) + '&include_image_language=en,hi,ja,ko,te,ta,null', { signal: AbortSignal.timeout(5000) });
+            if (imgRes.ok) {
+              const imgJson = await imgRes.json();
+              const bds = Array.isArray(imgJson.backdrops) ? imgJson.backdrops : [];
+              const titled = bds.find(b => b && b.file_path && b.iso_639_1 === 'en') || bds.find(b => b && b.file_path && b.iso_639_1);
+              if (titled && titled.file_path) backdrop = titled.file_path;
+            }
+          } catch (_) {}
           const poster = data.poster_path || '';
           if (backdrop || poster || resolvedId) {
             const patch = { updated_at: new Date() };
@@ -4399,10 +4460,10 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET' && pathname === '/') {
       const [rawItems, rawCats] = await Promise.all([
-        db.collection('catalog_pages').find({ published: true }, { projection: { _id: 0, groups: 0, overview: 0 } }).sort({ created_at: -1 }).limit(100).toArray(),
+        db.collection('catalog_pages').find({ published: true }, { projection: { _id: 0, overview: 0 } }).sort({ created_at: -1 }).limit(100).toArray(),
         db.collection('catalog_categories').find({}, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
       ]);
-      const initialItems = rawItems.map((item) => serializeCatalogDoc(item, cloudflareUrl));
+      const initialItems = rawItems.map((item) => { const s = serializeCatalogDoc(item, cloudflareUrl); delete s.groups; return s; });
       const initialCategories = rawCats.length
         ? rawCats.map((c) => ({ name: c.name, slug: c.slug }))
         : [

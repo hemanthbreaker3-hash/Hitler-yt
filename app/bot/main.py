@@ -68,6 +68,8 @@ _awaiting_link_admins: set[int] = set()
 
 # /addgroups state: user_id -> {"page_slug": str, "box": "watch"|"download"}
 _awaiting_addgroups: dict[int, dict] = {}
+_pending_changeposter: dict[str, dict] = {}
+
 # Short tokens for callback_data (Telegram limit 64 bytes) -> page slug
 # token is ~8 hex chars so callback stays well under the limit even with long slugs
 _addgroups_slug_tokens: dict[str, str] = {}
@@ -819,6 +821,7 @@ async def setup_bot_commands(bot):
             BotCommand("autodel", "Auto-delete settings (admin)"),
             BotCommand("addgroups", "Add download/watch groups to a page (admin)"),
             BotCommand("done", "Save collected /addgroups items to page (admin)"),
+            BotCommand("changeposter", "Change home grid or page poster image (admin)"),
             BotCommand("del", "Delete a website page by link, title, or slug (admin)"),
             BotCommand("save", "Backup or restore full project data (admin)"),
             BotCommand("batch", "Generate links for a message ID range (admin)"),
@@ -2570,7 +2573,7 @@ def register_handlers(bot):
         & ~filters.command([
             "start", "fspanel", "panel", "filestore",
             "batch", "ss", "sv", "mi", "stats", "broadcast", "ban", "unban",
-            "autodel", "del", "addgroups", "done", "save", "link", "addbots", "shorteners",
+            "autodel", "del", "addgroups", "done", "changeposter", "save", "link", "addbots", "shorteners",
             "search", "username", "password", "backendurl", "baseurl",
             "categories", "edit", "manage",
         ])
@@ -3138,6 +3141,164 @@ def register_handlers(bot):
             f"> DB: `{target_db_name}`\n\n"
             f"They are now live on the page Watch/Download section."
         )
+
+    @bot.on_message(filters.command("changeposter") & filters.private)
+    async def changeposter_command(client, message: Message):
+        user = message.from_user
+        if not user or not _is_admin_user(user.id):
+            return await message.reply("🚫 Admins only.")
+        raw_text = (message.text or message.caption or "").strip()
+        args_text = re.sub(r"^\s*/changeposter(?:@\w+)?\s*", "", raw_text, flags=re.I).strip()
+        urls = re.findall(r'https?://[^\s<>"]+', args_text)
+
+        image_url = ""
+        page_ref = ""
+        for u in urls:
+            if "/title/" in u:
+                page_ref = u
+            elif not image_url:
+                image_url = u.rstrip(".,;)")
+
+        if not page_ref and message.reply_to_message:
+            rep = message.reply_to_message
+            rep_text = (getattr(rep, "text", None) or getattr(rep, "caption", None) or "")
+            for ent in (getattr(rep, "entities", None) or getattr(rep, "caption_entities", None) or []):
+                if getattr(ent, "url", None) and "/title/" in ent.url:
+                    page_ref = ent.url
+                    break
+            if not page_ref:
+                tm = re.search(r'https?://[^\s<>"]*/title/[^\s<>"]+', rep_text)
+                if tm:
+                    page_ref = tm.group(0)
+                elif rep_text.strip():
+                    page_ref = rep_text.strip().splitlines()[0].strip()
+
+        if not page_ref:
+            # Check remaining non-URL token as slug
+            leftover = re.sub(r'https?://[^\s<>"]+', "", args_text).strip()
+            if leftover:
+                page_ref = leftover.split()[0]
+
+        if not image_url or not page_ref:
+            return await message.reply(
+                "🖼️ <b>Change Poster / Backdrop</b>\n\n"
+                "Reply to a <code>/title/...</code> page link with:\n"
+                "<code>/changeposter https://example.com/image.jpg</code>\n\n"
+                "Or pass both in one message:\n"
+                "<code>/changeposter https://example.com/image.jpg https://yoursite/title/slug</code>",
+                parse_mode=ParseMode.HTML,
+            )
+
+        slug_m = re.search(r"/title/([^/?#\s]+)", page_ref)
+        page_slug = slug_m.group(1) if slug_m else page_ref.strip().strip("/")
+        import urllib.parse as _up
+        page_slug = _up.unquote(page_slug)
+
+        page = await find_catalog_page(page_slug)
+        if not page:
+            return await message.reply(f"❌ Catalog page `{page_slug}` not found in DB.")
+        page_slug = page.get("slug") or page_slug
+        target_db_name = page.get("_db_name") or getattr(settings, "DATABASE_NAME", None) or "tg_media_bot"
+
+        token = secrets.token_urlsafe(6)
+        _pending_changeposter[token] = {
+            "user_id": user.id,
+            "page_slug": page_slug,
+            "db_name": target_db_name,
+            "image_url": image_url,
+            "home": False,
+            "page": False,
+        }
+        if len(_pending_changeposter) > 300:
+            for k in list(_pending_changeposter.keys())[:100]:
+                _pending_changeposter.pop(k, None)
+
+        def _cp_kb(st: dict, tok: str):
+            h = "✅" if st["home"] else "⬜"
+            p = "✅" if st["page"] else "⬜"
+            return _kb([
+                [
+                    InlineKeyboardButton(f"{h} Home Grid Image", callback_data=f"cp:th:{tok}"),
+                    InlineKeyboardButton(f"{p} Page Image", callback_data=f"cp:tp:{tok}"),
+                ],
+                [
+                    InlineKeyboardButton("✨ Select Both", callback_data=f"cp:both:{tok}"),
+                    InlineKeyboardButton("💾 Done", callback_data=f"cp:done:{tok}"),
+                ],
+            ])
+
+        await message.reply(
+            f"🖼️ <b>Change Image for</b> <code>/{html.escape(page_slug)}</code>\n"
+            f"🔗 <code>{html.escape(image_url)}</code>\n\n"
+            f"Select where to replace (you can select one or both), then click <b>Done</b>:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=_cp_kb(_pending_changeposter[token], token),
+            disable_web_page_preview=True,
+        )
+
+    @bot.on_callback_query(filters.regex(r"^cp:(th|tp|both|done):"))
+    async def changeposter_callback(client, callback: CallbackQuery):
+        user = callback.from_user
+        if not user or not _is_admin_user(user.id):
+            return await callback.answer("Admins only", show_alert=True)
+        parts = (callback.data or "").split(":", 2)
+        if len(parts) < 3:
+            return await callback.answer("Invalid data", show_alert=True)
+        action, token = parts[1], parts[2]
+        st = _pending_changeposter.get(token)
+        if not st:
+            return await callback.answer("Session expired. Run /changeposter again.", show_alert=True)
+        if st.get("user_id") != user.id:
+            return await callback.answer("This menu belongs to another admin.", show_alert=True)
+
+        if action == "th":
+            st["home"] = not st["home"]
+        elif action == "tp":
+            st["page"] = not st["page"]
+        elif action == "both":
+            st["home"] = True
+            st["page"] = True
+        elif action == "done":
+            if not st["home"] and not st["page"]:
+                return await callback.answer("Select Home Grid Image, Page Image, or Both first!", show_alert=True)
+            patch = {"updated_at": datetime.datetime.now(datetime.timezone.utc)}
+            updated_targets = []
+            if st["home"]:
+                patch["backdrop_path"] = st["image_url"]
+                updated_targets.append("Home Grid Image")
+            if st["page"]:
+                patch["poster_path"] = st["image_url"]
+                updated_targets.append("Page Image")
+            from app.database.connection import client as mongo_client
+            target_coll = mongo_client[st["db_name"]]["catalog_pages"]
+            await target_coll.update_one({"slug": st["page_slug"]}, {"$set": patch})
+            _pending_changeposter.pop(token, None)
+            await callback.message.edit_text(
+                f"✅ <b>Image updated</b> for <code>/{html.escape(st['page_slug'])}</code>\n\n"
+                f"• Replaced: <b>{', '.join(updated_targets)}</b>\n"
+                f"• URL: <code>{html.escape(st['image_url'])}</code>",
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            return await callback.answer("Updated!")
+
+        h = "✅" if st["home"] else "⬜"
+        p = "✅" if st["page"] else "⬜"
+        kb = _kb([
+            [
+                InlineKeyboardButton(f"{h} Home Grid Image", callback_data=f"cp:th:{token}"),
+                InlineKeyboardButton(f"{p} Page Image", callback_data=f"cp:tp:{token}"),
+            ],
+            [
+                InlineKeyboardButton("✨ Select Both", callback_data=f"cp:both:{token}"),
+                InlineKeyboardButton("💾 Done", callback_data=f"cp:done:{token}"),
+            ],
+        ])
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
 
     @bot.on_message(filters.command("save") & filters.private)
     async def save_command(client, message: Message):

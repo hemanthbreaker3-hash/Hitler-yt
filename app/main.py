@@ -239,8 +239,12 @@ async def index(request: Request):
     initial_categories = []
     try:
         cf_base = await get_active_cloudflare_url()
-        raw_items = await db.catalog_pages.find({"published": True}, {"_id": 0, "groups": 0, "overview": 0}).sort("created_at", -1).to_list(100)
-        initial_items = [serialize_catalog_doc(r, cf_base) for r in raw_items]
+        raw_items = await db.catalog_pages.find({"published": True}, {"_id": 0, "overview": 0}).sort("created_at", -1).to_list(100)
+        initial_items = []
+        for r in raw_items:
+            sd = serialize_catalog_doc(r, cf_base)
+            sd.pop("groups", None)
+            initial_items.append(sd)
         raw_cats = await db.catalog_categories.find({}, {"_id": 0}).sort("name", 1).to_list(None)
         for c in raw_cats:
             c_copy = dict(c)

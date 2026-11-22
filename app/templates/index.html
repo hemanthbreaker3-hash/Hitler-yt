@@ -11,7 +11,7 @@
 {% block content %}
 <form class="search-bar" action="/search" method="get" role="search">
   <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
-  <input name="q" placeholder="Search movies, series, or anime…" autocomplete="off" maxlength="100" aria-label="Search catalog">
+  <input name="q" placeholder="Search your favourite content…" autocomplete="off" maxlength="100" aria-label="Search catalog">
   <button type="submit">Search</button>
 </form>
 
@@ -105,7 +105,22 @@ window.__INITIAL_CATEGORIES__ = {{ initial_categories|default([])|tojson }};
     const play = document.createElement('div');
     play.className = 'play-hint';
     play.innerHTML = '<span>▶</span>';
-    media.append(img, play);
+
+    const cardBadges = document.createElement('div');
+    cardBadges.className = 'card-badges';
+    if (p.watch_buttons_label) {
+      const qPill = document.createElement('span');
+      qPill.className = 'badge-quality';
+      qPill.textContent = String(p.watch_buttons_label);
+      cardBadges.appendChild(qPill);
+    }
+    if (Array.isArray(p.genres) && p.genres.length) {
+      const g = document.createElement('span');
+      g.className = 'badge-genre';
+      g.textContent = String(p.genres[0]).toUpperCase();
+      cardBadges.appendChild(g);
+    }
+    media.append(img, play, cardBadges);
 
     const info = document.createElement('div');
     info.className = 'info';
@@ -116,26 +131,10 @@ window.__INITIAL_CATEGORIES__ = {{ initial_categories|default([])|tojson }};
     const meta = document.createElement('div');
     meta.className = 'meta';
     const year = (p.release_date || p.first_air_date || '').toString().slice(0, 4);
-    const mt = p.media_type ? String(p.media_type).toUpperCase() : '';
-    meta.textContent = [year, mt].filter(Boolean).join(' · ');
-
-    const badges = document.createElement('div');
-    badges.className = 'badge-row';
-    if (Array.isArray(p.genres) && p.genres.length) {
-      const g = document.createElement('span');
-      g.className = 'badge badge-genre';
-      g.textContent = String(p.genres[0]).toUpperCase();
-      badges.appendChild(g);
-    }
-    if (p.rating != null && Number(p.rating) > 0) {
-      const rt = document.createElement('span');
-      rt.className = 'badge badge-rating';
-      rt.textContent = '★ ' + Number(p.rating).toFixed(1);
-      badges.appendChild(rt);
-    }
+    const isSeries = String(p.media_type || '').toLowerCase() === 'tv';
+    meta.textContent = year || (isSeries ? 'SERIES' : 'MOVIE');
 
     info.append(title, meta);
-    if (badges.childElementCount) info.append(badges);
     a.append(media, info);
     return a;
   }

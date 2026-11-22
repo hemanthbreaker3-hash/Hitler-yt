@@ -122,6 +122,19 @@ def serialize_catalog_doc(doc: dict, cloudflare_base: str | None = None) -> dict
         else:
             out[k] = v
     out['groups'] = rewrite_page_groups_to_cloudflare(out.get('groups', []), cloudflare_base)
+    wb_label = ''
+    for g in (out.get('groups') or []):
+        if not isinstance(g, dict):
+            continue
+        box = str(g.get('box') or 'watch').strip().lower()
+        if box not in ('watch', ''):
+            continue
+        btns = [str((b or {}).get('name') or (b or {}).get('text') or '').strip() for b in (g.get('buttons') or []) if isinstance(b, dict)]
+        btns = [x for x in btns if x]
+        if btns:
+            wb_label = ' . '.join(btns)
+            break
+    out['watch_buttons_label'] = wb_label
     return out
 
 
