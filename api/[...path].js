@@ -2503,6 +2503,25 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .p4u-ep-pill { padding: 4px 10px !important; font-size: 11px !important; }
   }
 
+
+  /* Inline Episodes / Seasons & EXTRA side/below card */
+  .side-eps{display:flex;flex-direction:column;gap:10px;max-height:540px}
+  .side-season-bar{display:flex;flex-wrap:wrap;gap:6px}
+  .side-season-bar button{border:1px solid rgba(255,255,255,.15);background:#151b29;color:#cbd5e1;border-radius:999px;padding:6px 12px;font-size:11px;font-weight:800;cursor:pointer}
+  .side-season-bar button.active{background:linear-gradient(125deg,#3b82f6,#8b5cf6);color:#fff;border-color:transparent}
+  .side-ep-tools{display:flex;flex-direction:column;gap:8px}
+  .side-ep-tools select,.side-ep-tools input{width:100%;min-height:38px;border:1px solid rgba(255,255,255,.14);border-radius:10px;background:#0b0e16;color:#fff;padding:8px 10px;font-size:12px;outline:none}
+  .side-ep-list{display:flex;flex-direction:column;gap:6px;overflow-y:auto;max-height:320px;padding-right:2px}
+  .side-ep-btn{display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:10px;background:#141a28;border:1px solid rgba(255,255,255,.08);color:#e2e8f0;text-decoration:none;font-size:12px;font-weight:700}
+  .side-ep-btn:hover{border-color:rgba(139,92,246,.5);background:#192133}
+  .side-ep-btn.active{border-color:#3b82f6;background:rgba(59,130,246,.2);color:#fff}
+  .side-ep-btn .ep-tag{background:rgba(139,92,246,.25);color:#c4b5fd;padding:2px 7px;border-radius:6px;font-size:10px;font-weight:800;flex:0 0 auto}
+  .side-ep-btn .ep-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .side-ep-count{font-size:11px;color:#9ca3af}
+  .audio-track-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .audio-track-select{background:#0b0e16;color:#fff;border:1px solid rgba(59,130,246,.35);border-radius:10px;padding:8px 12px;font-size:12px;font-weight:700;min-width:190px;outline:none}
+  .audio-track-status{font-size:12px;color:#93c5fd}
+
     .toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:rgba(12,16,26,.95);border:1px solid rgba(59,130,246,.45);color:#fff;padding:9px 16px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:100}
     .toast.active{opacity:1}
   </style>`;
@@ -2535,7 +2554,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   </div>
   <div class="p4u-pop quality-pop" id="switchPop"><div class="pop-title">Switch Quality / Source</div><div id="switchPopList"></div></div>
   <div class="p4u-pop external-pop" id="laptopPop"><div class="pop-title">Open in External Player</div><div id="laptopPopList"></div></div>
-  ${watchGroups.length > 1 ? `<div class="p4u-drawer" id="episodesDrawer"><div class="p4u-drawer-head"><span>Episodes / Seasons</span><button type="button" class="p4u-icon-btn" id="closeDrawerBtn">✕</button></div><div class="p4u-season-bar" id="sideSeasonBar"></div><div class="p4u-drawer-tools"><select id="seasonFilter"><option value="all">All Seasons</option></select><input id="episodeSearch" type="search" placeholder="Search EP…"></div><div class="p4u-ep-list" id="sideEpList"></div></div>` : ''}
+  
     </div>
     <div class="p4u-below-bar">
       <button type="button" class="p4u-ep-pill" id="prevGroupBtn" disabled>← Previous</button>
@@ -2545,6 +2564,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
       </div>
       <button type="button" class="p4u-ep-pill" id="nextGroupBtn" disabled>Next Episode →</button>
     </div>
+    ${watchGroups.length > 1 ? `<div class="watch-side-card side-eps" id="sideEpsCard" style="margin-top:14px"><h3>Episodes / Seasons</h3><div class="side-season-bar" id="sideSeasonBar"></div><div class="side-ep-tools"><select id="seasonFilter" aria-label="Select season"><option value="all">All Seasons</option></select><input id="episodeSearch" type="search" placeholder="Search EP…"></div><div class="side-ep-list" id="sideEpList"></div><div class="side-ep-count" id="episodeCount"></div></div>` : ''}
     <div class="watch-info-card">
       <h1>${escapeHtml(file.filename || 'Media')}</h1>
       <div class="watch-meta-pills">
@@ -2552,6 +2572,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
         <span>${escapeHtml(file.access_count || 0)} views</span>
         ${groupName ? `<span>${escapeHtml(groupName)}</span>` : ''}
       </div>
+      <div class="audio-track-row" id="audioTrackRow" style="display:none"><select id="audioSelect" class="audio-track-select" aria-label="Audio track"></select><span id="audioTrackStatus" class="audio-track-status"></span></div>
       <div class="watch-tools">
         <a class="btn btn-accent" href="${escapeHtml(dlHref)}" ${downloadsEnabled ? 'download' : 'target="_blank" rel="noopener"'}>⬇ Download</a>
         <button type="button" class="btn" onclick="navigator.clipboard?.writeText(location.href).then(()=>showToast('Watch link copied!'))">Copy Watch Link</button>
@@ -2718,21 +2739,173 @@ fsBtn?.addEventListener('click', (e) => { e.stopPropagation(); const active = do
 document.addEventListener('fullscreenchange', () => { const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement); if (fsIcon) fsIcon.innerHTML = isFull ? '<path d="M9 4v5H4M15 4v5h5M20 15h-5v5M4 15h5v5"/>' : '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>'; });
 const prevBtn = document.getElementById('prevGroupBtn'), nextBtn = document.getElementById('nextGroupBtn');
 if (WATCH_GROUPS.length) { if (prevBtn) { prevBtn.disabled = GROUP_INDEX <= 0; prevBtn.onclick = () => { if (GROUP_INDEX > 0) goToGroupButton(GROUP_INDEX - 1, preferredButtonForGroup(GROUP_INDEX - 1)); }; } if (nextBtn) { nextBtn.disabled = GROUP_INDEX >= WATCH_GROUPS.length - 1; nextBtn.onclick = () => { if (GROUP_INDEX < WATCH_GROUPS.length - 1) goToGroupButton(GROUP_INDEX + 1, preferredButtonForGroup(GROUP_INDEX + 1)); }; } }
-document.getElementById('episodesDrawerBtn')?.addEventListener('click', (e) => { e.stopPropagation(); swPop?.classList.remove('open'); lpPop?.classList.remove('open'); epDrawer?.classList.toggle('open'); });
+document.getElementById('episodesDrawerBtn')?.addEventListener('click', (e) => { e.stopPropagation(); document.getElementById('sideEpsCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
 document.getElementById('closeDrawerBtn')?.addEventListener('click', (e) => { e.stopPropagation(); epDrawer?.classList.remove('open'); });
 document.addEventListener('click', (e) => { const t = e.target; if (t?.closest && (t.closest('.p4u-pop') || t.closest('.p4u-drawer') || t.closest('#pcSwitchBtn') || t.closest('#pcLaptopBtn') || t.closest('#episodesDrawerBtn'))) return; swPop?.classList.remove('open'); lpPop?.classList.remove('open'); epDrawer?.classList.remove('open'); });
-(function initEpisodesDrawer(){
-  const list = document.getElementById('sideEpList'), seasonSelect = document.getElementById('seasonFilter'), search = document.getElementById('episodeSearch'), seasonBar = document.getElementById('sideSeasonBar');
-  if (!list || WATCH_GROUPS.length <= 1) return;
-  function parseEp(name) { const t = String(name||'').replace(/[._]+/g,' '); const m = t.match(/S0*(\d{1,3})\s*[- ]*E(?:p)?0*(\d{1,4})/i) || t.match(/0*(\d{1,3})\s*x\s*0*(\d{1,4})/i); if (m) return { s: Number(m[1]), e: Number(m[2]) }; const eo = t.match(/(?:Episode|Ep)\s*0*(\d{1,4})/i); return eo ? { s: 1, e: Number(eo[1]) } : null; }
-  const rows = WATCH_GROUPS.map((g, idx) => ({ g, idx, p: parseEp(g.name) }));
-  const seasons = [...new Set(rows.filter(r => r.p).map(r => r.p.s))].sort((a,b)=>a-b);
-  let selected = seasons.length ? String((rows.find(r=>r.idx===GROUP_INDEX)?.p?.s) || seasons[0]) : 'all';
-  if (seasonSelect && seasons.length) { seasons.forEach(s => { const o = document.createElement('option'); o.value = String(s); o.textContent = 'Season ' + s; seasonSelect.appendChild(o); }); seasonSelect.value = selected; seasonSelect.onchange = () => { selected = seasonSelect.value; render(); }; }
-  if (seasonBar && seasons.length) { seasons.forEach(s => { const b = document.createElement('button'); b.type = 'button'; b.textContent = 'S'+s; if (String(s) === selected) b.classList.add('active'); b.onclick = () => { selected = String(s); if (seasonSelect) seasonSelect.value = selected; seasonBar.querySelectorAll('button').forEach(x=>x.classList.toggle('active', x===b)); render(); }; seasonBar.appendChild(b); }); }
-  function render() { const q = (search?.value||'').trim().toLowerCase(); list.innerHTML = ''; rows.filter(r => (selected === 'all' || !seasons.length || (r.p && String(r.p.s) === selected)) && (!q || String(r.g.name||'').toLowerCase().includes(q))).forEach(r => { const a = document.createElement('a'); a.className = 'p4u-ep-item' + (r.idx === GROUP_INDEX ? ' active' : ''); a.href = watchHrefFor(r.idx, preferredButtonForGroup(r.idx)) || '#'; a.innerHTML = '<span class="p4u-ep-tag">' + (r.p ? 'S'+String(r.p.s).padStart(2,'0')+'·E'+String(r.p.e).padStart(2,'0') : 'EP') + '</span><span class="p4u-ep-name">' + (r.g.name || ('Group '+(r.idx+1))).replace(/</g,'&lt;') + '</span>'; list.appendChild(a); }); }
-  search?.addEventListener('input', render); render();
+(function initEpisodesSidePanel(){
+  const list = document.getElementById('sideEpList');
+  const seasonSelect = document.getElementById('seasonFilter');
+  const search = document.getElementById('episodeSearch');
+  const count = document.getElementById('episodeCount');
+  const seasonBar = document.getElementById('sideSeasonBar');
+  const card = document.getElementById('sideEpsCard');
+  if (!list || !Array.isArray(WATCH_GROUPS) || WATCH_GROUPS.length <= 1) {
+    if (card) card.style.display = 'none';
+    return;
+  }
+  if (card) card.style.display = '';
+  function parseEp(name) {
+    const t = String(name || '').replace(/[._]+/g, ' ').trim();
+    // Use [0-9] and [ ] only so template literals never strip backslashes
+    let m = t.match(/S0*([0-9]{1,3})[ -]*E(?:p|pisode)?[ ]*0*([0-9]{1,4})/i);
+    if (m) return { s: Number(m[1]), e: Number(m[2]) };
+    m = t.match(/0*([0-9]{1,3})[ ]*[xX][ ]*0*([0-9]{1,4})/);
+    if (m) return { s: Number(m[1]), e: Number(m[2]) };
+    m = t.match(/Season[ ]*0*([0-9]{1,3})[ -]*(?:Episode|Ep|E)[ ]*0*([0-9]{1,4})/i);
+    if (m) return { s: Number(m[1]), e: Number(m[2]) };
+    if (/Season[ ]*0*[0-9]{1,3}/i.test(t) && !/(?:Episode|Ep|E)[ ]*0*[0-9]{1,4}/i.test(t)) return null;
+    m = t.match(/(?:Episode|Ep)[ ]*0*([0-9]{1,4})/i);
+    if (m) return { s: 1, e: Number(m[1]) };
+    return null;
+  }
+  const parsedRows = [];
+  const extraRows = [];
+  WATCH_GROUPS.forEach((g, idx) => {
+    const p = parseEp(g && g.name);
+    if (p && Number.isFinite(p.s) && p.s > 0 && Number.isFinite(p.e) && p.e > 0) parsedRows.push({ g, idx, p });
+    else extraRows.push({ g, idx, p: null });
+  });
+  parsedRows.sort((a, b) => a.p.s - b.p.s || a.p.e - b.p.e || a.idx - b.idx);
+  const seasons = [...new Set(parsedRows.map(r => r.p.s))].sort((a, b) => a - b);
+  const useSeasons = seasons.length > 0;
+  const curRow = parsedRows.find(r => r.idx === GROUP_INDEX);
+  let selected = useSeasons ? (curRow ? String(curRow.p.s) : String(seasons[0])) : 'extra';
+
+  if (seasonSelect) {
+    seasonSelect.innerHTML = '';
+    if (useSeasons) {
+      const allOpt = document.createElement('option');
+      allOpt.value = 'all'; allOpt.textContent = 'All Seasons';
+      seasonSelect.appendChild(allOpt);
+      seasons.forEach(s => {
+        const o = document.createElement('option');
+        o.value = String(s);
+        const n = parsedRows.filter(r => r.p.s === s).length;
+        o.textContent = 'Season ' + s + ' (' + n + ' eps)';
+        seasonSelect.appendChild(o);
+      });
+    }
+    if (extraRows.length) {
+      const o = document.createElement('option');
+      o.value = 'extra';
+      o.textContent = useSeasons ? ('EXTRA (' + extraRows.length + ' groups)') : ('All Groups (' + extraRows.length + ')');
+      seasonSelect.appendChild(o);
+    }
+  }
+
+  function setSeasonUI(val) {
+    selected = val;
+    if (seasonSelect) seasonSelect.value = val;
+    if (seasonBar) seasonBar.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.season === val));
+  }
+
+  if (seasonBar) {
+    seasonBar.innerHTML = '';
+    if (useSeasons) {
+      seasons.forEach(s => {
+        const n = parsedRows.filter(r => r.p.s === s).length;
+        const b = document.createElement('button'); b.type = 'button'; b.dataset.season = String(s);
+        b.textContent = 'S' + s + ' (' + n + ')';
+        b.onclick = () => { setSeasonUI(String(s)); render(); };
+        seasonBar.appendChild(b);
+      });
+    }
+    if (extraRows.length) {
+      const b = document.createElement('button'); b.type = 'button'; b.dataset.season = 'extra';
+      b.textContent = useSeasons ? ('EXTRA (' + extraRows.length + ')') : ('Groups (' + extraRows.length + ')');
+      b.onclick = () => { setSeasonUI('extra'); render(); };
+      seasonBar.appendChild(b);
+    }
+  }
+  setSeasonUI(selected);
+
+  function render() {
+    const q = (search?.value || '').trim().toLowerCase();
+    let rows = selected === 'extra' ? extraRows : (selected === 'all' ? parsedRows.concat(extraRows) : parsedRows.filter(r => String(r.p.s) === selected));
+    if (q) rows = rows.filter(r => String(r.g.name || '').toLowerCase().includes(q));
+    list.innerHTML = '';
+    rows.forEach(r => {
+      const a = document.createElement('a');
+      a.className = 'side-ep-btn' + (r.idx === GROUP_INDEX ? ' active' : '');
+      a.href = watchHrefFor(r.idx, preferredButtonForGroup(r.idx)) || '#';
+      const tag = document.createElement('span'); tag.className = 'ep-tag';
+      tag.textContent = r.p ? ('S' + String(r.p.s).padStart(2,'0') + ' · EP ' + String(r.p.e).padStart(2,'0')) : 'EXTRA';
+      const nm = document.createElement('span'); nm.className = 'ep-name';
+      nm.textContent = r.g.name || ('Group ' + (r.idx + 1));
+      a.append(tag, nm);
+      list.appendChild(a);
+    });
+    if (count) count.textContent = rows.length + ' ' + (selected === 'extra' ? 'group' : 'episode') + (rows.length === 1 ? '' : 's');
+  }
+  search?.addEventListener('input', render);
+  if (seasonSelect) seasonSelect.onchange = () => { setSeasonUI(seasonSelect.value || 'all'); render(); };
+  render();
 })();
+
+// Load audio tracks from /api/tracks/<SHORT_CODE> and switch cleanly
+(function initAudioTrackSelector(){
+  const box = document.getElementById('audioTrackRow');
+  const sel = document.getElementById('audioSelect');
+  const st = document.getElementById('audioTrackStatus');
+  if (!box || !sel) return;
+  fetch('/api/tracks/' + encodeURIComponent(SHORT_CODE), { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      const tracks = (data && Array.isArray(data.audio_tracks)) ? data.audio_tracks : [];
+      if (!tracks.length) return;
+      sel.innerHTML = '';
+      tracks.forEach((tr, i) => {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        const lang = tr.language || tr.lang || '';
+        const title = tr.title || '';
+        const codec = tr.codec || '';
+        const label = ['Track ' + (i + 1), lang.toUpperCase(), title, codec].filter(Boolean).join(' · ');
+        opt.textContent = label;
+        sel.appendChild(opt);
+      });
+      box.style.display = 'flex';
+      if (st) st.textContent = tracks.length + ' audio track' + (tracks.length === 1 ? '' : 's');
+      sel.onchange = () => {
+        const idx = Number(sel.value) || 0;
+        // Try Movi-Player native audio track API first, then fallback to seekable AAC remux for that track
+        try {
+          if (mp && typeof mp.setAudioTrack === 'function') {
+            mp.setAudioTrack(idx);
+            showToast('Audio switched to Track ' + (idx + 1));
+            return;
+          }
+          if (mp && mp.audioTracks && mp.audioTracks.length > idx) {
+            for (let k = 0; k < mp.audioTracks.length; k++) mp.audioTracks[k].enabled = (k === idx);
+            showToast('Audio switched to Track ' + (idx + 1));
+            return;
+          }
+        } catch (_) {}
+        const t = Number(mp && mp.currentTime) || 0;
+        showLoading();
+        mp.src = REMUX_URL + '?audio=' + idx + '&aac=1';
+        if (typeof mp.load === 'function') mp.load();
+        mp.addEventListener('loadedmetadata', () => {
+          if (t > 1) { try { mp.currentTime = t; } catch (_) {} }
+          forceUnmuteMovi();
+          mp.play()?.catch(() => {});
+        }, { once: true });
+        showToast('Loading Audio Track ' + (idx + 1) + '…');
+      };
+    })
+    .catch(() => {});
+})();
+
 
 // Smooth Movi-Player v0.4.1 playback, resume position, and buffering/stall recovery
 let stallRetries = 0, lastProgressAt = Date.now(), recoveryInFlight = false, stallTimer = null, usedBackendFallback = false;
