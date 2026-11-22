@@ -484,7 +484,17 @@ async function ensureTmdbBackdrops(db, tmdbKeyOverride) {
           }
         }
         if (!data) continue;
-        const backdrop = data.backdrop_path || '';
+        let backdrop = data.backdrop_path || '';
+        try {
+          const mtImg = (data.media_type === 'tv' || mediaType === 'tv') ? 'tv' : 'movie';
+          const ir = await fetch('https://api.themoviedb.org/3/' + mtImg + '/' + tid + '/images?api_key=' + encodeURIComponent(tmdbKey) + '&include_image_language=en,hi,ja,ko,te,ta,null', { signal: AbortSignal.timeout(5000) });
+          if (ir.ok) {
+            const ij = await ir.json();
+            const bds = Array.isArray(ij.backdrops) ? ij.backdrops : [];
+            const enBd = bds.find(x => x && x.file_path && x.iso_639_1 === 'en') || bds.find(x => x && x.file_path && x.iso_639_1);
+            if (enBd && enBd.file_path) backdrop = enBd.file_path;
+          }
+        } catch (_) {}
         const poster = data.poster_path || '';
         if (!backdrop && !poster) continue;
         const patch = { updated_at: new Date() };
@@ -1028,7 +1038,7 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
     }
 
     const pager = document.getElementById('catalogPager');
-    const PER_PAGE = 24;
+    const PER_PAGE = 12;
     let catalogPage = 1;
     const maxPages = Math.max(1, Math.ceil(list.length / PER_PAGE));
     const drawPage = () => {
@@ -1062,10 +1072,8 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
       const play = document.createElement('div'); play.className = 'play-hint'; play.innerHTML = '<span>▶</span>';
       const cardBadges = document.createElement('div');
       cardBadges.className = 'card-badges';
-      if (p.watch_buttons_label) {
-        const qPill = document.createElement('span'); qPill.className = 'badge-quality'; qPill.textContent = String(p.watch_buttons_label);
-        cardBadges.appendChild(qPill);
-      }
+      const qPill = document.createElement('span'); qPill.className = 'badge-quality'; qPill.textContent = '1080P';
+      cardBadges.appendChild(qPill);
       if (Array.isArray(p.genres) && p.genres.length) {
         const g = document.createElement('span'); g.className = 'badge-genre'; g.textContent = String(p.genres[0]).toUpperCase();
         cardBadges.appendChild(g);
@@ -1085,22 +1093,35 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
       a.append(media, info);
       el.append(a);
       }
-      if (pager) {
-        pager.hidden = maxPages <= 1;
-        pager.innerHTML = '';
-        if (maxPages > 1) {
-          const make = (label, target, disabled = false, active = false) => {
-            const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.disabled = disabled;
-            if (active) b.classList.add('active');
-            b.onclick = () => { catalogPage = target; drawPage(); document.getElementById('catalog')?.scrollIntoView({behavior:'smooth',block:'start'}); };
-            pager.appendChild(b);
-          };
-          make('‹', catalogPage - 1, catalogPage <= 1);
-          const first = Math.max(1, Math.min(catalogPage - 2, maxPages - 4));
-          for (let n = first; n <= Math.min(maxPages, first + 4); n++) make(String(n), n, false, n === catalogPage);
-          make('›', catalogPage + 1, catalogPage >= maxPages);
+    if (pager) {
+      pager.hidden = maxPages <= 1;
+      pager.innerHTML = '';
+      if (maxPages > 1) {
+        const make = (label, page, disabled = false, active = false) => {
+          const b = document.createElement('button');
+          b.type = 'button'; b.textContent = label; b.disabled = disabled;
+          if (active) b.classList.add('active');
+          b.onclick = () => { catalogPage = page; drawPage(); document.getElementById('catalog')?.scrollIntoView({behavior:'smooth',block:'start'}); };
+          pager.appendChild(b);
+        };
+        const dots = () => {
+          const s = document.createElement('span');
+          s.textContent = '…';
+          s.style.cssText = 'color:var(--muted);padding:0 4px;font-weight:700';
+          pager.appendChild(s);
+        };
+        make('‹', catalogPage - 1, catalogPage <= 1);
+        const nums = new Set([1, maxPages, catalogPage - 1, catalogPage, catalogPage + 1].filter(n => n >= 1 && n <= maxPages));
+        const sorted = Array.from(nums).sort((x, y) => x - y);
+        let prev = 0;
+        for (const n of sorted) {
+          if (prev && n - prev > 1) dots();
+          make(String(n), n, false, n === catalogPage);
+          prev = n;
         }
+        make('›', catalogPage + 1, catalogPage >= maxPages);
       }
+    }
     };
     drawPage();
     fillMissingBackdrops();
@@ -2681,7 +2702,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     .side-ep-btn .ep-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .side-ep-count{font-size:11px;color:#9ca3af}.episode-tools input{flex:1;min-width:160px}.episode-tools input:focus,.episode-tools select:focus{border-color:#22d3ee;box-shadow:0 0 0 3px rgba(139,92,246,.12)}.episode-count{font-size:12px;color:#9ca3af;align-self:center}
     .notice{padding:11px 13px;border-radius:11px;background:rgba(59,130,246,.06);border:1px solid rgba(139,92,246,.18);color:var(--muted);font-size:12px;margin-top:12px}
-    .player-shell{background:linear-gradient(135deg,#7c3aed,#22d3ee);box-shadow:0 22px 54px rgba(0,0,0,.5),0 0 28px rgba(124,58,237,.12)}
+    .player-shell{background:#0b0f18!important;border:1px solid rgba(255,255,255,.12)!important;border-radius:18px!important;padding:0!important;box-shadow:0 18px 46px rgba(0,0,0,.48)!important}
     .player-chrome-btn{background:rgba(9,12,20,.82);border-color:rgba(148,163,184,.22)}.player-chrome-btn:hover{background:rgba(124,58,237,.24);border-color:rgba(34,211,238,.45)}
     .player-pop{background:rgba(10,14,22,.97);border-color:rgba(139,92,246,.35)}.player-pop button:hover,.player-pop a:hover{background:rgba(139,92,246,.18)}
     .related-groups{background:linear-gradient(160deg,rgba(20,25,36,.97),rgba(10,13,20,.97));border-color:rgba(148,163,184,.14)}
@@ -2696,7 +2717,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     @media(min-width:900px){.watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}.side{align-self:start;position:sticky;top:72px}}
 
     /* Clean RGB / Blue / Purple / Red / Green player accents & all-mode fixes */
-    .player-shell{background:linear-gradient(135deg,#3b82f6,#8b5cf6,#ef4444,#22c55e)!important;padding:2px!important}
+    .player-shell{background:#0b0f18!important;border:1px solid rgba(255,255,255,.12)!important;border-radius:18px!important;padding:0!important;box-shadow:0 18px 46px rgba(0,0,0,.48)!important}
     .player-chrome-btn{background:rgba(8,10,18,.88)!important;border:1px solid rgba(139,92,246,.38)!important;color:#f8fafc!important}
     .pc-switch{border-color:rgba(139,92,246,.6)!important;color:#c4b5fd!important}
     .pc-laptop{border-color:rgba(59,130,246,.6)!important;color:#93c5fd!important}
@@ -2753,6 +2774,13 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
     opacity: 0 !important;
     visibility: hidden !important;
     pointer-events: none !important;
+  }
+  #playerWrapper.controls-hidden .player-chrome-left,
+  #playerWrapper.controls-hidden .player-chrome-right,
+  #playerWrapper.controls-hidden .player-chrome-btn,
+  #playerWrapper.controls-hidden .player-brand-float,
+  #playerWrapper.controls-hidden .player-pop {
+    display: none !important;
   }
 
   </style>`;
@@ -4460,7 +4488,7 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET' && pathname === '/') {
       const [rawItems, rawCats] = await Promise.all([
-        db.collection('catalog_pages').find({ published: true }, { projection: { _id: 0, overview: 0 } }).sort({ created_at: -1 }).limit(100).toArray(),
+        db.collection('catalog_pages').find({ published: true }, { projection: { _id: 0, overview: 0 } }).sort({ created_at: -1 }).limit(1000).toArray(),
         db.collection('catalog_categories').find({}, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
       ]);
       const initialItems = rawItems.map((item) => { const s = serializeCatalogDoc(item, cloudflareUrl); delete s.groups; return s; });
@@ -4498,7 +4526,7 @@ export default async function handler(req, res) {
       }
 
       const [rawRows, cats, genreDocs] = await Promise.all([
-        db.collection('catalog_pages').find(query, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(100).toArray(),
+        db.collection('catalog_pages').find(query, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(1000).toArray(),
         db.collection('catalog_categories').find({}, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
         db.collection('catalog_pages').find({ published: true, genres: { $exists: true } }, { projection: { genres: 1 } }).toArray(),
       ]);
@@ -4762,7 +4790,7 @@ export default async function handler(req, res) {
             const candidates = await db.collection('catalog_pages').find(
               { published: true, 'groups.0': { $exists: true } },
               { projection: { slug: 1, groups: 1, poster_path: 1, title: 1 } }
-            ).limit(200).toArray();
+            ).limit(1000).toArray();
             for (const cand of candidates) {
               const groups = Array.isArray(cand.groups) ? cand.groups : [];
               const hit = groups.some((g) => (g.buttons || []).some((b) => String((b && b.url) || '').includes(shortCode)));

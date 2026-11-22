@@ -191,7 +191,7 @@ async def get_settings():
 
 
 
-async def backfill_tmdb_backdrops(limit: int = 80) -> int:
+async def backfill_tmdb_backdrops(limit: int = 200) -> int:
     """On startup: fetch TMDB landscape backdrops for catalog pages missing them."""
     key = getattr(settings, 'TMDB_API_KEY', None) or ''
     if not key:
@@ -209,6 +209,7 @@ async def backfill_tmdb_backdrops(limit: int = 80) -> int:
                     {'backdrop_path': {'$exists': False}},
                     {'backdrop_path': None},
                     {'backdrop_path': ''},
+                    {'backdrop_lang_en': {'$ne': True}},
                 ],
             },
             {'tmdb_id': 1, 'media_type': 1, 'title': 1, 'slug': 1},
@@ -259,10 +260,26 @@ async def backfill_tmdb_backdrops(limit: int = 80) -> int:
                     if not data:
                         continue
                     backdrop = data.get('backdrop_path') or ''
+                    try:
+                        mt_img = 'tv' if (data.get('media_type') == 'tv' or media_type == 'tv') else 'movie'
+                        ir = await client.get(
+                            f'https://api.themoviedb.org/3/{mt_img}/{int(tid)}/images',
+                            params={'api_key': key, 'include_image_language': 'en,hi,ja,ko,te,ta,null'},
+                        )
+                        if ir.status_code == 200:
+                            bds = ir.json().get('backdrops') or []
+                            en_bd = next((x for x in bds if x.get('file_path') and x.get('iso_639_1') == 'en'), None)
+                            any_lang_bd = next((x for x in bds if x.get('file_path') and x.get('iso_639_1')), None)
+                            if en_bd:
+                                backdrop = en_bd['file_path']
+                            elif any_lang_bd:
+                                backdrop = any_lang_bd['file_path']
+                    except Exception:
+                        pass
                     poster = data.get('poster_path') or ''
                     if not backdrop and not poster:
                         continue
-                    patch = {'updated_at': datetime.now(timezone.utc)}
+                    patch = {'backdrop_lang_en': True, 'updated_at': datetime.now(timezone.utc)}
                     if backdrop:
                         patch['backdrop_path'] = backdrop
                     if tid and not row.get('tmdb_id'):

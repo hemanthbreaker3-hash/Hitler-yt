@@ -35,7 +35,7 @@ window.__INITIAL_CATEGORIES__ = {{ initial_categories|default([])|tojson }};
   const nav = document.getElementById('category-nav');
   const countEl = document.getElementById('result-count');
   let catalogPage = 1;
-  const CATALOG_PER_PAGE = 24;
+  const CATALOG_PER_PAGE = 12;
   let catalogItems = [];
   const params = new URLSearchParams(location.search);
   let category = params.get('category') || '';
@@ -108,12 +108,10 @@ window.__INITIAL_CATEGORIES__ = {{ initial_categories|default([])|tojson }};
 
     const cardBadges = document.createElement('div');
     cardBadges.className = 'card-badges';
-    if (p.watch_buttons_label) {
-      const qPill = document.createElement('span');
-      qPill.className = 'badge-quality';
-      qPill.textContent = String(p.watch_buttons_label);
-      cardBadges.appendChild(qPill);
-    }
+    const qPill = document.createElement('span');
+    qPill.className = 'badge-quality';
+    qPill.textContent = '1080P';
+    cardBadges.appendChild(qPill);
     if (Array.isArray(p.genres) && p.genres.length) {
       const g = document.createElement('span');
       g.className = 'badge-genre';
@@ -146,23 +144,35 @@ window.__INITIAL_CATEGORIES__ = {{ initial_categories|default([])|tojson }};
     catalogItems.slice((catalogPage - 1) * CATALOG_PER_PAGE, catalogPage * CATALOG_PER_PAGE).forEach(p => grid.appendChild(card(p)));
     fillMissingBackdrops();
     const pager = document.getElementById('catalog-pagination');
-    if (!pager) return;
-    pager.hidden = pages <= 1;
-    pager.innerHTML = '';
-    if (pages <= 1) return;
-    const make = (label, page, disabled = false, active = false) => {
-      const b = document.createElement('button');
-      b.type = 'button'; b.textContent = label; b.disabled = disabled;
-      if (active) b.classList.add('active');
-      b.setAttribute('aria-label', label === '‹' ? 'Previous page' : label === '›' ? 'Next page' : 'Page ' + label);
-      b.onclick = () => { catalogPage = page; renderCatalogPage(); document.getElementById('catalog')?.scrollIntoView({behavior:'smooth',block:'start'}); };
-      pager.appendChild(b);
-    };
-    make('‹', catalogPage - 1, catalogPage <= 1);
-    const start = Math.max(1, Math.min(catalogPage - 2, pages - 4));
-    const end = Math.min(pages, start + 4);
-    for (let n = start; n <= end; n++) make(String(n), n, false, n === catalogPage);
-    make('›', catalogPage + 1, catalogPage >= pages);
+    if (pager) {
+      pager.hidden = pages <= 1;
+      pager.innerHTML = '';
+      if (pages > 1) {
+        const make = (label, page, disabled = false, active = false) => {
+          const b = document.createElement('button');
+          b.type = 'button'; b.textContent = label; b.disabled = disabled;
+          if (active) b.classList.add('active');
+          b.onclick = () => { catalogPage = page; renderCatalogPage(); document.getElementById('catalog')?.scrollIntoView({behavior:'smooth',block:'start'}); };
+          pager.appendChild(b);
+        };
+        const dots = () => {
+          const s = document.createElement('span');
+          s.textContent = '…';
+          s.style.cssText = 'color:var(--muted);padding:0 4px;font-weight:700';
+          pager.appendChild(s);
+        };
+        make('‹', catalogPage - 1, catalogPage <= 1);
+        const nums = new Set([1, pages, catalogPage - 1, catalogPage, catalogPage + 1].filter(n => n >= 1 && n <= pages));
+        const sorted = Array.from(nums).sort((x, y) => x - y);
+        let prev = 0;
+        for (const n of sorted) {
+          if (prev && n - prev > 1) dots();
+          make(String(n), n, false, n === catalogPage);
+          prev = n;
+        }
+        make('›', catalogPage + 1, catalogPage >= pages);
+      }
+    }
   }
 
   function chip(label, value, active) {

@@ -285,7 +285,7 @@
   .btn.accent:hover{filter:brightness(1.08);box-shadow:0 0 14px rgba(59,130,246,.4)}
 
   :root{--blue:#8b5cf6;--blue-glow:#3b82f6;--line2:rgba(255,255,255,.1);--neon-blue:0 0 16px rgba(183,160,255,.12);--red-glow:#3b82f6}
-  .player-shell{background:linear-gradient(135deg,#8b5cf6,#3b82f6,#8b5cf6);box-shadow:0 18px 46px rgba(0,0,0,.42)}
+  .player-shell{background:#0b0f18!important;border:1px solid rgba(255,255,255,.12)!important;border-radius:18px!important;padding:0!important;box-shadow:0 18px 46px rgba(0,0,0,.48)!important}
   .player-box{background:#050609!important;border-radius:18px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
   .player-box::after{background:linear-gradient(145deg,rgba(255,255,255,.08),transparent 40%,rgba(228,189,130,.025));box-shadow:inset 0 1px 0 rgba(255,255,255,.1)}
   .card.info,.nav-row,.player-pop,.switch-pop,.laptop-pop{background:rgba(15,16,22,.92)!important;color:#f5f5f7!important;border:1px solid rgba(255,255,255,.1)!important;backdrop-filter:blur(18px);box-shadow:0 14px 36px rgba(0,0,0,.35)}
@@ -421,7 +421,7 @@
 <div class="watch-grid">
   <section>
     <div class="player-shell">
-      <div class="neon-ribbon" aria-hidden="true"></div>
+      
       <div class="player-box">
         <div class="player-wrapper" id="playerWrapper">
 <div class="player-brand-float" id="playerBrandFloat">{{ BRANDING }}</div>
@@ -1740,7 +1740,7 @@ movi-player.chrome-idle::part(progress-container) {
 
 
   /* Clean RGB / Blue / Purple / Red / Green button accents & all-mode fixes */
-  .player-shell{background:linear-gradient(135deg,#3b82f6,#8b5cf6,#ef4444,#22c55e)!important;padding:2px!important}
+  .player-shell{background:#0b0f18!important;border:1px solid rgba(255,255,255,.12)!important;border-radius:18px!important;padding:0!important;box-shadow:0 18px 46px rgba(0,0,0,.48)!important}
   .player-shell .neon-ribbon{background:conic-gradient(from 0deg,#3b82f6,#8b5cf6,#ef4444,#22c55e,#3b82f6)!important;opacity:.85!important}
   .player-chrome-btn{background:rgba(8,10,18,.88)!important;border:1px solid rgba(139,92,246,.38)!important;color:#f8fafc!important}
   .pc-switch{border-color:rgba(139,92,246,.6)!important;color:#c4b5fd!important}
@@ -1783,6 +1783,7 @@ movi-player.chrome-idle::part(progress-container) {
   #playerWrapper.controls-hidden .player-chrome-left,
   #playerWrapper.controls-hidden .player-chrome-right,
   #playerWrapper.controls-hidden .player-chrome-btn,
+  #playerWrapper.controls-hidden .pc-switch,
   #playerWrapper.controls-hidden .player-pop,
   #playerWrapper.controls-hidden .player-brand-float,
   #playerWrapper.controls-hidden .player-shortcut-hint,
@@ -1799,6 +1800,13 @@ movi-player.chrome-idle::part(progress-container) {
     opacity: 0 !important;
     visibility: hidden !important;
     pointer-events: none !important;
+  }
+  #playerWrapper.controls-hidden .player-chrome-left,
+  #playerWrapper.controls-hidden .player-chrome-right,
+  #playerWrapper.controls-hidden .player-chrome-btn,
+  #playerWrapper.controls-hidden .player-brand-float,
+  #playerWrapper.controls-hidden .player-pop {
+    display: none !important;
   }
 
 </style>

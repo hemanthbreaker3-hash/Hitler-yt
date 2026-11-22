@@ -3166,6 +3166,15 @@ def register_handlers(bot):
                 if getattr(ent, "url", None) and "/title/" in ent.url:
                     page_ref = ent.url
                     break
+            if not page_ref and getattr(rep, "reply_markup", None):
+                for row in (getattr(rep.reply_markup, "inline_keyboard", None) or []):
+                    for btn in row:
+                        bu = getattr(btn, "url", None) or ""
+                        if "/title/" in bu:
+                            page_ref = bu
+                            break
+                    if page_ref:
+                        break
             if not page_ref:
                 tm = re.search(r'https?://[^\s<>"]*/title/[^\s<>"]+', rep_text)
                 if tm:
