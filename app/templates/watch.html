@@ -1,373 +1,252 @@
 {% extends "base.html" %}
-{% block title %}{{ file.filename }} · HITLER YT{% endblock %}
+{% block title %}{{ title_page.title if title_page else file.filename }} · {{ BRANDING }}{% endblock %}
 {% block head %}
 <style>
-  {% if not player_settings.built_in_player_enabled %}.player-shell,.card.info{display:none!important}{% endif %}{% if not player_settings.streaming_enabled %}.player-shell{display:none!important}{% endif %}
+  /* Hide global site header on watch page for full-viewport Play4u-style theater */
+  .topbar, .footer { display: none !important; }
+  main.wrap { width: 100% !important; max-width: none !important; padding: 0 !important; margin: 0 !important; }
+  body { background: #000 !important; overflow-x: hidden; }
 
-  :root {
-    --blue: #8b5cf6;
-    --blue-glow: #22d3ee;
-    --line2: #2a2a3a;
-    --neon-blue: 0 0 12px rgba(139,92,246,.45);
-    --red-glow: #22d3ee;
+  .p4u-stage {
+    position: relative;
+    width: 100vw;
+    height: 100dvh;
+    min-height: 360px;
+    background: #000;
+    overflow: hidden;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
   }
+  .p4u-backdrop {
+    position: absolute; inset: 0;
+    background-size: cover; background-position: center;
+    filter: blur(18px) brightness(0.45) saturate(1.2);
+    transform: scale(1.08);
+    z-index: 0;
+    pointer-events: none;
+    transition: opacity .35s ease;
+  }
+  .p4u-stage.is-playing .p4u-backdrop { opacity: 0; }
 
-  /* ===== Player shell (keeps project neon look) ===== */
-  .player-shell{
-    position:relative;
-    border-radius:20px;
-    padding:2px;
-    overflow:hidden;
-    background:#0a0a14;
-    box-shadow:0 18px 48px rgba(0,0,0,.58),0 0 24px rgba(139,92,246,.16);
+  .p4u-stage movi-player {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: transparent;
+    object-fit: contain;
   }
-  .player-shell .neon-ribbon{
-    position:absolute;inset:-40%;
-    background:conic-gradient(from 0deg,#8b5cf6,#22d3ee,#8b5cf6,#22d3ee,#8b4acb,#8b5cf6);
-    animation:ribbon-rotate 14s linear infinite;z-index:0;pointer-events:none;
-  }
-  @keyframes ribbon-rotate{to{transform:rotate(360deg)}}
-  .player-box{
-    background:#000;border-radius:18px;overflow:hidden;position:relative;z-index:1;
-    box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
-  }
-  .player-box::after{
-    content:"";position:absolute;inset:0;border-radius:18px;
-    background:linear-gradient(145deg,rgba(255,255,255,.1),transparent 35%,transparent 65%,rgba(139,92,246,.05));
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 -1px 0 rgba(0,0,0,.25);
-    pointer-events:none;z-index:3;
-  }
-  @media (prefers-reduced-motion: reduce){
-    .player-shell .neon-ribbon{animation:none}
-  }
-
-  /* ===== Movi / native player container ===== */
-  .player-wrapper{
-    width:100%;
-    aspect-ratio:16/9;
-    position:relative;
-    background:#000;
-    /* avoid contain:layout — it breaks absolute chrome button hit-testing in some browsers */
-    contain:style;
-  }
-  .player-wrapper movi-player{
-    width:100%;height:100%;background:#000;object-fit:contain;display:block;
-  }
-  movi-player{
-    /* Theme to project blue neon */
-    --movi-primary:#8b5cf6;
-    --movi-primary-light:#22d3ee;
-    --movi-accent:#22d3ee;
-    --movi-brand-fill:linear-gradient(135deg,#8b5cf6,#22d3ee);
-    --movi-glass-bg:rgba(10,10,20,.88);
-    --movi-chrome-bg:rgba(10,10,20,.88);
-    --movi-bar-bg:rgba(10,10,20,.88);
-    --movi-chrome-fg:#f5f5f5;
-    --movi-surface:#12122a;
-    --movi-overlay-bg:linear-gradient(to top,rgba(5,5,12,.7) 0%,transparent 25%);
+  movi-player.player-fit-cover, movi-player.player-fit-cover::part(video) { object-fit: cover !important; }
+  movi-player.player-fit-contain, movi-player.player-fit-contain::part(video) { object-fit: contain !important; }
+  /* Hide Movi's internal duplicate chrome so Play4u unified controls lead */
+  movi-player::part(chrome), movi-player::part(controls), movi-player::part(bottom-controls),
+  movi-player::part(control-bar), movi-player::part(bottom-bar), movi-player::part(progress-container),
+  movi-player::part(overlay-controls), movi-player::part(controls-overlay) {
+    opacity: 0 !important;
+    pointer-events: none !important;
   }
 
-  .player-loading{
-    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-    background:#000;opacity:0;pointer-events:none;transition:opacity .25s ease;z-index:2;
+  /* Center Play Triangle */
+  .p4u-center-play {
+    position: absolute; z-index: 15; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 72px; height: 72px; border: 0; background: transparent; color: #fff;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    filter: drop-shadow(0 6px 24px rgba(0,0,0,.75));
+    transition: transform .18s ease, opacity .2s ease;
   }
-  .player-loading.active{opacity:1;background:rgba(0,0,0,.24);backdrop-filter:blur(2px)}
-  .player-loading .spinner{
-    width:42px;height:42px;border-radius:50%;
-    border:3px solid rgba(255,255,255,.18);border-top-color:#8b5cf6;
-    animation:dd-spin .8s linear infinite;
-  }
-  @keyframes dd-spin{to{transform:rotate(360deg)}}
+  .p4u-center-play:hover { transform: translate(-50%, -50%) scale(1.1); }
+  .p4u-center-play svg { width: 52px; height: 52px; fill: #fff; }
+  .p4u-stage.is-playing .p4u-center-play { opacity: 0; pointer-events: none; }
 
+  /* Loading Spinner */
+  .p4u-loading {
+    position: absolute; inset: 0; z-index: 14; display: none;
+    align-items: center; justify-content: center; pointer-events: none;
+    background: rgba(0,0,0,.25);
+  }
+  .p4u-loading.active { display: flex; }
+  .p4u-spinner {
+    width: 44px; height: 44px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,.18); border-top-color: #3b82f6;
+    animation: p4u-spin .75s linear infinite;
+  }
+  @keyframes p4u-spin { to { transform: rotate(360deg); } }
 
+  /* Top Overlay */
+  .p4u-top {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 30;
+    padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 28px max(16px, env(safe-area-inset-left));
+    background: linear-gradient(180deg, rgba(0,0,0,.85) 0%, rgba(0,0,0,.4) 65%, transparent 100%);
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+    transition: opacity .22s ease, visibility .22s ease;
+  }
+  .p4u-title-wrap { display: flex; align-items: flex-start; gap: 10px; min-width: 0; flex: 1; }
+  .p4u-back-btn {
+    width: 38px; height: 38px; border-radius: 50%; border: 1px solid rgba(255,255,255,.16);
+    background: rgba(15,18,28,.75); color: #fff; display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 auto; cursor: pointer; backdrop-filter: blur(10px); text-decoration: none;
+  }
+  .p4u-back-btn:hover { background: rgba(59,130,246,.35); border-color: rgba(59,130,246,.6); }
+  .p4u-titles { min-width: 0; }
+  .p4u-title {
+    font-family: var(--font-display, system-ui); font-size: clamp(14px, 2.4vw, 18px);
+    font-weight: 800; color: #fff; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .p4u-sub {
+    font-size: 12px; color: #9ca3af; margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .p4u-sub .p4u-lang { color: #38bdf8; font-weight: 600; }
 
-  /* ===== Built-in player chrome — clean toolbar ===== */
-  .player-chrome-btn{
-    position:relative;z-index:50;width:36px;height:36px;border-radius:10px;
-    border:1px solid rgba(255,255,255,.18);background:rgba(8,8,14,.88);
-    color:#fff;display:inline-flex;align-items:center;justify-content:center;
-    cursor:pointer;backdrop-filter:blur(10px);transition:background .15s,border-color .15s,transform .12s;
-    padding:0;line-height:0;pointer-events:auto!important;touch-action:manipulation;
-    -webkit-tap-highlight-color:transparent;user-select:none;flex:0 0 auto;
+  .p4u-top-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+  .p4u-circle-btn {
+    width: 38px; height: 38px; border-radius: 50%; border: 1px solid rgba(255,255,255,.16);
+    background: rgba(15,18,28,.78); color: #f8fafc; display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; backdrop-filter: blur(10px); transition: background .15s, border-color .15s, transform .12s;
   }
-  .player-chrome-btn:hover{background:rgba(139,92,246,.22);border-color:rgba(139,92,246,.5);transform:scale(1.06)}
-  .player-chrome-btn:active{transform:scale(.96)}
-  .player-chrome-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
-  .player-chrome-left{
-    position:absolute;z-index:50;top:10px;left:10px;display:flex;gap:6px;align-items:center;
-    pointer-events:auto;
-  }
-  .player-chrome-right{
-    position:absolute;z-index:50;top:10px;right:10px;display:flex;gap:6px;align-items:center;
-    pointer-events:auto;
-  }
-  .pc-switch,.pc-laptop,.pc-download,.pc-fit,.pc-retry,.pc-fullscreen{top:auto;left:auto;right:auto}
-  .player-shortcut-hint{position:absolute;z-index:3;left:12px;bottom:10px;max-width:calc(100% - 24px);padding:4px 8px;border-radius:8px;background:rgba(0,0,0,.5);color:rgba(255,255,255,.65);font:10px/1.3 system-ui;pointer-events:none;opacity:0;transition:opacity .2s}
-  #playerWrapper:not(.chrome-idle) .player-shortcut-hint{opacity:1}
-  movi-player.player-fit-cover::part(video){object-fit:cover!important}
-  movi-player.player-fit-contain::part(video){object-fit:contain!important}
-  .player-chrome-btn:focus-visible{outline:2px solid #8b5cf6;outline-offset:2px}
-  .player-pop{
-    position:absolute;z-index:60;min-width:150px;max-width:min(260px,88vw);
-    background:rgba(10,10,16,.97);border:1px solid rgba(139,92,246,.28);
-    border-radius:12px;padding:6px;box-shadow:0 12px 28px rgba(0,0,0,.5);
-    display:none;flex-direction:column;gap:2px;backdrop-filter:blur(12px);
-    pointer-events:auto;
-  }
-  .player-pop.open{display:flex}
-  .player-pop.switch-pop{top:48px;left:10px}
-  .player-pop.laptop-pop{top:48px;right:10px}
-  .player-pop button,.player-pop a{
-    display:block;width:100%;text-align:left;border:0;background:transparent;color:#eee;
-    padding:9px 11px;border-radius:8px;font:600 12px/1.3 system-ui;cursor:pointer;text-decoration:none;
-  }
-  .player-pop button:hover,.player-pop a:hover{background:rgba(139,92,246,.14)}
-  .player-pop .pop-title{font-size:10px;color:#9a9aab;padding:4px 10px 6px;text-transform:uppercase;letter-spacing:.05em;font-weight:700}
-  #switchPopList,#laptopPopList{display:flex;flex-direction:column;max-height:min(50vh,280px);overflow-y:auto;scrollbar-width:thin}
-  @media(max-width:700px){
-    .player-chrome-btn{width:34px;height:34px;border-radius:9px}
-    .player-chrome-btn svg{width:15px;height:15px}
-    .player-chrome-left,.player-chrome-right{top:8px;gap:5px}
-    .player-chrome-left{left:8px}.player-chrome-right{right:8px}
+  .p4u-circle-btn:hover { background: rgba(139,92,246,.35); border-color: rgba(139,92,246,.7); transform: scale(1.05); }
+  .p4u-circle-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* Bottom Overlay */
+  .p4u-bottom {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 30;
+    padding: 36px max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    background: linear-gradient(0deg, rgba(0,0,0,.92) 0%, rgba(0,0,0,.62) 60%, transparent 100%);
+    display: flex; flex-direction: column; gap: 10px;
+    transition: opacity .22s ease, visibility .22s ease;
   }
 
-  .nav-row{
-    display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;
+  /* Episode Prev/Next Pills Above Scrubber */
+  .p4u-ep-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .p4u-ep-pill {
+    padding: 7px 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,.18);
+    background: rgba(15,18,28,.76); color: #fff; font-size: 12px; font-weight: 700;
+    cursor: pointer; backdrop-filter: blur(8px); transition: background .15s, border-color .15s;
   }
-  .nav-row .nav-btn{
-    background:linear-gradient(180deg,#172033,#101621);border:1px solid var(--line2);
-    color:#fff;border-radius:12px;padding:10px 16px;font:700 13px var(--font,system-ui);
-    cursor:pointer;transition:border-color .2s,box-shadow .2s;
-  }
-  .nav-row .nav-btn:hover:not(:disabled){border-color:var(--blue);box-shadow:var(--neon-blue)}
-  .nav-row .nav-btn:disabled{opacity:.4;cursor:not-allowed}
-  .nav-row .nav-spacer{flex:1}
-  .nav-row .tg-btn{
-    background:linear-gradient(135deg,#0ea5e9,#2563eb);border:0;color:#fff;
-    border-radius:12px;padding:10px 16px;font:700 13px var(--font,system-ui);
-    text-decoration:none;display:inline-flex;align-items:center;gap:6px;
-  }
-  .nav-row .tg-btn:hover{filter:brightness(1.08)}
+  .p4u-ep-pill:hover:not(:disabled) { background: rgba(59,130,246,.3); border-color: rgba(59,130,246,.6); }
+  .p4u-ep-pill:disabled { opacity: .42; cursor: not-allowed; color: #9ca3af; }
 
-  .related-groups{margin-top:18px}
-  .related-groups h3{font-size:15px;margin:0 0 12px;color:#fff}
-  .related-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
-  .related-card{
-    display:block;text-decoration:none;color:inherit;border-radius:14px;overflow:hidden;
-    border:1px solid var(--line2);background:#111722;transition:border-color .2s,transform .15s;
+  /* Progress / Scrubber */
+  .p4u-progress-row { display: flex; align-items: center; gap: 10px; }
+  .p4u-time { font-size: 11px; font-weight: 700; color: #cbd5e1; min-width: 42px; font-variant-numeric: tabular-nums; }
+  .p4u-time.right { text-align: right; }
+  .p4u-scrub {
+    position: relative; flex: 1; height: 6px; border-radius: 999px;
+    background: rgba(255,255,255,.22); cursor: pointer; touch-action: none;
   }
-  .related-card:hover{border-color:var(--blue);transform:translateY(-2px)}
-  .related-card .thumb{
-    aspect-ratio:16/9;background:#000 center/cover no-repeat;position:relative;
+  .p4u-scrub-fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+    border-radius: 999px; background: linear-gradient(90deg, #3b82f6, #8b5cf6);
   }
-  .related-card .thumb::after{
-    content:"▶";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-    background:rgba(0,0,0,.35);font-size:22px;opacity:.9;
+  .p4u-scrub-thumb {
+    position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%);
+    width: 14px; height: 14px; border-radius: 50%; background: #fff;
+    box-shadow: 0 0 8px rgba(59,130,246,.8);
   }
-  .related-card .meta-line{padding:9px 10px;font-size:13px;font-weight:700;line-height:1.3;display:flex;flex-direction:column;gap:3px}.quality-count{color:#22d3ee;font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}.season-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 14px}.season-tabs button{border:1px solid rgba(148,163,184,.18);background:#111722;color:#9ca3af;border-radius:999px;padding:7px 13px;font-size:12px;font-weight:800;cursor:pointer}.season-tabs button.active{background:rgba(139,92,246,.14);border-color:rgba(139,92,246,.4);color:#c4b5fd}
-  .side-eps{max-height:min(70vh,560px);min-height:220px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
-  .side-season-bar{display:flex;flex-wrap:wrap;gap:6px}
-  .side-season-bar button{border:1px solid rgba(148,163,184,.2);background:#111722;color:#9ca3af;border-radius:999px;padding:6px 11px;font-size:11px;font-weight:800;cursor:pointer}
-  .side-season-bar button.active{background:linear-gradient(120deg,#3b82f6,#8b5cf6);border-color:transparent;color:#17130b}
-  .side-ep-tools{display:flex;flex-direction:column;gap:8px}
-  .side-ep-tools select,.side-ep-tools input{min-height:38px;border:1px solid var(--line2,#2a2a3a);border-radius:10px;background:#0d0d16;color:#fff;padding:8px 10px;outline:none;width:100%}
-  .side-ep-list{display:flex;flex:1 1 auto;flex-direction:column;gap:6px;overflow-y:auto;overflow-x:hidden;min-height:0;max-height:min(48vh,380px);padding:0 4px 4px 0;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scrollbar-width:thin}
-  .side-ep-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-radius:10px;border:1px solid rgba(148,163,184,.16);background:#101621;color:#e5e7eb;text-decoration:none;font-size:12px;font-weight:700}
-  .side-ep-btn:hover{border-color:rgba(139,92,246,.4);background:#151c2a}
-  .side-ep-btn.active{border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.08);color:#fff}
-  .side-ep-btn .ep-tag{flex:0 0 auto;background:rgba(139,92,246,.18);color:#c4b5fd;border-radius:7px;padding:3px 7px;font-size:10px;font-weight:900;letter-spacing:.04em}
-  .side-ep-btn .ep-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .side-ep-count{font-size:11px;color:#9ca3af}
 
+  /* Bottom Control Row */
+  .p4u-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .p4u-bar-left, .p4u-bar-right { display: flex; align-items: center; gap: 10px; }
+  .p4u-icon-btn {
+    border: 0; background: transparent; color: #fff; width: 34px; height: 34px;
+    display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+    border-radius: 8px; transition: background .15s;
+  }
+  .p4u-icon-btn:hover { background: rgba(255,255,255,.12); }
+  .p4u-icon-btn svg { width: 20px; height: 20px; fill: currentColor; }
+  .p4u-vol-range { width: 72px; accent-color: #3b82f6; cursor: pointer; }
+  @media (max-width: 540px) { .p4u-vol-range { display: none; } }
 
-  #playerWrapper:fullscreen{width:100vw;height:100vh;aspect-ratio:auto;display:flex;align-items:center;justify-content:center;background:#000;contain:none}
-  #playerWrapper:fullscreen movi-player{width:100%;height:100%;max-height:100vh}
-  #playerWrapper:fullscreen .player-chrome-btn{z-index:2147483000;position:absolute}
-  #playerWrapper:fullscreen .player-pop{z-index:2147483001}
-  movi-player:fullscreen{position:relative!important;width:100vw!important;height:100vh!important;background:#000!important}
-  movi-player:fullscreen .player-chrome-btn{z-index:2147483000}
-  @media(max-width:700px){.player-chrome-btn{width:38px;height:38px}.player-pop{max-width:min(280px,88vw)}}
-  .player-brand-float{left:54px!important;top:12px!important;max-width:70%;font-family:var(--font-display);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#f0e8ff;background:rgba(5,6,10,.58);border-color:rgba(228,189,130,.28);text-shadow:none}
-  .player-shell{background:#101116;box-shadow:0 20px 60px rgba(0,0,0,.48),0 0 0 1px rgba(255,255,255,.06)}
-  .player-shell .neon-ribbon{background:conic-gradient(from 0deg,#8b5cf6,#3b82f6,#8b5cf6);opacity:.72}
-  .player-chrome-btn{background:rgba(7,8,12,.78);border-color:rgba(255,255,255,.18)}
-  .related-card.active{border-color:#8b5cf6;box-shadow:0 0 0 1px rgba(139,92,246,.35)}
-  .related-pager{display:flex;align-items:center;gap:8px;margin-top:12px;justify-content:center}
-  .related-pager[hidden]{display:none!important}
-  .related-pager button{
-    background:var(--bg-card,#12122a);border:1px solid var(--line2);color:#fff;
-    border-radius:8px;padding:8px 12px;font:600 13px var(--font,system-ui);cursor:pointer;
+  .p4u-up-btn {
+    border: 1px solid rgba(255,255,255,.16); background: rgba(15,18,28,.75); color: #fff;
+    padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 800; letter-spacing: .04em;
+    display: inline-flex; align-items: center; gap: 5px; cursor: pointer; transition: background .15s, border-color .15s;
   }
-  .related-pager button:disabled{opacity:.4;cursor:not-allowed}
-  .related-pager span{color:var(--muted,#9ca3af);font-size:13px}
-  .related-pager button.active{background:linear-gradient(125deg,#8b5cf6,#22d3ee);border-color:transparent;color:#071018;font-weight:900}
-  .episode-tools{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}
-  .episode-tools input,.episode-tools select{min-height:40px;border:1px solid var(--line2);border-radius:10px;background:#0d0d16;color:#fff;padding:8px 12px;outline:none}
-  .episode-tools input{flex:1;min-width:160px}
-  .episode-tools input:focus,.episode-tools select:focus{border-color:#ef4444;box-shadow:0 0 0 3px rgba(139,92,246,.12)}
-  .episode-count{font-size:12px;color:var(--muted);align-self:center}
-  .related-card .meta-line{display:flex;justify-content:space-between;gap:8px}
+  .p4u-up-btn:hover { background: rgba(139,92,246,.32); border-color: rgba(139,92,246,.65); }
 
-  /* ===== Rest of page (project style) ===== */
-  .info{padding:18px 16px}
-  .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;color:var(--muted);font-size:13px}
-  .meta span{
-    background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);
-    padding:3px 10px;border-radius:20px;font-size:12px;
+  /* Controls Hidden on Tap */
+  .p4u-stage.controls-hidden .p4u-top,
+  .p4u-stage.controls-hidden .p4u-bottom,
+  .p4u-stage.controls-hidden .p4u-center-play,
+  .p4u-stage.controls-hidden .p4u-pop,
+  .p4u-stage.controls-hidden .p4u-drawer {
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    display: none !important;
   }
-  .tools{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
-  .select{
-    background:linear-gradient(180deg,#12122a,#0c0c1c);color:#fff;
-    border:1px solid var(--line2);border-radius:11px;padding:11px 14px;
-    max-width:100%;min-width:180px;outline:none;
-    transition:border-color .2s,box-shadow .2s;
-  }
-  .select:focus{border-color:var(--blue);box-shadow:var(--neon-blue)}
-  .player-panel{display:none}.player-panel.active{display:block}
-  .player-brand-float{position:absolute;z-index:12;top:12px;left:12px;max-width:65%;padding:6px 11px;border-radius:9px;background:rgba(3,10,24,.55);border:1px solid rgba(96,165,250,.32);color:#60a5fa;font-weight:900;font-size:clamp(11px,2.5vw,16px);letter-spacing:.04em;text-shadow:0 0 14px rgba(59,130,246,.65);pointer-events:none;opacity:.9;transition:top .5s,left .5s,opacity .5s;backdrop-filter:blur(8px)}
-  .player-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px}
-  .pbtn{
-    min-height:46px;border:1px solid var(--line);border-radius:12px;
-    background:linear-gradient(180deg,#172033,#101621);color:#fff;
-    display:flex;align-items:center;justify-content:center;text-align:center;
-    padding:10px;cursor:pointer;transition:border-color .2s,box-shadow .2s,transform .15s;font-size:13px;
-  }
-  .pbtn:hover{border-color:var(--blue);box-shadow:var(--neon-blue);transform:translateY(-1px)}
-  .copy-ok{font-size:12px;color:#69e69a;min-height:18px;margin-top:6px}
-  .player-tabs{
-    position:fixed;z-index:30;left:50%;bottom:max(12px,env(safe-area-inset-bottom));
-    transform:translateX(-50%);width:min(94vw,520px);
-    display:grid;grid-template-columns:repeat(4,1fr);gap:5px;padding:6px;
-    background:rgba(10,10,22,.94);border:1px solid var(--line);border-radius:16px;
-    box-shadow:0 8px 32px rgba(0,0,0,.55),0 0 0 1px rgba(59,130,246,.12);
-    backdrop-filter:blur(14px);
-  }
-  .tab{
-    border:0;background:transparent;color:var(--muted);
-    padding:10px 4px;border-radius:11px;font-size:12px;cursor:pointer;
-    transition:background .2s,color .2s,box-shadow .2s;
-  }
-  .tab.active{
-    background:linear-gradient(135deg,rgba(59,130,246,.25),rgba(139,92,246,.2));
-    color:#fff;box-shadow:inset 0 0 0 1px rgba(59,130,246,.35);
-  }
-  .volume-tools{
-    display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;font-size:13px;
-  }
-  .volume-tools label{display:flex;align-items:center;gap:6px;color:var(--muted)}
-  .volume-tools b{color:var(--blue-glow);min-width:40px}
-  .volume-tools input[type=range]{flex:1;min-width:120px;accent-color:var(--blue);height:6px}
-  .notice{
-    padding:11px 13px;border-radius:11px;background:rgba(59,130,246,.06);
-    border:1px solid rgba(139,92,246,.18);color:var(--muted);font-size:12px;margin-top:12px;
-  }
-  .track-status{font-size:12px;color:var(--muted);margin-left:8px}
-  .track-status.error{color:var(--red-glow)}
-  .filename{font-weight:700;font-size:16px;word-break:break-all}
-  .side .card{padding:16px}
-  .side b{font-size:14px;letter-spacing:.3px}
-  @media(min-width:900px){
-    .watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}
-    .side{align-self:start;position:sticky;top:72px}
-  }
-  .toast{
-    position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(20px);
-    background:rgba(10,10,22,.95);border:1px solid rgba(59,130,246,.35);
-    color:#fff;padding:10px 18px;border-radius:12px;font-size:13px;
-    opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:100;
-    box-shadow:0 8px 24px rgba(0,0,0,.5);
-  }
-  .toast.active{opacity:1;transform:translateX(-50%) translateY(0)}
-  .btn.accent{
-    background:linear-gradient(135deg,#8b5cf6,#2563eb);
-    border-color:#8b5cf6;color:#fff;
-  }
-  .btn.accent:hover{filter:brightness(1.08);box-shadow:0 0 14px rgba(59,130,246,.4)}
 
-  :root{--blue:#8b5cf6;--blue-glow:#3b82f6;--line2:rgba(255,255,255,.1);--neon-blue:0 0 16px rgba(183,160,255,.12);--red-glow:#3b82f6}
-  .player-shell{background:#0b0f18!important;border:1px solid rgba(255,255,255,.12)!important;border-radius:18px!important;padding:0!important;box-shadow:0 18px 46px rgba(0,0,0,.48)!important}
-  .player-box{background:#050609!important;border-radius:18px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
-  .player-box::after{background:linear-gradient(145deg,rgba(255,255,255,.08),transparent 40%,rgba(228,189,130,.025));box-shadow:inset 0 1px 0 rgba(255,255,255,.1)}
-  .card.info,.nav-row,.player-pop,.switch-pop,.laptop-pop{background:rgba(15,16,22,.92)!important;color:#f5f5f7!important;border:1px solid rgba(255,255,255,.1)!important;backdrop-filter:blur(18px);box-shadow:0 14px 36px rgba(0,0,0,.35)}
-  .filename{color:#f5f5f7!important}.meta span{background:rgba(255,255,255,.055)!important;color:#c4c4cf!important;border-color:rgba(255,255,255,.1)!important}
-  .nav-btn,.btn,.select,.player-chrome-btn,.native-switch{background:rgba(18,19,26,.9)!important;color:#f5f5f7!important;border-color:rgba(255,255,255,.14)!important}
-  .tg-btn{background:linear-gradient(135deg,#3b82f6,#8b5cf6,#22c55e)!important;color:#111!important}
-  .player-loading{background:rgba(0,0,0,.28)!important;color:#3b82f6!important}
-  .spinner{border-color:rgba(255,255,255,.16)!important;border-top-color:#3b82f6!important}
-  .player-pop .pop-title{color:#3b82f6!important}
-  .player-brand-float{left:54px!important;top:12px!important;max-width:70%;font-family:var(--font-display);font-size:10px;letter-spacing:.17em;text-transform:uppercase;color:#f0e8ff;background:rgba(5,6,10,.58);border-color:rgba(228,189,130,.28);text-shadow:none}
-  .player-shell .neon-ribbon{background:conic-gradient(from 0deg,#8b5cf6,#3b82f6,#8b5cf6);opacity:.72}
-
-
-  /* User-controlled player chrome: tap the toggle to show or hide every control. */
-  #playerWrapper.controls-hidden .player-chrome-btn,
-  #playerWrapper.controls-hidden .player-pop,
-  #playerWrapper.controls-hidden movi-player::part(chrome),
-  #playerWrapper.controls-hidden movi-player::part(controls),
-  #playerWrapper.controls-hidden movi-player::part(bottom-controls),
-  #playerWrapper.controls-hidden movi-player::part(progress-container),
-  #playerWrapper.controls-hidden movi-player::part(progress),
-  #playerWrapper.controls-hidden movi-player::part(seek),
-  #playerWrapper.controls-hidden movi-player::part(control-bar),
-  #playerWrapper.controls-hidden movi-player::part(bottom-bar),
-  #playerWrapper.controls-hidden movi-player::part(time-controls),
-  #playerWrapper.controls-hidden movi-player::part(overlay-controls),
-  #playerWrapper.controls-hidden movi-player::part(controls-overlay),
-  #playerWrapper.controls-hidden .player-shortcut-hint {
-    opacity:0!important; visibility:hidden!important; pointer-events:none!important;
+  /* Upward Popups (Quality/Switch, External Player) */
+  .p4u-pop {
+    position: absolute; z-index: 50; min-width: 190px; max-width: min(290px, 88vw);
+    max-height: min(55dvh, 320px); overflow-y: auto;
+    background: rgba(12,15,24,.97); border: 1px solid rgba(139,92,246,.42);
+    border-radius: 14px; padding: 6px; display: none; flex-direction: column; gap: 2px;
+    box-shadow: 0 18px 40px rgba(0,0,0,.7); backdrop-filter: blur(14px);
   }
-  </style>
+  .p4u-pop.open { display: flex; }
+  .p4u-pop.quality-pop { right: 56px; bottom: 64px; }
+  .p4u-pop.external-pop { right: 16px; top: 60px; }
+  .p4u-pop .pop-title { font-size: 10px; color: #93c5fd; padding: 6px 10px 4px; text-transform: uppercase; font-weight: 800; letter-spacing: .06em; }
+  .p4u-pop button, .p4u-pop a {
+    display: block; width: 100%; text-align: left; border: 0; background: transparent;
+    color: #f1f5f9; padding: 9px 11px; border-radius: 9px; font-size: 13px; font-weight: 600;
+    cursor: pointer; text-decoration: none;
+  }
+  .p4u-pop button:hover, .p4u-pop a:hover { background: rgba(59,130,246,.22); }
 
-<!-- Official movi-player (https://github.com/mrujjwalg/movi-player · https://moviplayer.com) -->
+  /* Episodes Slide-Up Drawer */
+  .p4u-drawer {
+    position: absolute; right: 16px; bottom: 64px; z-index: 55;
+    width: min(360px, calc(100vw - 32px)); max-height: min(65dvh, 440px);
+    background: rgba(11,14,22,.98); border: 1px solid rgba(59,130,246,.4);
+    border-radius: 16px; padding: 14px; display: none; flex-direction: column; gap: 10px;
+    box-shadow: 0 22px 50px rgba(0,0,0,.78); backdrop-filter: blur(16px);
+  }
+  .p4u-drawer.open { display: flex; }
+  .p4u-drawer-head { display: flex; align-items: center; justify-content: space-between; font-weight: 800; font-size: 14px; }
+  .p4u-season-bar { display: flex; gap: 6px; flex-wrap: wrap; }
+  .p4u-season-bar button {
+    border: 1px solid rgba(255,255,255,.15); background: #151b29; color: #cbd5e1;
+    border-radius: 999px; padding: 5px 11px; font-size: 11px; font-weight: 700; cursor: pointer;
+  }
+  .p4u-season-bar button.active { background: linear-gradient(125deg,#3b82f6,#8b5cf6); color: #fff; border-color: transparent; }
+  .p4u-drawer-tools { display: flex; gap: 8px; }
+  .p4u-drawer-tools select, .p4u-drawer-tools input {
+    flex: 1; min-width: 0; background: #0b0e16; border: 1px solid rgba(255,255,255,.14);
+    color: #fff; border-radius: 9px; padding: 7px 10px; font-size: 12px; outline: none;
+  }
+  .p4u-ep-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; max-height: 240px; }
+  .p4u-ep-item {
+    display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-radius: 10px;
+    background: #141a28; border: 1px solid rgba(255,255,255,.08); color: #e2e8f0;
+    text-decoration: none; font-size: 12px; font-weight: 700;
+  }
+  .p4u-ep-item.active { border-color: #3b82f6; background: rgba(59,130,246,.2); color: #fff; }
+  .p4u-ep-tag { background: rgba(139,92,246,.25); color: #c4b5fd; padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 800; flex: 0 0 auto; }
+  .p4u-ep-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .toast {
+    position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%);
+    background: rgba(12,16,26,.95); border: 1px solid rgba(59,130,246,.45);
+    color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 100;
+  }
+  .toast.active { opacity: 1; }
+</style>
 <script>
 (function () {
-  /* Official builds:
-     - https://cdn.jsdelivr.net/npm/movi-player/dist/element.js          (ES module)
-     - https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js   (plain script)
-     - https://moviplayer.com/dist/element.js                            (hosted latest)
-     We use the global build so we can load it dynamically without type=module. */
   var CDN = 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/';
   var OFFICIAL = 'https://cdn.jsdelivr.net/npm/movi-player/dist/';
-  var canWasm = false, hasWebCodecs = false, secure = false;
-  try {
-    secure = !!window.isSecureContext;
-    hasWebCodecs = ('VideoDecoder' in window);
-    canWasm = !!document.createElement('canvas').getContext('webgl2');
-  } catch (e) { canWasm = false; }
-
-  var engine = 'movi'; // Movi Player is the only built-in playback engine.
-
   window.__HITLERYTPlayer = {
-    initial: engine,
-    engine: engine,
-    forced: true,
-    canWasm: canWasm,
-    hasWebCodecs: hasWebCodecs,
-    secure: secure,
+    engine: 'movi',
     cdn: CDN,
-    official: OFFICIAL,
-    /* Official global entry (no type=module required) */
     script: CDN + 'element.global.js',
-    scriptFallback: OFFICIAL + 'element.global.js',
-    moduleScript: OFFICIAL + 'element.js'
+    scriptFallback: OFFICIAL + 'element.global.js'
   };
-
-  if (engine === 'movi') {
-    var addLink = function (rel, href, attrs) {
-      var l = document.createElement('link');
-      l.rel = rel; l.href = href;
-      if (attrs) for (var k in attrs) l.setAttribute(k, attrs[k]);
-      document.head.appendChild(l);
-    };
-    addLink('preconnect', 'https://cdn.jsdelivr.net', { crossorigin: '' });
-    addLink('dns-prefetch', 'https://cdn.jsdelivr.net');
-    addLink('preconnect', 'https://moviplayer.com', { crossorigin: '' });
-    /* Preload official global + module so first play is faster */
-    addLink('preload', CDN + 'element.global.js', { as: 'script' });
-  }
 })();
-
-
 </script>
 {% endblock %}
 
@@ -378,1437 +257,497 @@
 {% set _bi = button_index if button_index is defined else 0 %}
 {% set _slug = title_slug if title_slug is defined else '' %}
 {% set _fs = filestore_bot_username if filestore_bot_username is defined else (player_settings.filestore_bot_username if player_settings.filestore_bot_username is defined else '') %}
-{% set _poster = '' %}
-{% if title_page is defined and title_page and title_page.poster_path %}
-  {% if title_page.poster_path.startswith('http') %}
-    {% set _poster = title_page.poster_path %}
-  {% else %}
-    {% set _poster = 'https://image.tmdb.org/t/p/w500' + title_page.poster_path %}
-  {% endif %}
-{% endif %}
-{% set _backdrop_thumb = '' %}
+{% set _bg = '' %}
 {% if title_page is defined and title_page and title_page.backdrop_path %}
-  {% if title_page.backdrop_path.startswith('http') %}
-    {% set _backdrop_thumb = title_page.backdrop_path %}
-  {% else %}
-    {% set _backdrop_thumb = 'https://image.tmdb.org/t/p/w780' + title_page.backdrop_path %}
-  {% endif %}
+  {% set _bg = title_page.backdrop_path if title_page.backdrop_path.startswith('http') else ('https://image.tmdb.org/t/p/w1280' + title_page.backdrop_path) %}
+{% elif title_page is defined and title_page and title_page.poster_path %}
+  {% set _bg = title_page.poster_path if title_page.poster_path.startswith('http') else ('https://image.tmdb.org/t/p/w780' + title_page.poster_path) %}
 {% endif %}
-{% set _backdrop_hero = '' %}
-{% if title_page is defined and title_page and title_page.backdrop_path %}
-  {% if title_page.backdrop_path.startswith('http') %}
-    {% set _backdrop_hero = title_page.backdrop_path %}
-  {% else %}
-    {% set _backdrop_hero = 'https://image.tmdb.org/t/p/w1280' + title_page.backdrop_path %}
-  {% endif %}
-{% endif %}
+{% set _cur_group_name = (_wg[_gi].name if (_wg and _gi < (_wg|length)) else '') %}
+{% set _cur_btn_name = (_wg[_gi].buttons[_bi].name if (_wg and _gi < (_wg|length) and _wg[_gi].buttons and _bi < (_wg[_gi].buttons|length)) else 'Auto') %}
 
-{% if _backdrop_hero or title_page %}
-<section class="backdrop-hero" style="min-height:clamp(160px,30vw,300px);margin-bottom:16px">
-  {% if _backdrop_hero %}<div class="backdrop-img" style="background-image:url('{{ _backdrop_hero }}')"></div>{% endif %}
-  <div class="backdrop-scrim"></div>
-  <div class="backdrop-content">
-    {% if title_page %}
-    <div class="hero-eyebrow" style="color:var(--accent-2);font-weight:800;font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:8px;font-family:var(--font-display)">{{ BRANDING }} · Now Playing</div>
-    <h1 style="font-size:clamp(1.2rem,3.4vw,1.9rem);margin:0;line-height:1.15">{{ title_page.title }}</h1>
-    {% else %}
-    <div class="hero-eyebrow" style="color:var(--accent-2);font-weight:800;font-size:11px;letter-spacing:.16em;text-transform:uppercase;font-family:var(--font-display)">{{ BRANDING }} · Now Playing</div>
-    {% endif %}
+<div class="p4u-stage" id="playerWrapper">
+  {% if _bg %}<div class="p4u-backdrop" style="background-image:url('{{ _bg }}')"></div>{% endif %}
+
+  <movi-player id="moviPlayer" playsinline autoplay muted preload="metadata" resume theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
+
+  <div class="p4u-loading" id="playerLoading"><div class="p4u-spinner"></div></div>
+
+  <button type="button" class="p4u-center-play" id="centerPlayBtn" aria-label="Play video">
+    <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+  </button>
+
+  <!-- Top Overlay -->
+  <div class="p4u-top">
+    <div class="p4u-title-wrap">
+      <a class="p4u-back-btn" href="{% if _slug %}/title/{{ _slug }}{% else %}/{% endif %}" title="Back" aria-label="Back">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+      </a>
+      <div class="p4u-titles">
+        <div class="p4u-title">{{ title_page.title if title_page else file.filename }}{% if _cur_group_name %} · {{ _cur_group_name }}{% endif %}</div>
+        <div class="p4u-sub">{{ (file.file_size / (1024*1024))|round(2) }} MB · <span class="p4u-lang">{{ _cur_btn_name }}</span></div>
+      </div>
+    </div>
+    <div class="p4u-top-actions">
+      <button type="button" class="p4u-circle-btn" id="pcLaptopBtn" title="External Player" aria-label="External Player">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>
+      </button>
+      <button type="button" class="p4u-circle-btn" id="pcDownloadBtn" title="Download" aria-label="Download">
+        <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+      </button>
+      <button type="button" class="p4u-circle-btn" id="pcFitBtn" title="Fit / Fill" aria-label="Fit or Fill">
+        <svg viewBox="0 0 24 24"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg>
+      </button>
+      <button type="button" class="p4u-circle-btn" id="pcRetryBtn" title="Retry" aria-label="Retry">
+        <svg viewBox="0 0 24 24"><path d="M20 7v5h-5"/><path d="M4.8 9a8 8 0 0 1 13.4-2L20 12M4 17v-5h5"/><path d="M19.2 15a8 8 0 0 1-13.4 2L4 12"/></svg>
+      </button>
+      <button type="button" class="p4u-circle-btn" id="pcShareBtn" title="Share" aria-label="Share">
+        <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+      </button>
+    </div>
   </div>
-</section>
-{% endif %}
 
-<div class="watch-grid">
-  <section>
-    <div class="player-shell">
-      
-      <div class="player-box">
-        <div class="player-wrapper" id="playerWrapper">
-<div class="player-brand-float" id="playerBrandFloat">{{ BRANDING }}</div>
-          <div class="player-shortcut-hint" aria-label="Keyboard shortcuts">Space: play/pause · ←/→: seek 10s · M: mute · F: fullscreen</div>
-          <movi-player id="moviPlayer"
-            playsinline controls autoplay muted preload="metadata" resume
-            theme="dark" themecolor="#8b5cf6"
-            subtitleedge="outline"
-            style="display:block"
-            class="movi-bar-collapsed"
-            tabindex="0"></movi-player>
-          <div class="player-loading" id="playerLoading"><div class="spinner"></div></div>
-
-          <div class="player-chrome-left">
-            <button type="button" class="player-chrome-btn pc-switch" id="pcSwitchBtn" title="Switch source" aria-label="Switch source">
-              <svg viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
-            </button>
-          </div>
-          <div class="player-chrome-right">
-            <button type="button" class="player-chrome-btn pc-laptop" id="pcLaptopBtn" title="External player" aria-label="External player">
-              <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/><path d="M8 20v-2h8v2"/></svg>
-            </button>
-            <button type="button" class="player-chrome-btn pc-download" id="pcDownloadBtn" title="Download" aria-label="Download">
-              <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
-            </button>
-            <button type="button" class="player-chrome-btn pc-fit" id="pcFitBtn" title="Fit / Fill" aria-label="Fit video" aria-pressed="false">
-              <svg viewBox="0 0 24 24"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><path d="M8 8h8v8H8z"/></svg>
-            </button>
-            <button type="button" class="player-chrome-btn pc-retry" id="pcRetryBtn" title="Retry" aria-label="Retry">
-              <svg viewBox="0 0 24 24"><path d="M20 7v5h-5"/><path d="M4.8 9a8 8 0 0 1 13.4-2L20 12M4 17v-5h5"/><path d="M19.2 15a8 8 0 0 1-13.4 2L4 12"/></svg>
-            </button>
-            <button type="button" class="player-chrome-btn pc-fullscreen" id="pcFullscreenBtn" title="Fullscreen" aria-label="Fullscreen">
-              <svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
-            </button>
-          </div>
-
-          <div class="player-pop switch-pop" id="switchPop" role="menu">
-            <div class="pop-title">This group</div>
-            <div id="switchPopList"></div>
-          </div>
-          <div class="player-pop laptop-pop" id="laptopPop" role="menu">
-            <div class="pop-title">Open in player</div>
-            <div id="laptopPopList"></div>
-          </div>
-        </div>
+  <!-- Bottom Overlay -->
+  <div class="p4u-bottom">
+    <div class="p4u-ep-nav">
+      <button type="button" class="p4u-ep-pill" id="prevGroupBtn" disabled>← Previous</button>
+      <button type="button" class="p4u-ep-pill" id="nextGroupBtn" disabled>Next Episode →</button>
+    </div>
+    <div class="p4u-progress-row">
+      <span class="p4u-time" id="curTimeLabel">0:00</span>
+      <div class="p4u-scrub" id="scrubTrack">
+        <div class="p4u-scrub-fill" id="scrubFill"></div>
+        <div class="p4u-scrub-thumb" id="scrubThumb"></div>
       </div>
+      <span class="p4u-time right" id="durTimeLabel">0:00</span>
     </div>
-
-    <!-- Prev / Next group + Telegram -->
-    <div class="nav-row" id="groupNavRow">
-      <button type="button" class="nav-btn" id="prevGroupBtn" disabled>← Prev</button>
-      <button type="button" class="nav-btn" id="nextGroupBtn" disabled>Next →</button>
-      <span class="nav-spacer"></span>
-      {% if _fs %}
-      <a class="tg-btn" id="tgFileBtn" href="https://t.me/{{ _fs }}?start=file_{{ file.short_code }}" target="_blank" rel="noopener">✈ Telegram</a>
-      {% endif %}
-    </div>
-
-    <div class="card info" style="margin-top:12px">
-      <div class="filename">{{ file.filename }}</div>
-      <div class="meta">
-        <span>{{ (file.file_size / (1024*1024))|round(2) }} MB</span>
-        <span>{{ file.access_count }} views</span>
-        {% if _wg and (_wg|length) > 0 %}
-        <span id="groupLabel">{% if _gi < (_wg|length) %}{{ _wg[_gi].name }}{% else %}Watch{% endif %}</span>
+    <div class="p4u-bar">
+      <div class="p4u-bar-left">
+        <button type="button" class="p4u-icon-btn" id="playPauseBtn" aria-label="Play or Pause">
+          <svg id="playPauseIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button type="button" class="p4u-icon-btn" id="muteBtn" aria-label="Mute or Unmute">
+          <svg id="muteIcon" viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <input type="range" class="p4u-vol-range" id="volRange" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+      </div>
+      <div class="p4u-bar-right">
+        {% if _wg and _wg|length > 1 %}
+        <button type="button" class="p4u-up-btn" id="episodesDrawerBtn">^ EPISODES</button>
         {% endif %}
+        <button type="button" class="p4u-up-btn" id="pcSwitchBtn">^ {{ _cur_btn_name }}</button>
+        <button type="button" class="p4u-icon-btn" id="pcFullscreenBtn" aria-label="Fullscreen">
+          <svg id="fsIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+        </button>
       </div>
-
-      <div id="track-box" class="tools" style="display:none">
-        <select id="audio-select" class="select" aria-label="Audio track"></select>
-        <span id="track-status" class="track-status"></span>
-      </div>
-
-
-      <div class="tools">
-        {% if player_settings.downloads_enabled %}
-        <a class="btn accent" id="direct-dl-btn" href="{{ effective_stream_base }}/dl/{{ file.short_code }}" download>⬇ Download</a>
-        {% elif player_settings.filestore_bot_username %}
-        <a class="btn accent" id="direct-dl-btn" href="https://t.me/{{ player_settings.filestore_bot_username }}?start=file_{{ file.short_code }}" target="_blank" rel="noopener">📥 Get File in Bot</a>
-        {% else %}
-        <a class="btn accent" id="direct-dl-btn" href="{{ effective_stream_base }}/dl/{{ file.short_code }}" download>⬇ Download</a>
-        {% endif %}
-        <button class="btn" type="button" onclick="copyDownload()">Copy Download Link</button>
-        <button class="btn" type="button" onclick="copyStream()">Copy Stream URL</button>
-        <button class="btn" type="button" id="fix-audio-btn" onclick="enableCompatibleMode()" style="display:none">Fix audio (basic)</button>
-      </div>
-      <div id="copy-status" class="copy-ok"></div>
     </div>
+  </div>
 
-  </section>
+  <!-- Quality / Source Popup -->
+  <div class="p4u-pop quality-pop" id="switchPop" role="menu">
+    <div class="pop-title">Switch Quality / Source</div>
+    <div id="switchPopList"></div>
+  </div>
 
-  <aside class="side">
-    {% if _wg and _wg|length > 1 %}
-    <div class="card side-eps" id="sideEpsCard">
-      <b>Episodes / Seasons</b>
-      <div class="side-season-bar" id="sideSeasonBar" aria-label="Seasons"></div>
-      <div class="side-ep-tools">
-        <select id="seasonFilter" aria-label="Select season"><option value="all">All seasons</option></select>
-        <input id="episodeSearch" type="search" placeholder="Search EP…" aria-label="Search episodes">
-      </div>
-      <div class="side-ep-list" id="sideEpList"></div>
-      <div class="side-ep-count" id="episodeCount"></div>
+  <!-- External Player Popup -->
+  <div class="p4u-pop external-pop" id="laptopPop" role="menu">
+    <div class="pop-title">Open in External Player</div>
+    <div id="laptopPopList"></div>
+  </div>
+
+  <!-- Episodes Drawer -->
+  {% if _wg and _wg|length > 1 %}
+  <div class="p4u-drawer" id="episodesDrawer">
+    <div class="p4u-drawer-head">
+      <span>Episodes / Seasons</span>
+      <button type="button" class="p4u-icon-btn" id="closeDrawerBtn" aria-label="Close">✕</button>
     </div>
-    {% endif %}
-    <div class="card" style="margin-top:12px">
-      <b>Open in player</b>
-      <div id="mobile" class="player-panel active"><div class="player-grid" id="mobile-grid"></div></div>
-      <div class="notice">MX Player, PLAYit, VLC, and Download. If a player does not open, use <b>Copy Download Link</b> or <b>Copy Stream URL</b>.</div>
+    <div class="p4u-season-bar" id="sideSeasonBar"></div>
+    <div class="p4u-drawer-tools">
+      <select id="seasonFilter" aria-label="Season"><option value="all">All Seasons</option></select>
+      <input id="episodeSearch" type="search" placeholder="Search EP…">
     </div>
-  </aside>
+    <div class="p4u-ep-list" id="sideEpList"></div>
+  </div>
+  {% endif %}
 </div>
 
-<div class="toast" id="toast"><span id="toast-message">Link copied</span></div>
+<div class="toast" id="toast"><span id="toast-message">Done</span></div>
 
 <script>
 const SHORT_CODE = {{ file.short_code|tojson }};
-// Backend/VPS origin (ngrok) — used for external players & download fallback
 let STREAM_ORIGIN = ({{ effective_stream_base|tojson }} || window.location.origin).replace(/\/+$/, '');
-try {
-  var host = (window.location.hostname || '').toLowerCase();
-  if (host.endsWith('.trycloudflare.com') || host.endsWith('.ngrok-free.app') || host.endsWith('.ngrok-free.dev') || host.endsWith('.ngrok.io') || host.endsWith('.cfargotunnel.com') || host === 'localhost' || host === '127.0.0.1') {
-    STREAM_ORIGIN = window.location.origin;
-  }
-} catch (_) {}
-// DDStream-style same-origin play path so movi-player works (Vercel proxies /stream to VPS with ngrok-skip header)
 const PLAY_ORIGIN = window.location.origin;
 const STREAM_URL = PLAY_ORIGIN + '/stream/' + SHORT_CODE;
-const BACKEND_STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
+const EXTERNAL_STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
 const DOWNLOADS_ENABLED = {{ player_settings.downloads_enabled|tojson }};
 const FILESTORE_BOT = {{ (player_settings.filestore_bot_username or '')|tojson }};
 const DL_URL = DOWNLOADS_ENABLED
   ? (PLAY_ORIGIN + '/dl/' + SHORT_CODE)
   : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (PLAY_ORIGIN + '/dl/' + SHORT_CODE));
 const REMUX_URL = PLAY_ORIGIN + '/remux/' + SHORT_CODE;
-const TRACKS_URL = PLAY_ORIGIN + '/api/tracks/' + SHORT_CODE;
-const EXTERNAL_STREAM_URL = BACKEND_STREAM_URL;
 const PLAYER_MIME = {{ file.mime_type|tojson }};
-const FILE_NAME = {{ file.filename|tojson }};
 const INTENT_MIME = (!PLAYER_MIME || PLAYER_MIME === 'application/octet-stream') ? 'video/*' : PLAYER_MIME;
-
-const CFG = window.__HITLERYTPlayer || {};
-/* Official movi-player entry points (https://github.com/mrujjwalg/movi-player) */
-const MOVI_GLOBAL = CFG.script || 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js';
-const MOVI_GLOBAL_FALLBACK = CFG.scriptFallback || 'https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js';
-
-const playerWrapper = document.getElementById('playerWrapper');
-const moviPlayer    = document.getElementById('moviPlayer');
-const loadingScreen = document.getElementById('playerLoading');
-
-let engine = 'movi';
-const forcedEngine = true;
-let loadingDone = false;
-let wasmLoading = false;
-let wasmLoaded = false;
-let wasmWired = false;
-let switchAt = 0;
-let switchPlaying = false;
-let hasPlayedOnce = false;
-let stallTimer = null;
-let useCompatible = false;
-let currentAudioIndex = 0;
-let switchingAudio = false;
-
-const SAFE_AUDIO = new Set(['aac','mp3','opus','vorbis','flac','mp4a','pcm_s16le','pcm_s24le','pcm_s32le']);
-
-/* ===== helpers ===== */
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  document.getElementById('toast-message').textContent = msg || 'Done';
-  t.classList.add('active');
-  setTimeout(() => t.classList.remove('active'), 2800);
-}
-function showLoading() { if (loadingScreen) loadingScreen.classList.add('active'); }
-function hideLoading() { if (loadingScreen) loadingScreen.classList.remove('active'); loadingDone = true; }
-function setEngine(e) { engine = 'movi'; }
-function activeMedia() { return moviPlayer; }
-
-function captureSwitchPosition() {
-  try {
-    const el = activeMedia();
-    switchAt = el.currentTime || 0;
-    switchPlaying = !el.paused;
-  } catch (_) { switchAt = 0; switchPlaying = false; }
-}
-// Movi custom elements may emit readiness events later than the source assignment.
-// Start muted first (required by most mobile autoplay policies), then let the user
-// enable sound with the existing volume controls. Never rely on a single canplay event.
-function requestAutoPlay(el) {
-  if (!el) return;
-  try {
-    el.setAttribute('autoplay', '');
-    el.setAttribute('playsinline', '');
-    el.muted = true;
-    el.setAttribute('muted', '');
-  } catch (_) {}
-  let started = false;
-  const attempt = () => {
-    if (started) return;
-    try {
-      const result = el.play && el.play();
-      if (result && typeof result.then === 'function') {
-        result.then(() => { started = true; }).catch(() => {
-          // Retry muted explicitly; custom-element play() can reject before its
-          // internal media element has completed initialization.
-          try {
-            el.muted = true;
-            const retry = el.play && el.play();
-            if (retry && retry.then) retry.then(() => { started = true; }).catch(() => {});
-          } catch (_) {}
-        });
-      }
-    } catch (_) {}
-  };
-  ['loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough'].forEach(evt => {
-    el.addEventListener(evt, attempt);
-  });
-  attempt();
-  // Movi initializes its internal media element asynchronously after src is set.
-  [250, 800, 1600, 3000, 5000].forEach(ms => setTimeout(attempt, ms));
-}
-
-function applySwitchPosition(el) {
-  if (!el || !switchAt || switchAt < 1) return;
-  const apply = () => {
-    try { el.currentTime = switchAt; } catch (_) {}
-    if (switchPlaying) {
-      const p = el.play();
-      if (p && p.catch) p.catch(() => {});
-    }
-  };
-  if (el.readyState >= 1) apply();
-  else el.addEventListener('loadedmetadata', apply, { once: true });
-}
-
-/* ===== Download / external players (MX, PLAYit, VLC + Download only) ===== */
-const dlBtn = document.getElementById('direct-dl-btn');
-if (dlBtn) dlBtn.href = DL_URL;
-
-function copyText(text, statusId) {
-  const el = document.getElementById(statusId || 'copy-status');
-  const done = () => { if (el) el.textContent = 'Copied!'; setTimeout(() => { if (el) el.textContent = ''; }, 2000); };
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
-  } else fallbackCopy(text, done);
-}
-function fallbackCopy(text, cb) {
-  const ta = document.createElement('textarea');
-  ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
-  document.body.appendChild(ta); ta.select();
-  try { document.execCommand('copy'); } catch (_) {}
-  document.body.removeChild(ta);
-  if (cb) cb();
-}
-function copyDownload() { copyText(DL_URL); showToast('Download link copied'); }
-function copyStream() { copyText(STREAM_URL); showToast('Stream URL copied'); }
-
-function androidIntent(url, pkg, mime) {
-  const u = new URL(url);
-  const scheme = u.protocol.replace(':','');
-  return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${scheme};action=android.intent.action.VIEW;type=${mime || 'video/*'};package=${pkg};S.browser_fallback_url=${encodeURIComponent(url)};end`;
-}
-function addPlayer(gridId, label, href) {
-  const a = document.createElement('a');
-  a.className = 'pbtn';
-  a.textContent = label;
-  a.href = href;
-  if (!href.startsWith('intent:')) { a.target = '_blank'; a.rel = 'noopener'; }
-  const el = document.getElementById(gridId);
-  if (el) el.appendChild(a);
-}
-function buildPlayerGrids() {
-  const el = document.getElementById('mobile-grid');
-  if (el) el.innerHTML = '';
-  addPlayer('mobile-grid', 'MX Player', androidIntent((typeof EXTERNAL_STREAM_URL!=='undefined'?EXTERNAL_STREAM_URL:STREAM_URL), 'com.mxtech.videoplayer.ad', INTENT_MIME));
-  addPlayer('mobile-grid', 'PLAYit', androidIntent(REMUX_URL + '?audio=0&aac=1', 'com.playit.videoplayer', 'video/mp4'));
-  addPlayer('mobile-grid', 'VLC', androidIntent((typeof EXTERNAL_STREAM_URL!=='undefined'?EXTERNAL_STREAM_URL:STREAM_URL), 'org.videolan.vlc', INTENT_MIME));
-  addPlayer('mobile-grid', 'Download', DL_URL);
-}
-buildPlayerGrids();
-(function keepPlayerBrandStable(){
- const badge=document.getElementById('playerBrandFloat');
- if(!badge)return;
- badge.style.left='12px';badge.style.top='12px';
-})();
-
-/* Keep custom source/laptop/download controls visible in browser fullscreen.
-   When the player element itself becomes fullscreen, move the overlay controls
-   into that fullscreen element; restore them to the wrapper on exit. */
-(function keepChromeInFullscreen(){
-  const wrapper=document.getElementById('playerWrapper');
-  const player=document.getElementById('moviPlayer');
-  if(!wrapper||!player)return;
-  // Redirect fullscreen requests originating from Movi's internal video/shadow
-  // tree to the outer wrapper, so our laptop/source/download overlays stay visible.
-  const nativeRequestFullscreen=Element.prototype.requestFullscreen;
-  if(nativeRequestFullscreen && !Element.prototype.__moviWrapperFullscreenPatched){
-    const patched=function(options){
-      let node=this;
-      while(node){
-        if(node===player) return nativeRequestFullscreen.call(wrapper,options);
-        const root=node.getRootNode && node.getRootNode();
-        node=(root && root.host) ? root.host : null;
-      }
-      return nativeRequestFullscreen.call(this,options);
-    };
-    try{
-      Object.defineProperty(Element.prototype,'requestFullscreen',{value:patched,writable:true,configurable:true});
-      Object.defineProperty(Element.prototype,'__moviWrapperFullscreenPatched',{value:true,configurable:true});
-    }catch(_){/* retain native fullscreen if the browser locks the prototype */}
-  }
-  const ids=['pcSwitchBtn','pcLaptopBtn','pcDownloadBtn','pcFitBtn','pcRetryBtn','pcFullscreenBtn','switchPop','laptopPop'];
-  const homes=new Map(ids.map(id=>[document.getElementById(id),wrapper]));
-  function sync(){
-    const fs=document.fullscreenElement||document.webkitFullscreenElement;
-    const target=(fs===player)?player:wrapper;
-    ids.forEach(id=>{
-      const node=document.getElementById(id);
-      if(node && node.parentElement!==target) target.appendChild(node);
-    });
-    if(fs===player){
-      player.style.position='relative';
-      player.style.overflow='visible';
-    }else{
-      player.style.removeProperty('position');
-      player.style.removeProperty('overflow');
-    }
-  }
-  document.addEventListener('fullscreenchange',sync);
-  document.addEventListener('webkitfullscreenchange',sync);
-  sync();
-})();
-
-/* ===== Group / title context for switch, prev/next, related ===== */
 const WATCH_GROUPS = {{ (_wg if _wg is defined else [])|tojson }};
 const TITLE_SLUG = {{ (_slug if _slug is defined else '')|tojson }};
 const GROUP_INDEX = {{ (_gi if _gi is defined else 0)|tojson }};
 const BUTTON_INDEX = {{ (_bi if _bi is defined else 0)|tojson }};
-const POSTER_URL = {{ (_poster if _poster is defined else '')|tojson }};
-const BACKDROP_THUMB_URL = {{ (_backdrop_thumb if _backdrop_thumb is defined else '')|tojson }};
-const THUMB_URL = BACKDROP_THUMB_URL || POSTER_URL;
-const FILESTORE_USER = {{ (_fs if _fs is defined else '')|tojson }};
+
+const wrapper = document.getElementById('playerWrapper');
+const mp = document.getElementById('moviPlayer');
+const loadingEl = document.getElementById('playerLoading');
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  document.getElementById('toast-message').textContent = msg || 'Done';
+  t.classList.add('active');
+  setTimeout(() => t.classList.remove('active'), 2400);
+}
+function showLoading() { loadingEl?.classList.add('active'); }
+function hideLoading() { loadingEl?.classList.remove('active'); }
+function fmtTime(sec) {
+  sec = Math.max(0, Math.floor(Number(sec) || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`;
+}
 
 function extractWatchCode(url) {
   if (!url) return null;
-  try {
-    const s = String(url);
-    const m = s.match(/(?:^|\/)watch\/([A-Za-z0-9_-]{3,64})(?:\/|$|\?|#)/i);
-    if (m) return m[1];
-    const q = s.match(/[?&]path=([A-Za-z0-9_-]{3,64})(?:&|$|#)/i);
-    return q ? q[1] : null;
-  } catch (_) { return null; }
+  const s = String(url);
+  const m = s.match(/(?:^|\/)watch\/([A-Za-z0-9_-]{3,64})(?:\/|$|\?|#)/i);
+  if (m) return m[1];
+  const q = s.match(/[?&]path=([A-Za-z0-9_-]{3,64})(?:&|$|#)/i);
+  return q ? q[1] : null;
 }
-// Keep the user's selected source slot when moving between episode groups.
-// If a destination group has fewer sources, fall back safely to its first source.
-function preferredButtonForGroup(groupIdx) {
-  const group = WATCH_GROUPS[groupIdx];
-  const buttons = group && Array.isArray(group.buttons) ? group.buttons : [];
-  if (!buttons.length) return -1;
-  return BUTTON_INDEX < buttons.length ? BUTTON_INDEX : 0;
+function preferredButtonForGroup(gi) {
+  const g = WATCH_GROUPS[gi];
+  const btns = (g && g.buttons) || [];
+  if (!btns.length) return 0;
+  return BUTTON_INDEX < btns.length ? BUTTON_INDEX : 0;
 }
-function watchHrefFor(groupIdx, buttonIdx) {
-  const g = WATCH_GROUPS[groupIdx];
-  if (!g || !g.buttons || !g.buttons[buttonIdx]) return null;
-  const code = extractWatchCode(g.buttons[buttonIdx].url);
-  if (!code) return g.buttons[buttonIdx].url;
-  const params = new URLSearchParams();
-  if (TITLE_SLUG) params.set('title', TITLE_SLUG);
-  params.set('g', String(groupIdx));
-  params.set('b', String(buttonIdx));
-  return '/watch/' + code + '?' + params.toString();
+function watchHrefFor(gi, bi) {
+  const g = WATCH_GROUPS[gi];
+  if (!g || !g.buttons || !g.buttons[bi]) return null;
+  const code = extractWatchCode(g.buttons[bi].url);
+  if (!code) return g.buttons[bi].url;
+  const p = new URLSearchParams();
+  if (TITLE_SLUG) p.set('title', TITLE_SLUG);
+  p.set('g', String(gi));
+  p.set('b', String(bi));
+  return '/watch/' + code + '?' + p.toString();
 }
-function goToGroupButton(groupIdx, buttonIdx) {
-  const href = watchHrefFor(groupIdx, buttonIdx);
+function goToGroupButton(gi, bi) {
+  const href = watchHrefFor(gi, bi);
   if (href) window.location.href = href;
 }
 
-/* Switch pop: all buttons in current group + other groups if available */
-(function setupSwitchPop() {
-  const btn = document.getElementById('pcSwitchBtn');
-  const pop = document.getElementById('switchPop');
-  const list = document.getElementById('switchPopList');
-  if (!btn || !pop || !list) return;
-  const g = WATCH_GROUPS[GROUP_INDEX];
-  const currentButtons = (g && Array.isArray(g.buttons)) ? g.buttons : [];
-  const hasOtherGroups = Array.isArray(WATCH_GROUPS) && WATCH_GROUPS.length > 1;
-  if (!currentButtons.length && !hasOtherGroups) {
-    btn.style.display = 'none';
-    return;
-  }
-  list.innerHTML = '';
-  list.style.display = 'flex';
-  list.style.flexDirection = 'column';
-  list.style.minHeight = '0';
-  list.style.maxHeight = 'min(46vh, 240px)';
-  list.style.overflowY = 'auto';
-  list.style.overflowX = 'hidden';
-  list.style.webkitOverflowScrolling = 'touch';
-  list.style.touchAction = 'pan-y';
-  list.style.overscrollBehavior = 'contain';
-  let itemCount = 0;
-  currentButtons.forEach((b, i) => {
-    const a = document.createElement('button');
-    a.type = 'button';
-    a.textContent = (b.name || ('Source ' + (i + 1))) + (i === BUTTON_INDEX ? ' ✓' : '');
-    a.addEventListener('click', (ev) => {
-      ev.preventDefault(); ev.stopPropagation();
-      pop.classList.remove('open');
-      if (i !== BUTTON_INDEX) {
-        if (typeof savePosition === 'function') savePosition();
-        goToGroupButton(GROUP_INDEX, i);
-      }
-    });
-    list.appendChild(a);
-    itemCount += 1;
-  });
-  if (hasOtherGroups) {
-    const titleEl = document.createElement('div');
-    titleEl.className = 'pop-title';
-    titleEl.textContent = 'Episodes / Groups';
-    list.appendChild(titleEl);
-    WATCH_GROUPS.forEach((grp, gi) => {
-      if (!grp || !Array.isArray(grp.buttons) || !grp.buttons.length) return;
-      const a = document.createElement('button');
-      a.type = 'button';
-      a.textContent = (grp.name || ('Group ' + (gi + 1))) + (gi === GROUP_INDEX ? ' ✓' : '');
-      a.addEventListener('click', (ev) => {
-        ev.preventDefault(); ev.stopPropagation();
-        pop.classList.remove('open');
-        if (gi !== GROUP_INDEX) {
-          if (typeof savePosition === 'function') savePosition();
-          goToGroupButton(gi, preferredButtonForGroup(gi));
-        }
-      });
-      list.appendChild(a);
-      itemCount += 1;
-    });
-  }
-  btn.addEventListener('click', (e) => {
-    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-    document.getElementById('laptopPop')?.classList.remove('open');
-    if (itemCount <= 1) {
-      showToast('Only 1 source available');
-      return;
-    }
-    pop.classList.toggle('open');
-  });
-})();
-
-/* Laptop pop: MX / PLAYit / VLC */
-(function setupLaptopPop() {
-  const btn = document.getElementById('pcLaptopBtn');
-  const pop = document.getElementById('laptopPop');
-  const list = document.getElementById('laptopPopList');
-  if (!btn || !pop || !list) return;
-  const extStream = (typeof EXTERNAL_STREAM_URL !== 'undefined' && EXTERNAL_STREAM_URL) ? EXTERNAL_STREAM_URL : STREAM_URL;
-  const items = [
-    ['MX Player', androidIntent(extStream, 'com.mxtech.videoplayer.ad', INTENT_MIME)],
-    ['PLAYit', androidIntent(REMUX_URL + '?audio=0&aac=1', 'com.playit.videoplayer', 'video/mp4')],
-    ['VLC', androidIntent(extStream, 'org.videolan.vlc', INTENT_MIME)],
-  ];
-  list.innerHTML = '';
-  list.style.maxHeight = 'min(46vh, 240px)';
-  list.style.overflowY = 'auto';
-  list.style.overscrollBehavior = 'contain';
-  items.forEach(([label, href]) => {
-    const a = document.createElement('a');
-    a.href = href;
-    a.textContent = label;
-    list.appendChild(a);
-  });
-  btn.addEventListener('click', (e) => {
-    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-    document.getElementById('switchPop')?.classList.remove('open');
-    pop.classList.toggle('open');
-  });
-})();
-
-/* Download chrome button */
-(function setupDownloadBtn() {
-  const btn = document.getElementById('pcDownloadBtn');
-  if (!btn) return;
-  btn.addEventListener('click', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    const a = document.createElement('a');
-    a.href = DL_URL;
-    if (DOWNLOADS_ENABLED) a.setAttribute('download', '');
-    else a.target = '_blank';
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    showToast(DOWNLOADS_ENABLED ? 'Download started' : 'Opening Telegram bot…');
-  });
-})();
-
-
-(function setupTapToToggleAllControls(){
-  const wrapper = document.getElementById('playerWrapper');
-  const mp = document.getElementById('moviPlayer');
-  if (!wrapper || !mp) return;
+// Tap anywhere on video surface to hide/show ALL controls
+(function setupTapToggle(){
   let visible = true;
-  
-  function syncMoviShadowControls(show) {
-    try {
-      if (show) moviPlayer.setAttribute('controls', '');
-      else moviPlayer.removeAttribute('controls');
-      const sr = moviPlayer.shadowRoot;
-      if (!sr) return;
-      let st = sr.getElementById('amz-hide-controls-style');
-      if (!show) {
-        if (!st) {
-          st = document.createElement('style');
-          st.id = 'amz-hide-controls-style';
-          st.textContent = '[part*="control"],[part*="chrome"],[part*="progress"],[part*="bar"],[part*="overlay"],[class*="control"],[class*="chrome"],[class*="progress"],[class*="seek"],[class*="overlay"],button{opacity:0!important;visibility:hidden!important;pointer-events:none!important}';
-          sr.appendChild(st);
-        }
-      } else if (st) {
-        st.remove();
-      }
-    } catch (_) {}
-  }
-
-  function setControlsVisible(on) {
+  function setVisible(on) {
     visible = !!on;
     wrapper.classList.toggle('controls-hidden', !visible);
-    wrapper.setAttribute('data-controls-visible', visible ? 'true' : 'false');
-    syncMoviShadowControls(visible);
     if (!visible) {
       document.getElementById('switchPop')?.classList.remove('open');
       document.getElementById('laptopPop')?.classList.remove('open');
+      document.getElementById('episodesDrawer')?.classList.remove('open');
     }
   }
-  setControlsVisible(true);
-  // When controls are hidden, tapping anywhere on the player reveals all controls cleanly
   wrapper.addEventListener('click', (e) => {
     const t = e.target;
     if (!visible) {
-      e.preventDefault();
-      e.stopPropagation();
-      setControlsVisible(true);
+      e.preventDefault(); e.stopPropagation();
+      setVisible(true);
       return;
     }
     if (!t || !t.closest) return;
-    if (t.closest('.player-chrome-btn') || t.closest('.player-pop') || t.closest('#playGate')) return;
-    // Ignore bottom 68px seek/control bar zone when controls are visible so seek/volume/play taps work normally
-    const rect = wrapper.getBoundingClientRect();
-    if (e.clientY && rect.height > 140 && e.clientY > rect.bottom - 68) return;
-    if (t === wrapper || t === mp || (t.tagName && String(t.tagName).toLowerCase() === 'movi-player')) {
-      setControlsVisible(false);
-    }
+    if (t.closest('.p4u-top') || t.closest('.p4u-bottom') || t.closest('.p4u-center-play') || t.closest('.p4u-pop') || t.closest('.p4u-drawer')) return;
+    setVisible(false);
   }, true);
-  window.__setPlayerControlsVisible = setControlsVisible;
 })();
 
-document.addEventListener('click', (e) => {
-  const t = e.target;
-  if (t && t.closest && (t.closest('#switchPop') || t.closest('#laptopPop') || t.closest('#pcSwitchBtn') || t.closest('#pcLaptopBtn') || t.closest('.player-chrome-btn'))) return;
-  document.getElementById('switchPop')?.classList.remove('open');
-  document.getElementById('laptopPop')?.classList.remove('open');
+// Play/Pause, Scrubber, Volume
+const centerPlayBtn = document.getElementById('centerPlayBtn');
+const playPauseBtn = document.getElementById('playPauseBtn');
+const playPauseIcon = document.getElementById('playPauseIcon');
+const muteBtn = document.getElementById('muteBtn');
+const volRange = document.getElementById('volRange');
+const scrubTrack = document.getElementById('scrubTrack');
+const scrubFill = document.getElementById('scrubFill');
+const scrubThumb = document.getElementById('scrubThumb');
+const curTimeLabel = document.getElementById('curTimeLabel');
+const durTimeLabel = document.getElementById('durTimeLabel');
+
+function togglePlay() {
+  if (!mp) return;
+  if (mp.paused) {
+    mp.muted = false;
+    mp.removeAttribute('muted');
+    const p = mp.play(); if (p && p.catch) p.catch(() => {});
+  } else {
+    mp.pause();
+  }
+}
+centerPlayBtn?.addEventListener('click', (e) => { e.stopPropagation(); togglePlay(); });
+playPauseBtn?.addEventListener('click', (e) => { e.stopPropagation(); togglePlay(); });
+
+function syncPlayUI() {
+  const playing = mp && !mp.paused && !mp.ended;
+  wrapper.classList.toggle('is-playing', playing);
+  if (playPauseIcon) {
+    playPauseIcon.innerHTML = playing
+      ? '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>'
+      : '<path d="M8 5v14l11-7z"/>';
+  }
+}
+mp.addEventListener('play', syncPlayUI);
+mp.addEventListener('playing', () => { syncPlayUI(); hideLoading(); });
+mp.addEventListener('pause', syncPlayUI);
+mp.addEventListener('waiting', showLoading);
+mp.addEventListener('canplay', hideLoading);
+mp.addEventListener('timeupdate', () => {
+  const cur = Number(mp.currentTime) || 0;
+  const dur = Number(mp.duration) || 0;
+  if (curTimeLabel) curTimeLabel.textContent = fmtTime(cur);
+  if (durTimeLabel) durTimeLabel.textContent = fmtTime(dur);
+  const pct = dur > 0 ? Math.min(100, (cur / dur) * 100) : 0;
+  if (scrubFill) scrubFill.style.width = pct + '%';
+  if (scrubThumb) scrubThumb.style.left = pct + '%';
 });
 
-/* Prev / Next = previous/next episode group, same selected source slot */
-(function setupGroupNav() {
-  const prev = document.getElementById('prevGroupBtn');
-  const next = document.getElementById('nextGroupBtn');
-  if (!WATCH_GROUPS.length) {
-    if (prev) prev.disabled = true;
-    if (next) next.disabled = true;
-    return;
-  }
-  if (prev) {
-    prev.disabled = GROUP_INDEX <= 0;
-    prev.addEventListener('click', () => {
-      if (GROUP_INDEX > 0) goToGroupButton(GROUP_INDEX - 1, preferredButtonForGroup(GROUP_INDEX - 1));
+function seekFromEvent(clientX) {
+  const rect = scrubTrack.getBoundingClientRect();
+  const dur = Number(mp.duration) || 0;
+  if (!dur || rect.width <= 0) return;
+  const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  try { mp.currentTime = ratio * dur; } catch (_) {}
+}
+let dragging = false;
+scrubTrack?.addEventListener('pointerdown', (e) => { dragging = true; scrubTrack.setPointerCapture(e.pointerId); seekFromEvent(e.clientX); });
+scrubTrack?.addEventListener('pointermove', (e) => { if (dragging) seekFromEvent(e.clientX); });
+scrubTrack?.addEventListener('pointerup', () => { dragging = false; });
+
+muteBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  mp.muted = !mp.muted;
+  if (volRange) volRange.value = mp.muted ? '0' : String(mp.volume || 1);
+});
+volRange?.addEventListener('input', () => {
+  const v = Number(volRange.value);
+  mp.volume = v;
+  mp.muted = v === 0;
+});
+
+// Top & Bottom Action Buttons
+const swBtn = document.getElementById('pcSwitchBtn');
+const swPop = document.getElementById('switchPop');
+const swList = document.getElementById('switchPopList');
+const lpBtn = document.getElementById('pcLaptopBtn');
+const lpPop = document.getElementById('laptopPop');
+const lpList = document.getElementById('laptopPopList');
+const epDrawer = document.getElementById('episodesDrawer');
+
+(function initSwitchPop(){
+  const g = WATCH_GROUPS[GROUP_INDEX];
+  const btns = (g && g.buttons) || [];
+  let count = 0;
+  btns.forEach((b, i) => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.textContent = (b.name || ('Source ' + (i + 1))) + (i === BUTTON_INDEX ? ' ✓' : '');
+    el.onclick = (e) => { e.stopPropagation(); swPop.classList.remove('open'); if (i !== BUTTON_INDEX) goToGroupButton(GROUP_INDEX, i); };
+    swList.appendChild(el);
+    count++;
+  });
+  if (WATCH_GROUPS.length > 1) {
+    const hdr = document.createElement('div'); hdr.className = 'pop-title'; hdr.textContent = 'Episodes / Groups';
+    swList.appendChild(hdr);
+    WATCH_GROUPS.forEach((grp, gi) => {
+      if (!grp.buttons?.length) return;
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.textContent = (grp.name || ('Group ' + (gi + 1))) + (gi === GROUP_INDEX ? ' ✓' : '');
+      el.onclick = (e) => { e.stopPropagation(); swPop.classList.remove('open'); if (gi !== GROUP_INDEX) goToGroupButton(gi, preferredButtonForGroup(gi)); };
+      swList.appendChild(el);
+      count++;
     });
   }
-  if (next) {
-    next.disabled = GROUP_INDEX >= WATCH_GROUPS.length - 1;
-    next.addEventListener('click', () => {
-      if (GROUP_INDEX < WATCH_GROUPS.length - 1) goToGroupButton(GROUP_INDEX + 1, preferredButtonForGroup(GROUP_INDEX + 1));
-    });
-  }
-  const tg = document.getElementById('tgFileBtn');
-  if (tg && FILESTORE_USER) {
-    tg.href = 'https://t.me/' + FILESTORE_USER + '?start=file_' + SHORT_CODE;
-  }
+  swBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    lpPop?.classList.remove('open');
+    epDrawer?.classList.remove('open');
+    if (count <= 1) return showToast('Only 1 source available');
+    swPop.classList.toggle('open');
+  });
 })();
 
-/* Auto-next: move to the next episode group while preserving the selected
-   source position (for example, source button 2 -> source button 2). */
-(function setupAutoNextEpisode() {
-  if (!moviPlayer || !Array.isArray(WATCH_GROUPS) || !WATCH_GROUPS.length) return;
-  let advanced = false;
-  function nextTarget() {
-    for (let gi = GROUP_INDEX + 1; gi < WATCH_GROUPS.length; gi += 1) {
-      const group = WATCH_GROUPS[gi];
-      if (group && Array.isArray(group.buttons) && group.buttons.length) {
-        const sourceIndex = preferredButtonForGroup(gi);
-        if (sourceIndex >= 0) return { group: gi, button: sourceIndex };
-      }
-    }
-    return null;
-  }
-  moviPlayer.addEventListener('ended', () => {
-    if (advanced) return;
-    const target = nextTarget();
-    if (!target) return;
-    advanced = true;
-    clearStallWatch();
-    clearRecoveryWatch();
-    savePosition();
-    showToast('Playing next episode with your selected source…');
-    const href = watchHrefFor(target.group, target.button);
-    if (href) window.location.assign(href);
+function androidIntent(url, pkg, mime) {
+  const u = new URL(url);
+  return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(':','')};action=android.intent.action.VIEW;type=${mime||'video/*'};package=${pkg};S.browser_fallback_url=${encodeURIComponent(url)};end`;
+}
+[['MX Player', androidIntent(EXTERNAL_STREAM_URL, 'com.mxtech.videoplayer.ad', INTENT_MIME)],
+ ['PLAYit', androidIntent(REMUX_URL + '?audio=0&aac=1', 'com.playit.videoplayer', 'video/mp4')],
+ ['VLC', androidIntent(EXTERNAL_STREAM_URL, 'org.videolan.vlc', INTENT_MIME)]
+].forEach(([label, href]) => {
+  const a = document.createElement('a'); a.href = href; a.textContent = label; lpList.appendChild(a);
+});
+lpBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  swPop?.classList.remove('open');
+  epDrawer?.classList.remove('open');
+  lpPop.classList.toggle('open');
+});
+
+document.getElementById('pcDownloadBtn')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const a = document.createElement('a'); a.href = DL_URL;
+  if (DOWNLOADS_ENABLED) a.setAttribute('download', ''); else a.target = '_blank';
+  a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
+  showToast(DOWNLOADS_ENABLED ? 'Download started' : 'Opening Telegram bot…');
+});
+
+document.getElementById('pcFitBtn')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const cover = mp.classList.toggle('player-fit-cover');
+  mp.classList.toggle('player-fit-contain', !cover);
+  try {
+    mp.style.objectFit = cover ? 'cover' : 'contain';
+    mp.shadowRoot?.querySelectorAll('video, canvas').forEach(v => { v.style.objectFit = cover ? 'cover' : 'contain'; });
+  } catch (_) {}
+  showToast(cover ? 'Fill mode' : 'Fit mode');
+});
+
+document.getElementById('pcRetryBtn')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const t = Number(mp.currentTime) || 0;
+  showLoading();
+  mp.src = STREAM_URL;
+  if (typeof mp.load === 'function') mp.load();
+  mp.addEventListener('loadedmetadata', () => {
+    try { mp.currentTime = t; } catch (_) {}
+    mp.play()?.catch(() => {});
   }, { once: true });
-})();
+  showToast('Retrying stream…');
+});
 
+document.getElementById('pcShareBtn')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (navigator.share) navigator.share({ title: document.title, url: location.href }).catch(() => {});
+  else if (navigator.clipboard) navigator.clipboard.writeText(location.href).then(() => showToast('Link copied!'));
+});
 
-/* Episode / Seasons on /watch/: only real SxxExx seasons; EXTRA for non-S/E groups; 1 group = hide */
-(function setupRelated() {
+const fsBtn = document.getElementById('pcFullscreenBtn');
+const fsIcon = document.getElementById('fsIcon');
+fsBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const active = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!active) (wrapper.requestFullscreen || wrapper.webkitRequestFullscreen)?.call(wrapper).catch(() => {});
+  else (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+});
+document.addEventListener('fullscreenchange', () => {
+  const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  if (fsIcon) fsIcon.innerHTML = isFull
+    ? '<path d="M9 4v5H4M15 4v5h5M20 15h-5v5M4 15h5v5"/>'
+    : '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>';
+});
+
+// Prev / Next Episode
+const prevBtn = document.getElementById('prevGroupBtn');
+const nextBtn = document.getElementById('nextGroupBtn');
+if (WATCH_GROUPS.length) {
+  if (prevBtn) { prevBtn.disabled = GROUP_INDEX <= 0; prevBtn.onclick = () => { if (GROUP_INDEX > 0) goToGroupButton(GROUP_INDEX - 1, preferredButtonForGroup(GROUP_INDEX - 1)); }; }
+  if (nextBtn) { nextBtn.disabled = GROUP_INDEX >= WATCH_GROUPS.length - 1; nextBtn.onclick = () => { if (GROUP_INDEX < WATCH_GROUPS.length - 1) goToGroupButton(GROUP_INDEX + 1, preferredButtonForGroup(GROUP_INDEX + 1)); }; }
+}
+
+// Episodes Drawer
+document.getElementById('episodesDrawerBtn')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  swPop?.classList.remove('open');
+  lpPop?.classList.remove('open');
+  epDrawer?.classList.toggle('open');
+});
+document.getElementById('closeDrawerBtn')?.addEventListener('click', (e) => { e.stopPropagation(); epDrawer?.classList.remove('open'); });
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  if (t?.closest && (t.closest('.p4u-pop') || t.closest('.p4u-drawer') || t.closest('#pcSwitchBtn') || t.closest('#pcLaptopBtn') || t.closest('#episodesDrawerBtn'))) return;
+  swPop?.classList.remove('open'); lpPop?.classList.remove('open'); epDrawer?.classList.remove('open');
+});
+
+(function initEpisodesDrawer(){
   const list = document.getElementById('sideEpList');
   const seasonSelect = document.getElementById('seasonFilter');
   const search = document.getElementById('episodeSearch');
-  const count = document.getElementById('episodeCount');
   const seasonBar = document.getElementById('sideSeasonBar');
-  const card = document.getElementById('sideEpsCard');
-  if (!list || !Array.isArray(WATCH_GROUPS) || WATCH_GROUPS.length <= 1) {
-    if (card) card.style.display = 'none';
-    return;
+  if (!list || WATCH_GROUPS.length <= 1) return;
+  function parseEp(name) {
+    const t = String(name || '').replace(/[._]+/g, ' ');
+    const m = t.match(/S0*(\d{1,3})\s*[- ]*E(?:p)?0*(\d{1,4})/i) || t.match(/0*(\d{1,3})\s*x\s*0*(\d{1,4})/i);
+    if (m) return { s: Number(m[1]), e: Number(m[2]) };
+    const eOnly = t.match(/(?:Episode|Ep)\s*0*(\d{1,4})/i);
+    return eOnly ? { s: 1, e: Number(eOnly[1]) } : null;
   }
-  if (card) card.style.display = '';
-
-  function parseEpisode(name) {
-    const text = String(name || '').replace(/[._]+/g, ' ').trim();
-    const patterns = [
-      /\bS(?:eason\s*)?0*(\d{1,3})\s*[-_. ]*E(?:p(?:isode)?\s*)?0*(\d{1,4})\b/i,
-      /\bSeason\s*0*(\d{1,3})\s*[-_. ]*(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
-      /\b0*(\d{1,3})\s*[xX]\s*0*(\d{1,4})\b/i,
-      /\bS0*(\d{1,3})[ ._-]+(?:Episode|Ep)\s*0*(\d{1,4})\b/i,
-      /\bSeason\s*0*(\d{1,3})\b.*?\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i,
-      /\b(?:S|Season)\s*0*(\d{1,3})\b.*?\b(?:E|Episode|Ep)\s*0*(\d{1,4})\b/i,
-    ];
-    for (let i = 0; i < patterns.length; i++) {
-      const m = text.match(patterns[i]);
-      if (m) return { season: Number(m[1]), episode: Number(m[2]) };
-    }
-    // Bare EP only counts as Season 1 when no season marker is present
-    const seasonOnly = text.match(/\bSeason\s*0*(\d{1,3})\b|\bS0*(\d{1,3})(?!\s*[-_. ]*E)/i);
-    if (seasonOnly) return null;
-    const epOnly = text.match(/\b(?:Episode|Ep|E)\s*0*(\d{1,4})\b/i);
-    if (epOnly) return { season: 1, episode: Number(epOnly[1]) };
-    return null;
-  }
-
-  const parsedRows = [];
-  const extraRows = [];
-  WATCH_GROUPS.forEach((g, idx) => {
-    const parsed = parseEpisode(g && g.name);
-    if (parsed && Number.isFinite(parsed.season) && parsed.season > 0 &&
-        Number.isFinite(parsed.episode) && parsed.episode > 0) {
-      parsedRows.push({ g, idx, parsed });
-    } else {
-      extraRows.push({ g, idx, parsed: null });
-    }
-  });
-
-  parsedRows.sort((a, b) => a.parsed.season - b.parsed.season || a.parsed.episode - b.parsed.episode || a.idx - b.idx);
-  const seasons = [...new Set(parsedRows.map(r => r.parsed.season))].sort((a, b) => a - b);
-
-  // Mode: seasons (has S/E) or EXTRA-only (no S/E labels)
-  const useSeasons = seasons.length > 0;
-  const currentParsed = parsedRows.find(r => r.idx === Number(GROUP_INDEX));
-  let selected = useSeasons
-    ? (currentParsed ? String(currentParsed.parsed.season) : String(seasons[0]))
-    : 'extra';
-
-  if (seasonSelect) {
-    seasonSelect.innerHTML = '';
-    if (useSeasons) {
-      const allOpt = document.createElement('option');
-      allOpt.value = 'all'; allOpt.textContent = 'All Seasons';
-      seasonSelect.appendChild(allOpt);
-      seasons.forEach(s => {
-        const o = document.createElement('option');
-        o.value = String(s);
-        const n = parsedRows.filter(r => r.parsed.season === s).length;
-        o.textContent = 'Season ' + s + ' (' + n + ' eps)';
-        seasonSelect.appendChild(o);
-      });
-    }
-    if (extraRows.length) {
-      const o = document.createElement('option');
-      o.value = 'extra';
-      o.textContent = useSeasons ? ('EXTRA (' + extraRows.length + ' groups)') : 'All Groups';
+  const rows = WATCH_GROUPS.map((g, idx) => ({ g, idx, p: parseEp(g.name) }));
+  const seasons = [...new Set(rows.filter(r => r.p).map(r => r.p.s))].sort((a,b) => a - b);
+  let selected = seasons.length ? String((rows.find(r => r.idx === GROUP_INDEX)?.p?.s) || seasons[0]) : 'all';
+  if (seasonSelect && seasons.length) {
+    seasons.forEach(s => {
+      const o = document.createElement('option'); o.value = String(s); o.textContent = 'Season ' + s;
       seasonSelect.appendChild(o);
-    }
-    if (!useSeasons && !extraRows.length) {
-      if (card) card.style.display = 'none';
-      return;
-    }
-  }
-
-  function setActiveSeasonUI(value) {
-    selected = value;
-    if (seasonBar) {
-      seasonBar.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.season === value));
-    }
-    if (seasonSelect) seasonSelect.value = value;
-  }
-
-  if (seasonBar) {
-    seasonBar.innerHTML = '';
-    const addBtn = (label, value) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = label;
-      b.dataset.season = value;
-      b.onclick = () => { setActiveSeasonUI(value); render(); };
-      seasonBar.appendChild(b);
-    };
-    if (useSeasons) {
-      seasons.forEach(s => {
-        const n = parsedRows.filter(r => r.parsed.season === s).length;
-        addBtn('S' + s + ' (' + n + ')', String(s));
-      });
-    }
-    if (extraRows.length) {
-      addBtn(useSeasons ? ('EXTRA (' + extraRows.length + ')') : ('Groups (' + extraRows.length + ')'), 'extra');
-    }
-  }
-
-  // Default selection
-  if (useSeasons && currentParsed) setActiveSeasonUI(String(currentParsed.parsed.season));
-  else if (useSeasons) setActiveSeasonUI(String(seasons[0]));
-  else setActiveSeasonUI('extra');
-
-  function pickButtonIndex(idx) {
-    const cur = (WATCH_GROUPS[GROUP_INDEX] && WATCH_GROUPS[GROUP_INDEX].buttons) || [];
-    const target = (WATCH_GROUPS[idx] && WATCH_GROUPS[idx].buttons) || [];
-    if (!target.length) return 0;
-    const curBtn = cur[BUTTON_INDEX] || cur[0];
-    if (curBtn && curBtn.name) {
-      const match = target.findIndex(b => String(b.name || '').toLowerCase() === String(curBtn.name || '').toLowerCase());
-      if (match >= 0) return match;
-    }
-    return Math.min(Number(BUTTON_INDEX) || 0, target.length - 1);
-  }
-
-  function render() {
-    const term = (search && search.value || '').trim().toLowerCase();
-    let rows = [];
-    if (selected === 'extra') {
-      rows = extraRows;
-    } else if (selected === 'all') {
-      rows = parsedRows.concat(extraRows);
-    } else {
-      rows = parsedRows.filter(r => String(r.parsed.season) === String(selected));
-    }
-    if (term) {
-      rows = rows.filter(r => String(r.g.name || '').toLowerCase().includes(term));
-    }
-    list.innerHTML = '';
-    rows.forEach(({ g, idx, parsed }) => {
-      const buttons = g.buttons || [];
-      const first = buttons[0];
-      if (!first || !first.url) return;
-      let preferred = 0;
-      try { preferred = (typeof preferredButtonForGroup === "function" ? preferredButtonForGroup(idx) : pickButtonIndex(idx)); } catch (e) { preferred = 0; }
-      const chosen = buttons[preferred] || first;
-      const href = (typeof watchHrefFor === 'function' ? watchHrefFor(idx, preferred) : null) || chosen.url;
-      const link = document.createElement('a');
-      link.className = 'side-ep-btn' + (idx === Number(GROUP_INDEX) ? ' active' : '');
-      link.href = href;
-      if (parsed) {
-        const tag = document.createElement('span');
-        tag.className = 'ep-tag';
-        tag.textContent = 'S' + String(parsed.season).padStart(2, '0') + ' · EP ' + String(parsed.episode).padStart(2, '0');
-        link.appendChild(tag);
-      } else {
-        const tag = document.createElement('span');
-        tag.className = 'ep-tag';
-        tag.textContent = 'GROUP';
-        link.appendChild(tag);
-      }
-      const name = document.createElement('span');
-      name.className = 'ep-name';
-      name.textContent = g.name || (parsed ? ('Episode ' + parsed.episode) : ('Group ' + (idx + 1)));
-      link.appendChild(name);
-      list.appendChild(link);
     });
-    if (count) {
-      const label = selected === 'extra' ? 'group' : 'episode';
-      count.textContent = rows.length + ' ' + label + (rows.length === 1 ? '' : 's');
-    }
+    seasonSelect.value = selected;
+    seasonSelect.onchange = () => { selected = seasonSelect.value; render(); };
   }
-
-  search && search.addEventListener('input', render);
-  seasonSelect && seasonSelect.addEventListener('change', () => {
-    setActiveSeasonUI(seasonSelect.value || (useSeasons ? String(seasons[0]) : 'extra'));
-    render();
-  });
+  if (seasonBar && seasons.length) {
+    seasons.forEach(s => {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = 'S' + s;
+      if (String(s) === selected) b.classList.add('active');
+      b.onclick = () => {
+        selected = String(s);
+        if (seasonSelect) seasonSelect.value = selected;
+        seasonBar.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+        render();
+      };
+      seasonBar.appendChild(b);
+    });
+  }
+  function render() {
+    const q = (search?.value || '').trim().toLowerCase();
+    list.innerHTML = '';
+    rows.filter(r => {
+      if (selected !== 'all' && seasons.length && (!r.p || String(r.p.s) !== selected)) return false;
+      if (q && !String(r.g.name || '').toLowerCase().includes(q)) return false;
+      return true;
+    }).forEach(r => {
+      const a = document.createElement('a');
+      a.className = 'p4u-ep-item' + (r.idx === GROUP_INDEX ? ' active' : '');
+      a.href = watchHrefFor(r.idx, preferredButtonForGroup(r.idx)) || '#';
+      a.innerHTML = `<span class="p4u-ep-tag">${r.p ? 'S'+String(r.p.s).padStart(2,'0')+'·E'+String(r.p.e).padStart(2,'0') : 'EP'}</span><span class="p4u-ep-name">${r.g.name || ('Group '+(r.idx+1))}</span>`;
+      list.appendChild(a);
+    });
+  }
+  search?.addEventListener('input', render);
   render();
 })();
 
-
-/* ===== Movi-only playback with verified stall recovery ===== */
-let stallRetries = 0;
-let lastMediaProgressAt = Date.now();
-let recoveryInFlight = false;
-let recoveryCooldownUntil = 0;
-let stablePlaybackSince = 0;
-let recoveryWatchTimer = null;
-const MAX_STALL_RECOVERIES = 2;
-const STALL_TIMEOUT_MS = (() => {
-  // Browser Network Information API is optional; never depend on carrier names.
-  // Give slower 2G/3G or data-saver connections a longer buffering grace period.
-  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-  const type = String(connection && connection.effectiveType || '').toLowerCase();
-  if (connection && connection.saveData) return 40000;
-  if (type === 'slow-2g' || type === '2g') return 45000;
-  if (type === '3g') return 45000;
-  return 45000;
-})();
-const RECOVERY_COOLDOWN_MS = 30000;
-
-function clearStallWatch() {
-  if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+// Boot Movi-Player
+function loadScript(src) {
+  return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.async = true; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
 }
-function clearRecoveryWatch() {
-  if (recoveryWatchTimer) { clearInterval(recoveryWatchTimer); recoveryWatchTimer = null; }
-}
-function playbackTime() {
-  const value = Number(moviPlayer && moviPlayer.currentTime);
-  return Number.isFinite(value) ? value : 0;
-}
-function verifyRecovery(startAt, wasPlaying) {
-  clearRecoveryWatch();
-  let lastTime = playbackTime();
-  let advancedBy = 0;
-  let sawPlaying = false;
-  const startedAt = Date.now();
-  recoveryWatchTimer = setInterval(() => {
-    if (!moviPlayer) { clearRecoveryWatch(); return; }
-    const nowTime = playbackTime();
-    if (nowTime > lastTime + 0.15) {
-      advancedBy += nowTime - lastTime;
-      lastTime = nowTime;
-      lastMediaProgressAt = Date.now();
-    }
-    if (!moviPlayer.paused && !moviPlayer.ended) sawPlaying = true;
-    // Only count recovery after playback is genuinely moving, not on canplay/playing alone.
-    if (sawPlaying && advancedBy >= 1.25) {
-      clearRecoveryWatch();
-      recoveryInFlight = false;
-      recoveryCooldownUntil = Date.now() + RECOVERY_COOLDOWN_MS;
-      stablePlaybackSince = Date.now();
-      hideLoading();
-      showToast('Playback resumed.');
-      scheduleStallRecovery();
-      return;
-    }
-    if (Date.now() - startedAt >= 12000) {
-      clearRecoveryWatch();
-      recoveryInFlight = false;
-      showLoading();
-      showToast('Playback did not recover. Tap Play to retry or choose another source.');
-      // Do not reload again immediately; require a fresh user action or cooldown.
-      recoveryCooldownUntil = Date.now() + RECOVERY_COOLDOWN_MS;
-      if (wasPlaying && moviPlayer.paused) {
-        try { moviPlayer.pause(); } catch (_) {}
-      }
-    }
-  }, 500);
-}
-function recoverMoviAfterStall() {
-  if (!moviPlayer || recoveryInFlight || Date.now() < recoveryCooldownUntil) return;
-  if (stallRetries >= MAX_STALL_RECOVERIES) {
-    clearStallWatch();
-    showLoading();
-    showToast('Stream is still stuck after recovery attempts. Tap Play or select another source.');
-    return;
-  }
-  recoveryInFlight = true;
-  stallRetries += 1;
-  const resumeAt = playbackTime();
-  const wasPlaying = !moviPlayer.paused || hasPlayedOnce;
-  lastMediaProgressAt = Date.now();
+(async () => {
   showLoading();
   try {
-    // One bounded re-request, then verify real time advancement before declaring success.
-    moviPlayer.src = STREAM_URL;
-    if (typeof moviPlayer.load === 'function') moviPlayer.load();
-    let restored = false;
-    const restore = () => {
-      if (restored || !moviPlayer) return;
-      restored = true;
-      if (resumeAt > 1) {
-        try { moviPlayer.currentTime = resumeAt; } catch (_) {}
-      }
-      if (wasPlaying) {
-        try {
-          const result = moviPlayer.play && moviPlayer.play();
-          if (result && result.catch) result.catch(() => {});
-        } catch (_) {}
-      }
-      verifyRecovery(resumeAt, wasPlaying);
-    };
-    moviPlayer.addEventListener('loadedmetadata', restore, { once: true });
-    setTimeout(() => {
-      if (!restored && moviPlayer && moviPlayer.readyState >= 1) restore();
-    }, 5000);
-    // If metadata never arrives, end this attempt instead of reloading indefinitely.
-    setTimeout(() => {
-      if (!restored && recoveryInFlight) {
-        recoveryInFlight = false;
-        recoveryCooldownUntil = Date.now() + RECOVERY_COOLDOWN_MS;
-        showLoading();
-        showToast('Stream did not reconnect. Tap Play to retry.');
-      }
-    }, 12000);
-  } catch (err) {
-    recoveryInFlight = false;
-    recoveryCooldownUntil = Date.now() + RECOVERY_COOLDOWN_MS;
-    console.warn('[player] Movi buffering recovery failed', err);
-    showToast('Could not reconnect this stream. Try another source.');
-  }
-}
-// Quick actions are deliberately separate from the provider's native controls.
-(function wirePlayerQuickActions(){
-  const fitBtn=document.getElementById('pcFitBtn');
-  const retryBtn=document.getElementById('pcRetryBtn');
-  const fsBtn=document.getElementById('pcFullscreenBtn');
-  const wrapper=document.getElementById('playerWrapper');
-  if(fitBtn && moviPlayer){
-    fitBtn.addEventListener('click',(e)=>{
-      e.preventDefault(); e.stopPropagation();
-      const cover=moviPlayer.classList.toggle('player-fit-cover');
-      moviPlayer.classList.toggle('player-fit-contain',!cover);
-      try {
-        moviPlayer.style.setProperty('--movi-object-fit', cover ? 'cover' : 'contain');
-        moviPlayer.style.objectFit = cover ? 'cover' : 'contain';
-        if (moviPlayer.shadowRoot) {
-          moviPlayer.shadowRoot.querySelectorAll('video, canvas').forEach(v => {
-            v.style.objectFit = cover ? 'cover' : 'contain';
-          });
-        }
-      } catch(_){}
-      fitBtn.setAttribute('aria-pressed',String(cover));
-      fitBtn.title=cover?'Video fit: Fill (tap to contain)':'Video fit: Contain (tap to fill)';
-      showToast(cover?'Video fill enabled':'Video fit enabled');
-    });
-  }
-  if(retryBtn && moviPlayer){
-    retryBtn.addEventListener('click',(e)=>{
-      e.preventDefault(); e.stopPropagation();
-      stallRetries=0;
-      recoveryCooldownUntil=0;
-      recoveryInFlight=false;
-      clearStallWatch();
-      clearRecoveryWatch();
-      try {
-        const t = Number(moviPlayer.currentTime)||0;
-        showLoading();
-        moviPlayer.src = STREAM_URL;
-        if (typeof moviPlayer.load === 'function') moviPlayer.load();
-        moviPlayer.addEventListener('loadedmetadata', function once(){
-          moviPlayer.removeEventListener('loadedmetadata', once);
-          try { moviPlayer.currentTime = t; } catch(_){}
-          const p = moviPlayer.play(); if(p&&p.catch) p.catch(()=>{});
-        });
-      } catch(_) { recoverMoviAfterStall(); }
-      showToast('Retrying playback…');
-    });
-  }
-  if(fsBtn && wrapper){
-    fsBtn.addEventListener('click',(e)=>{
-      e.preventDefault(); e.stopPropagation();
-      const active = document.fullscreenElement || document.webkitFullscreenElement;
-      if(!active){
-        const req = wrapper.requestFullscreen || wrapper.webkitRequestFullscreen;
-        if(req) req.call(wrapper).catch(()=>showToast('Fullscreen blocked by browser'));
-      } else {
-        const exit = document.exitFullscreen || document.webkitExitFullscreen;
-        if(exit) exit.call(document);
-      }
-    });
-    const syncFsIcon = () => {
-      const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement);
-      fsBtn.setAttribute('aria-pressed', String(isFull));
-      fsBtn.title = isFull ? 'Exit fullscreen' : 'Fullscreen';
-      fsBtn.innerHTML = isFull
-        ? '<svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M20 15h-5v5M4 15h5v5"/></svg>'
-        : '<svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>';
-    };
-    document.addEventListener('fullscreenchange', syncFsIcon);
-    document.addEventListener('webkitfullscreenchange', syncFsIcon);
-  }
-})();
-
-// Keyboard shortcuts: ignore typing fields and preserve browser/system shortcuts.
-(function wirePlayerKeyboardShortcuts(){
-  document.addEventListener('keydown',event=>{
-    if(!playerWrapper || !moviPlayer || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-    const target=event.target;
-    if(target && (target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(target.tagName))) return;
-    if(!playerWrapper.contains(target) && !playerWrapper.matches(':fullscreen')) return;
-    const key=event.key.toLowerCase();
-    if(key===' ' || key==='k'){
-      event.preventDefault();
-      if(moviPlayer.paused){const play=moviPlayer.play();if(play&&play.catch)play.catch(()=>showToast('Tap Play to start playback'));}
-      else moviPlayer.pause();
-    }else if(key==='arrowleft' || key==='arrowright'){
-      event.preventDefault();
-      const duration=Number(moviPlayer.duration)||0;
-      const next=Math.max(0,Math.min(duration||Infinity,(Number(moviPlayer.currentTime)||0)+(key==='arrowleft'?-10:10)));
-      try{moviPlayer.currentTime=next;}catch(_){}
-      playerWrapper.classList.remove('chrome-idle');
-      moviPlayer.classList.remove('chrome-idle');
-    }else if(key==='m'){
-      moviPlayer.muted=!moviPlayer.muted;
-      showToast(moviPlayer.muted?'Muted':'Sound on');
-    }else if(key==='f'){
-      event.preventDefault();
-      const fs=document.fullscreenElement||document.webkitFullscreenElement;
-      if(!fs){const req=playerWrapper.requestFullscreen||playerWrapper.webkitRequestFullscreen;if(req)req.call(playerWrapper);}
-      else{const exit=document.exitFullscreen||document.webkitExitFullscreen;if(exit)exit.call(document);}
-    }
-  });
-})();
-
-function scheduleStallRecovery() {
-  clearStallWatch();
-  if (!moviPlayer || moviPlayer.paused || moviPlayer.ended || recoveryInFlight) return;
-  stallTimer = setTimeout(() => {
-    stallTimer = null;
-    if (!moviPlayer || moviPlayer.paused || moviPlayer.ended) return;
-    if (Date.now() - lastMediaProgressAt >= STALL_TIMEOUT_MS) recoverMoviAfterStall();
-    else scheduleStallRecovery();
-  }, STALL_TIMEOUT_MS);
-}
-function wireStallWatch() {
-  const markRealProgress = () => {
-    lastMediaProgressAt = Date.now();
-    if (moviPlayer && !moviPlayer.paused && !recoveryInFlight) scheduleStallRecovery();
-    if (stablePlaybackSince && Date.now() - stablePlaybackSince >= 20000) {
-      // Retry budget resets only after a sustained period of verified playback.
-      stallRetries = 0;
-      stablePlaybackSince = Date.now();
-    }
-  };
-  moviPlayer.addEventListener('playing', () => {
-    hasPlayedOnce = true;
-    if (!recoveryInFlight) { hideLoading(); stablePlaybackSince = Date.now(); }
-    markRealProgress();
-  });
-  // Only timeupdate proves media time is advancing. Network progress/canplay do not.
-  moviPlayer.addEventListener('timeupdate', markRealProgress);
-  moviPlayer.addEventListener('waiting', () => {
-    showLoading();
-    if (!recoveryInFlight) {
-      lastMediaProgressAt = Date.now();
-      scheduleStallRecovery();
-    }
-  });
-  moviPlayer.addEventListener('stalled', () => {
-    showLoading();
-    if (!recoveryInFlight) scheduleStallRecovery();
-  });
-  moviPlayer.addEventListener('error', () => {
-    clearStallWatch();
-    clearRecoveryWatch();
-    recoveryInFlight = false;
-    showLoading();
-    showToast('Movi Player could not load this stream. Check the source or choose another.');
-  });
-  moviPlayer.addEventListener('pause', clearStallWatch);
-  moviPlayer.addEventListener('ended', clearStallWatch);
-}
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script'); s.src = src; s.async = true;
-    s.onload = resolve; s.onerror = reject; document.head.appendChild(s);
-  });
-}
-async function initWasm() {
-  if (wasmLoading || wasmLoaded) return;
-  wasmLoading = true; showLoading();
-  try {
-    try { await loadScript(MOVI_GLOBAL); }
-    catch (e) { console.warn('Movi primary CDN failed; trying same-player CDN fallback', e); await loadScript(MOVI_GLOBAL_FALLBACK); }
+    try { await loadScript(window.__HITLERYTPlayer.script); }
+    catch (_) { await loadScript(window.__HITLERYTPlayer.scriptFallback); }
     await customElements.whenDefined('movi-player');
-    if (!customElements.get('movi-player')) throw new Error('movi-player custom element unavailable');
-    setEngine('movi');
-    if (!wasmWired) { wasmWired = true; wireStallWatch(); }
-    moviPlayer.style.display = 'block';
-    moviPlayer.setAttribute('playsinline','');
-    moviPlayer.setAttribute('controls','');
-    moviPlayer.setAttribute('autoplay','');
-    moviPlayer.setAttribute('muted','');
-    moviPlayer.muted = true;
-    moviPlayer.src = STREAM_URL;
-    if (typeof moviPlayer.load === 'function') moviPlayer.load();
-    wasmLoaded = true;
-    requestAutoPlay(moviPlayer);
-    [1200, 3000, 6000].forEach(ms => setTimeout(() => { if (moviPlayer.paused) requestAutoPlay(moviPlayer); }, ms));
+    mp.src = STREAM_URL;
+    if (typeof mp.load === 'function') mp.load();
+    mp.play()?.catch(() => hideLoading());
   } catch (err) {
-    console.error('Movi Player initialization failed', err);
-    hideLoading(); showToast('Movi Player failed to initialize. Check your connection and retry.');
-  } finally { wasmLoading = false; }
-}
-function switchEngine() { showToast('Movi Player is the only built-in player.'); }
-
-/* Volume and brightness are controlled by Movi Player's own controls. */
-
-/* ===== Resume position (shared) ===== */
-const RESUME_ID = SHORT_CODE;
-const resumeStorageKey = () => 'ddstream:pos:' + RESUME_ID;
-function readSavedPosition() {
-  try { return parseFloat(localStorage.getItem(resumeStorageKey())) || 0; } catch (e) { return 0; }
-}
-function savePosition() {
-  try {
-    const el = activeMedia();
-    const t = el.currentTime;
-    if (t && isFinite(t) && t > 2) localStorage.setItem(resumeStorageKey(), String(t));
-  } catch (_) {}
-}
-setInterval(savePosition, 3000);
-window.addEventListener('beforeunload', savePosition);
-
-/* ===== Boot ===== */
-showLoading();
-const savedPos = readSavedPosition();
-if (savedPos > 5) {
-  switchAt = savedPos;
-  // Will be applied after metadata
-}
-
-initWasm();
-
-{% if player_settings.auto_player_redirect %}
-(function autoPlayerChooser(){
-  const chooser = document.querySelector('.player-shell');
-  if (chooser) {
-    chooser.classList.add('auto-player-ready');
-    setTimeout(() => chooser.scrollIntoView({behavior:'smooth', block:'start'}), 250);
+    hideLoading();
+    showToast('Player failed to load — tap Retry or use External Player');
   }
 })();
-{% endif %}
 </script>
-
-<style id="persistent-player-controls-fix">
-  /* Keep the full player surface usable in both orientations. */
-  #playerWrapper {
-    position: relative !important;
-    overflow: visible !important;
-    touch-action: manipulation;
-    isolation: isolate;
-  }
-  #playerWrapper:fullscreen,
-  #playerWrapper:-webkit-full-screen {
-    position: fixed !important;
-    inset: 0 !important;
-    width: 100vw !important;
-    height: 100vh !important;
-    height: 100dvh !important;
-    max-width: none !important;
-    max-height: none !important;
-    aspect-ratio: auto !important;
-    overflow: visible !important;
-    background: #000 !important;
-    z-index: 2147482000 !important;
-  }
-  #playerWrapper:fullscreen movi-player,
-  #playerWrapper:-webkit-full-screen movi-player {
-    display: block !important;
-    width: 100% !important;
-    height: 100% !important;
-    max-height: 100% !important;
-  }
-  /* Do not let the page's idle class hide the native seek bar/bottom row. */
-  #playerWrapper.chrome-idle .player-chrome-btn,
-  #playerWrapper.chrome-idle .player-pop:not(.open),
-  movi-player.chrome-idle .player-chrome-btn,
-  movi-player.chrome-idle .player-pop:not(.open) {
-    opacity: 1 !important;
-    visibility: visible !important;
-    pointer-events: auto !important;
-    transform: none !important;
-  }
-  #playerWrapper .player-chrome-btn {
-    opacity: 1 !important;
-    visibility: visible !important;
-    pointer-events: auto !important;
-    transform: none !important;
-  }
-  #playerWrapper .player-chrome-btn { z-index: 2147483000 !important; }
-  #playerWrapper .player-pop { z-index: 2147483005 !important; max-height: calc(100% - 58px) !important; overflow-y: auto !important; }
-  @media (orientation: landscape) and (max-height: 600px) {
-    #playerWrapper:fullscreen .player-chrome-btn,
-    #playerWrapper:-webkit-full-screen .player-chrome-btn {
-      width: 36px !important;
-      height: 36px !important;
-    }
-
-  }
-</style>
-
-
-<script>
-(() => {
-  const code = {{ file.short_code|tojson }};
-  const counter = document.querySelector('.meta span:nth-child(2)');
-  const key = 'amz-play-view-' + code;
-  let token = localStorage.getItem(key);
-  if (!token) { token = (crypto.randomUUID ? crypto.randomUUID() : 'v-' + Date.now() + '-' + Math.random().toString(36).slice(2)) + '-visitor'; localStorage.setItem(key, token); }
-  let registered = false;
-  async function registerPlaybackView() {
-    if (registered) return; registered = true;
-    try {
-      const res = await fetch('/api/views/' + encodeURIComponent(code), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor_token:token})});
-      if (!res.ok) return; const data = await res.json();
-      if (counter && Number.isFinite(data.views)) counter.textContent = data.views.toLocaleString() + ' views';
-    } catch (_) {}
-  }
-  const custom = document.getElementById('moviPlayer');
-  if (custom) { custom.addEventListener('play', registerPlaybackView, {once:true}); custom.addEventListener('playing', registerPlaybackView, {once:true}); }
-})();
-</script>
-
-<style>
-/* Clean, compact episode and player controls */
-.side-season-bar button{border-radius:999px;padding:7px 12px;background:#151515;color:#d4d0c7;border-color:rgba(255,255,255,.12)}
-.side-season-bar button:hover{border-color:rgba(139,92,246,.45);color:#93c5fd}
-.side-ep-btn.active{border-color:rgba(139,92,246,.6)!important;background:rgba(139,92,246,.10)!important}
-.side-ep-btn .ep-tag{color:#22c55e}
-.player-shell{background:#080808;box-shadow:0 18px 48px rgba(0,0,0,.58),0 0 20px rgba(139,92,246,.10)}
-.player-shell .neon-ribbon{background:conic-gradient(from 0deg,#3b82f6,#ef4444,#3b82f6,#22c55e,#3b82f6)}
-.player-loading .spinner{border-top-color:#8b5cf6}
-</style>
-
-<style>
-
-/* Movi seek-bar: neon purple -> red -> blue, with matching track/handle. */
-movi-player {
-  --movi-primary-color: #a855f7;
-  --movi-progress-color: linear-gradient(90deg, #a855f7 0%, #ef4444 52%, #3b82f6 100%);
-  --movi-buffer-color: rgba(147, 120, 255, .38);
-  --movi-divider-color: rgba(168, 85, 247, .28);
-}
-movi-player::part(progress) {
-  background: rgba(255,255,255,.22);
-  border-radius: 999px;
-}
-movi-player::part(progress-played) {
-  background: linear-gradient(90deg, #a855f7 0%, #ef4444 52%, #3b82f6 100%);
-  border-radius: 999px;
-  box-shadow: 0 0 8px rgba(168,85,247,.55), 0 0 12px rgba(59,130,246,.3);
-}
-movi-player::part(progress-buffer) { background: rgba(147,120,255,.38); }
-movi-player::part(progress-handle) {
-  background: #fff;
-  border: 2px solid #a855f7;
-  box-shadow: 0 0 0 2px rgba(239,68,68,.35), 0 0 10px rgba(59,130,246,.65);
-}
-/* Page-owned laptop/source/download buttons follow the player's 2.6s idle rule. */
-#playerWrapper.chrome-idle .player-chrome-btn,
-#playerWrapper.chrome-idle .player-pop:not(.open),
-#playerWrapper:fullscreen.chrome-idle .player-chrome-btn,
-#playerWrapper:fullscreen.chrome-idle .player-pop:not(.open),
-movi-player.chrome-idle .player-chrome-btn,
-movi-player.chrome-idle .player-pop:not(.open) {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transform: translateY(-4px);
-}
-/* Fullscreen overlay controls are re-parented into movi-player; mirror idle state there. */
-movi-player.chrome-idle .player-chrome-btn,
-#playerWrapper.chrome-idle .player-pop:not(.open),
-movi-player.chrome-idle .player-pop:not(.open) {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transform: translateY(-4px);
-}
-#playerWrapper .player-chrome-btn {
-  transition: opacity .18s ease, visibility .18s ease, transform .18s ease,
-             background .2s, border-color .2s;
-}
-/* Keep player-owned bottom chrome in sync with the same explicit toggle. */
-movi-player.chrome-idle::part(chrome),
-movi-player.chrome-idle::part(controls),
-movi-player.chrome-idle::part(bottom-controls),
-movi-player.chrome-idle::part(progress-container) {
-  opacity: 0 !important;
-  visibility: hidden !important;
-  pointer-events: none !important;
-}
-#playerWrapper:not(.chrome-idle) movi-player::part(chrome),
-#playerWrapper:not(.chrome-idle) movi-player::part(controls) {
-  opacity: 1;
-  visibility: visible;
-}
-
-#playerWrapper.chrome-idle .player-pop:not(.open) {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
-#playerWrapper .player-pop { transition: opacity .18s ease, visibility .18s ease; }
-@media (prefers-reduced-motion: reduce) {
-  #playerWrapper .player-chrome-btn, #playerWrapper .player-pop { transition: none; }
-}
-
-
-  /* Clean RGB / Blue / Purple / Red / Green button accents & all-mode fixes */
-  .player-shell{background:#0b0f18!important;border:1px solid rgba(255,255,255,.12)!important;border-radius:18px!important;padding:0!important;box-shadow:0 18px 46px rgba(0,0,0,.48)!important}
-  .player-shell .neon-ribbon{background:conic-gradient(from 0deg,#3b82f6,#8b5cf6,#ef4444,#22c55e,#3b82f6)!important;opacity:.85!important}
-  .player-chrome-btn{background:rgba(8,10,18,.88)!important;border:1px solid rgba(139,92,246,.38)!important;color:#f8fafc!important}
-  .pc-switch{border-color:rgba(139,92,246,.6)!important;color:#c4b5fd!important}
-  .pc-laptop{border-color:rgba(59,130,246,.6)!important;color:#93c5fd!important}
-  .pc-download{border-color:rgba(34,197,94,.6)!important;color:#86efac!important}
-  .pc-fit{border-color:rgba(168,85,247,.6)!important;color:#d8b4fe!important}
-  .pc-retry{border-color:rgba(239,68,68,.6)!important;color:#fca5a5!important}
-  .pc-fullscreen{border-color:rgba(59,130,246,.7)!important;color:#fff!important;box-shadow:0 0 10px rgba(59,130,246,.28)!important}
-  .player-chrome-btn:hover{transform:scale(1.06)!important;box-shadow:0 0 14px rgba(139,92,246,.45)!important}
-  movi-player.player-fit-cover,movi-player.player-fit-cover::part(video){object-fit:cover!important;width:100%!important;height:100%!important}
-  movi-player.player-fit-contain,movi-player.player-fit-contain::part(video){object-fit:contain!important;width:100%!important;height:100%!important}
-  @media (orientation: landscape) and (max-height: 620px){
-    .player-wrapper{max-height:calc(100dvh - 18px)!important;width:100%!important;aspect-ratio:16/9}
-    .player-chrome-left{top:max(8px,env(safe-area-inset-top))!important;left:max(8px,env(safe-area-inset-left))!important}
-    .player-chrome-right{top:max(8px,env(safe-area-inset-top))!important;right:max(8px,env(safe-area-inset-right))!important}
-    .player-chrome-btn{width:34px!important;height:34px!important}
-    .player-pop{max-height:calc(100% - 54px)!important}
-  }
-  #playerWrapper:fullscreen .player-chrome-left,#playerWrapper:-webkit-full-screen .player-chrome-left{top:max(12px,env(safe-area-inset-top))!important;left:max(12px,env(safe-area-inset-left))!important}
-  #playerWrapper:fullscreen .player-chrome-right,#playerWrapper:-webkit-full-screen .player-chrome-right{top:max(12px,env(safe-area-inset-top))!important;right:max(12px,env(safe-area-inset-right))!important}
-
-
-  /* Unified, non-touching player toolbar arrangement */
-  .player-chrome-left,.player-chrome-right{position:absolute!important;top:10px!important;z-index:60!important;display:flex!important;flex-direction:row!important;align-items:center!important;gap:8px!important;pointer-events:none!important;margin:0!important;padding:0!important}
-  .player-chrome-left{left:10px!important;right:auto!important}
-  .player-chrome-right{right:10px!important;left:auto!important}
-  .player-chrome-btn{position:relative!important;top:auto!important;left:auto!important;right:auto!important;bottom:auto!important;width:36px!important;height:36px!important;min-width:36px!important;max-width:36px!important;flex:0 0 36px!important;margin:0!important;padding:0!important;border-radius:10px!important;pointer-events:auto!important;display:inline-flex!important;align-items:center!important;justify-content:center!important}
-  .player-chrome-btn svg{width:16px!important;height:16px!important;pointer-events:none!important}
-  .player-brand-float{left:56px!important;top:12px!important;pointer-events:none!important;z-index:20!important}
-  @media(max-width:600px){
-    .player-chrome-left,.player-chrome-right{top:8px!important;gap:6px!important}
-    .player-chrome-left{left:8px!important}.player-chrome-right{right:8px!important}
-    .player-chrome-btn{width:32px!important;height:32px!important;min-width:32px!important;max-width:32px!important;flex:0 0 32px!important;border-radius:9px!important}
-    .player-chrome-btn svg{width:15px!important;height:15px!important}
-  }
-  @media(max-width:480px){.player-brand-float{display:none!important}}
-
-
-  /* Tap-to-hide ALL player controls (top chrome + Movi center/bottom controls) */
-  #playerWrapper.controls-hidden .player-chrome-left,
-  #playerWrapper.controls-hidden .player-chrome-right,
-  #playerWrapper.controls-hidden .player-chrome-btn,
-  #playerWrapper.controls-hidden .pc-switch,
-  #playerWrapper.controls-hidden .player-pop,
-  #playerWrapper.controls-hidden .player-brand-float,
-  #playerWrapper.controls-hidden .player-shortcut-hint,
-  #playerWrapper.controls-hidden movi-player::part(chrome),
-  #playerWrapper.controls-hidden movi-player::part(controls),
-  #playerWrapper.controls-hidden movi-player::part(bottom-controls),
-  #playerWrapper.controls-hidden movi-player::part(progress-container),
-  #playerWrapper.controls-hidden movi-player::part(progress),
-  #playerWrapper.controls-hidden movi-player::part(seek),
-  #playerWrapper.controls-hidden movi-player::part(control-bar),
-  #playerWrapper.controls-hidden movi-player::part(bottom-bar),
-  #playerWrapper.controls-hidden movi-player::part(overlay-controls),
-  #playerWrapper.controls-hidden movi-player::part(controls-overlay) {
-    opacity: 0 !important;
-    visibility: hidden !important;
-    pointer-events: none !important;
-  }
-  #playerWrapper.controls-hidden .player-chrome-left,
-  #playerWrapper.controls-hidden .player-chrome-right,
-  #playerWrapper.controls-hidden .player-chrome-btn,
-  #playerWrapper.controls-hidden .player-brand-float,
-  #playerWrapper.controls-hidden .player-pop {
-    display: none !important;
-  }
-
-</style>
-
 {% endblock %}
