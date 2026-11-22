@@ -7,7 +7,7 @@ import os
 import urllib.parse
 import urllib.request
 
-from app.database import settings_col
+from app.database.connection import settings_col
 
 logger = logging.getLogger(__name__)
 
