@@ -241,6 +241,11 @@ async def health():
     }
 
 
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse({"error": "Internal Server Error", "detail": f"{type(exc).__name__}: {exc}"}, status_code=500)
+
 @app.get("/")
 async def index(request: Request):
     initial_items = []
@@ -262,6 +267,9 @@ async def index(request: Request):
     except Exception as exc:
         logger.warning("Could not pre-load initial catalog for index: %s", exc)
 
+    import json as _json
+    initial_items = _json.loads(_json.dumps(initial_items, default=str))
+    initial_categories = _json.loads(_json.dumps(initial_categories, default=str))
     return templates.TemplateResponse(
         request=request,
         name="index.html",
