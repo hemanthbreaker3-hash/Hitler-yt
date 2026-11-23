@@ -67,13 +67,19 @@ async def probe_duckdns_url(domain: str, port: int | None = None) -> tuple[str, 
     """Return (best_url, is_externally_reachable) for <domain>.duckdns.org."""
     dom = normalize_duckdns_domain(domain)
     p = int(port or os.getenv("PORT") or 8000)
-    https_url = f"https://{dom}.duckdns.org"
-    if await asyncio.to_thread(_sync_probe_health, https_url):
-        return https_url, True
-    http_url = f"http://{dom}.duckdns.org" if p == 80 else f"http://{dom}.duckdns.org:{p}"
-    if await asyncio.to_thread(_sync_probe_health, http_url):
-        return http_url, True
-    return http_url, False
+    candidates = [
+        f"https://{dom}.duckdns.org",
+        f"http://{dom}.duckdns.org",
+    ]
+    for cand_port in (p, 8001, 8000):
+        u = f"http://{dom}.duckdns.org" if cand_port == 80 else f"http://{dom}.duckdns.org:{cand_port}"
+        if u not in candidates:
+            candidates.append(u)
+    for cand in candidates:
+        if await asyncio.to_thread(_sync_probe_health, cand):
+            return cand, True
+    fallback = f"http://{dom}.duckdns.org" if p == 80 else f"http://{dom}.duckdns.org:{p}"
+    return fallback, False
 
 
 async def get_duckdns_config() -> tuple[str, str]:
@@ -157,7 +163,8 @@ async def _duckdns_loop() -> None:
             break
         except Exception as exc:
             logger.warning("DuckDNS loop error: %s", exc)
-        for _ in range(300):
+        sleep_secs = 300 if locals().get('reachable', True) else 60
+        for _ in range(sleep_secs):
             if _duckdns_stop:
                 break
             await asyncio.sleep(1)

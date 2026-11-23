@@ -64,6 +64,19 @@ fi
 
 # Build .env without sourcing/evaluating user-controlled shell text.
 # Pass the ngrok token with: export NGROK_AUTHTOKEN=YOUR_NGROK_AUTH_TOKEN
+
+# Interactive DuckDNS prompt (if TTY and not already set in env/.env)
+if [ -t 0 ] && [ -z "${DUCKDNS_DOMAIN:-}" ] && ! grep -Eq '^DUCKDNS_DOMAIN=.+' .env 2>/dev/null; then
+  printf "${GREEN}[%s]${NC} DuckDNS subdomain or URL (e.g. hitler-yt or hitler-yt.duckdns.org, Enter to skip): " "$APP_NAME"
+  read -r INPUT_DUCK_DOM || true
+  if [ -n "${INPUT_DUCK_DOM:-}" ]; then
+    export DUCKDNS_DOMAIN="$INPUT_DUCK_DOM"
+    printf "${GREEN}[%s]${NC} DuckDNS token (Enter to skip): " "$APP_NAME"
+    read -r INPUT_DUCK_TOK || true
+    [ -n "${INPUT_DUCK_TOK:-}" ] && export DUCKDNS_TOKEN="$INPUT_DUCK_TOK"
+  fi
+fi
+
 if [[ ! -f .env ]]; then
   [[ -f .env.example ]] || die ".env.example is missing."
   cp .env.example .env
@@ -98,7 +111,7 @@ aliases = {'APP_ID':'API_ID', 'DATABASE_URI':'MONGODB_URI', 'DATABASE_URL':'MONG
 for alias, canonical in aliases.items():
     if os.environ.get(alias) and not os.environ.get(canonical):
         os.environ[canonical] = os.environ[alias]
-keys = ('API_ID','API_HASH','BOT_TOKEN','OWNER_ID','ADMINS','CHANNEL_ID','FORCE_SUB_CHANNELS','MONGODB_URI','DATABASE_NAME','REDIS_URL','BASE_URL','BACKEND_URL','WEBSITE_URL','PORT','DEBUG','DEFAULT_EXPIRY','SESSIONS','ADMIN_PANEL_TOKEN','TMDB_API_KEY','BRANDING','LOGO_URL','STREAM_CHUNK_SIZE','NGROK_AUTHTOKEN','TUNNEL_PROVIDER','CLOUDFLARE_URL','NGROK_URL')
+keys = ('API_ID','API_HASH','BOT_TOKEN','OWNER_ID','ADMINS','CHANNEL_ID','FORCE_SUB_CHANNELS','MONGODB_URI','DATABASE_NAME','REDIS_URL','BASE_URL','BACKEND_URL','WEBSITE_URL','PORT','DEBUG','DEFAULT_EXPIRY','SESSIONS','ADMIN_PANEL_TOKEN','TMDB_API_KEY','BRANDING','LOGO_URL','STREAM_CHUNK_SIZE','NGROK_AUTHTOKEN','TUNNEL_PROVIDER','CLOUDFLARE_URL','NGROK_URL','DUCKDNS_DOMAIN','DUCKDNS_TOKEN')
 for key in keys:
     if key in os.environ: values[key] = os.environ[key]
 # Also accept legacy alias values from .env/config.env.
@@ -196,6 +209,90 @@ PY2
       info "Cloudflare quick tunnel selected. App will generate https://*.trycloudflare.com and sync backend/stream URLs."
       info "No Cloudflare account token is required for quick tunnels."
     fi
+
+    # Auto-configure DuckDNS + Caddy HTTPS reverse proxy (reads .env first, falls back to MongoDB settings)
+    DUCK_INFO="$(python3 - <<'PY_DUCK'
+import json, pathlib
+v={}
+for line in pathlib.Path('.env').read_text().splitlines():
+    if not line or line.lstrip().startswith('#') or '=' not in line: continue
+    k, raw = line.split('=',1); raw=raw.strip()
+    try: val=json.loads(raw) if raw.startswith('"') else raw
+    except Exception: val=raw.strip('"')
+    v[k.strip()]=str(val)
+dom = (v.get('DUCKDNS_DOMAIN') or '').strip().lower()
+if dom.startswith(('http://','https://')):
+    from urllib.parse import urlparse
+    dom = (urlparse(dom).hostname or '').lower()
+dom = dom.strip('.')
+if dom.endswith('.duckdns.org'):
+    dom = dom[:-len('.duckdns.org')]
+tok = (v.get('DUCKDNS_TOKEN') or '').strip()
+print(f"{dom}|{tok}")
+PY_DUCK
+)"
+    DUCK_DOM="${DUCK_INFO%%|*}"
+    DUCK_TOK="${DUCK_INFO#*|}"
+    if [ -z "$DUCK_DOM" ] || [ -z "$DUCK_TOK" ]; then
+      MONGO_DUCK="$("${COMPOSE[@]}" exec -T web python3 -c "import asyncio; from app.utils.duckdns import get_duckdns_config; d,t=asyncio.run(get_duckdns_config()); print(f'{d}|{t}')" 2>/dev/null | tail -n 1 || true)"
+      if [[ "$MONGO_DUCK" == *"|"* ]]; then
+        DUCK_DOM="${MONGO_DUCK%%|*}"
+        DUCK_TOK="${MONGO_DUCK#*|}"
+      fi
+    fi
+    if [ -n "$DUCK_DOM" ] && [ -n "$DUCK_TOK" ]; then
+      info "Configuring DuckDNS (${DUCK_DOM}.duckdns.org) + Caddy HTTPS -> 127.0.0.1:${PORT_VALUE}..."
+      PUBLIC_IP="$(curl -fsS --max-time 6 https://api.ipify.org 2>/dev/null || curl -fsS --max-time 6 https://ifconfig.me/ip 2>/dev/null || true)"
+      curl -fsS --max-time 10 "https://www.duckdns.org/update?domains=${DUCK_DOM}&token=${DUCK_TOK}&ip=${PUBLIC_IP}" >/dev/null 2>&1 || warn "DuckDNS initial update returned an error"
+      if command -v ufw >/dev/null 2>&1 && run_root ufw status 2>/dev/null | grep -qi "Status: active"; then
+        run_root ufw allow 80/tcp >/dev/null 2>&1 || true
+        run_root ufw allow 443/tcp >/dev/null 2>&1 || true
+        run_root ufw allow "${PORT_VALUE}/tcp" >/dev/null 2>&1 || true
+      fi
+      if command -v firewall-cmd >/dev/null 2>&1 && run_root firewall-cmd --state >/dev/null 2>&1; then
+        run_root firewall-cmd --permanent --add-service=http >/dev/null 2>&1 || true
+        run_root firewall-cmd --permanent --add-service=https >/dev/null 2>&1 || true
+        run_root firewall-cmd --permanent --add-port="${PORT_VALUE}/tcp" >/dev/null 2>&1 || true
+        run_root firewall-cmd --reload >/dev/null 2>&1 || true
+      fi
+      if ! command -v caddy >/dev/null 2>&1; then
+        info "Installing Caddy for automatic HTTPS (${DUCK_DOM}.duckdns.org)..."
+        if command -v apt-get >/dev/null 2>&1; then
+          run_root apt-get update -qq || true
+          run_root apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl gnupg || true
+          curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | run_root gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null || true
+          curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | run_root tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null 2>&1 || true
+          run_root apt-get update -qq || true
+          run_root apt-get install -y -qq caddy || true
+        elif command -v dnf >/dev/null 2>&1; then
+          run_root dnf install -y 'dnf-command(copr)' caddy || true
+        fi
+      fi
+      if command -v caddy >/dev/null 2>&1; then
+        run_root mkdir -p /etc/caddy
+        printf "%s.duckdns.org {\n    encode zstd gzip\n    reverse_proxy 127.0.0.1:%s {\n        flush_interval -1\n    }\n}\n" "$DUCK_DOM" "$PORT_VALUE" | run_root tee /etc/caddy/Caddyfile >/dev/null
+        run_root systemctl enable --now caddy >/dev/null 2>&1 || true
+        run_root systemctl reload caddy >/dev/null 2>&1 || run_root systemctl restart caddy >/dev/null 2>&1 || true
+        info "Verifying external HTTPS https://${DUCK_DOM}.duckdns.org/health ..."
+        DUCK_HTTPS_OK=0
+        for _ in 1 2 3 4 5 6; do
+          if curl -fsS --max-time 8 "https://${DUCK_DOM}.duckdns.org/health" >/dev/null 2>&1; then
+            DUCK_HTTPS_OK=1
+            break
+          fi
+          sleep 5
+        done
+        if [ "$DUCK_HTTPS_OK" -eq 1 ]; then
+          info "External HTTPS verified: https://${DUCK_DOM}.duckdns.org/health"
+        else
+          warn "https://${DUCK_DOM}.duckdns.org/health is not reachable externally yet (check cloud provider Security Group / NSG for ports 80 & 443; Cloudflare tunnel remains active as fallback)."
+        fi
+        "${COMPOSE[@]}" exec -T web python3 -c "import asyncio; from app.utils.duckdns import sync_and_activate_duckdns; print(asyncio.run(sync_and_activate_duckdns()))" >/dev/null 2>&1 || true
+      else
+        warn "Could not install Caddy automatically; Cloudflare tunnel remains active as fallback."
+      fi
+    fi
+
     info "Follow tunnel startup and URL synchronization with: docker compose logs -f web"
     info "Deployment command completed."
     exit 0
