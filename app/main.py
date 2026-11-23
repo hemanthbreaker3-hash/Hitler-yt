@@ -128,7 +128,7 @@ async def auto_cloudflare_and_vercel_routing_middleware(request: Request, call_n
         or ""
     ).split(",")[0].strip()
 
-    if raw_host and is_trycloudflare_url(raw_host):
+    if raw_host and is_trycloudflare_url(raw_host) and "duckdns.org" not in raw_host.lower():
         cf_url = f"https://{raw_host}"
         if cf_url != getattr(settings, "BACKEND_URL", None):
             asyncio.create_task(apply_auto_cloudflare_url(cf_url, source="incoming-request"))

@@ -139,10 +139,18 @@ async def sync_and_activate_duckdns(updated_by: int | None = None) -> tuple[bool
         os.environ["BACKEND_URL"] = best_url
         await settings_col.update_one({"key": "backend_url"}, {"$set": meta}, upsert=True)
         await settings_col.update_one({"key": "cloudflare_url"}, {"$set": meta}, upsert=True)
-        if not await get_active_vercel_website_url():
+        # Use DuckDNS as the active website URL too unless an explicit .pages.dev / custom non-preview domain is set in base_url
+        base_doc = await settings_col.find_one({"key": "base_url"}, {"value": 1}) or {}
+        cur_base = str(base_doc.get("value") or "").strip().lower()
+        is_explicit_pages_or_custom = (
+            ".pages.dev" in cur_base
+            or (cur_base.startswith(("http://", "https://")) and "vercel.app" not in cur_base and "trycloudflare.com" not in cur_base and "duckdns.org" not in cur_base)
+        )
+        if not is_explicit_pages_or_custom:
             settings.BASE_URL = best_url
             os.environ["BASE_URL"] = best_url
             await settings_col.update_one({"key": "base_url"}, {"$set": meta}, upsert=True)
+            await settings_col.update_one({"key": "vercel_url"}, {"$set": meta}, upsert=True)
     return True, res, ip, best_url, reachable
 
 
