@@ -24,6 +24,7 @@ from app.database.connection import (
     settings,
     db,
     get_active_cloudflare_url,
+    get_active_vercel_website_url,
     get_active_website_url,
     get_watch_page_base_url,
 )
@@ -37,6 +38,7 @@ from app.utils.helpers import (
     format_bytes,
     is_trycloudflare_url,
     is_duckdns_url,
+    is_vercel_url,
     normalize_public_base_url,
     extract_short_code_from_media_url,
     filestore_deep_link,
