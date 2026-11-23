@@ -829,7 +829,16 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     .poster-card .title{font-size:14px!important;font-weight:700!important;color:#f8fafc!important;margin-bottom:2px!important}
     .poster-card .meta{font-size:12px!important;color:#94a3b8!important}
 
-  </style>
+    /* Polished Watch UI */
+  .p4u-stage{border:1px solid rgba(99,102,241,.28)!important;box-shadow:0 24px 60px rgba(0,0,0,.68),0 0 0 1px rgba(255,255,255,.04) inset!important}
+  .p4u-below-bar{background:rgba(15,20,32,.78);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:8px 10px;backdrop-filter:blur(12px)}
+  .p4u-below-bar .p4u-ep-pill,.p4u-below-bar .p4u-up-btn{transition:transform .15s,background .15s,border-color .15s}
+  .p4u-below-bar .p4u-ep-pill:hover:not(:disabled),.p4u-below-bar .p4u-up-btn:hover{transform:translateY(-1px);border-color:rgba(59,130,246,.55);background:rgba(30,41,66,.92)}
+  .watch-info-card,.watch-side-card{background:linear-gradient(160deg,rgba(18,23,36,.95),rgba(11,15,24,.98))!important;border:1px solid rgba(255,255,255,.09)!important;box-shadow:0 14px 36px rgba(0,0,0,.42)}
+  .watch-meta-pills span{background:rgba(59,130,246,.1)!important;border-color:rgba(59,130,246,.24)!important;color:#dbeafe!important;font-weight:700}
+  .audio-track-select{transition:border-color .15s}
+  .audio-track-select:focus,.audio-track-select:hover{border-color:#60a5fa}
+</style>
   ${headExtra}
 </head>
 <body>
@@ -1348,7 +1357,7 @@ function buildTelegramGroupsFromWatch(groups, filestoreUsername) {
 }
 
 function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
-  const headExtra = `<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="dns-prefetch" href="https://cdn.jsdelivr.net"><style>
+  const headExtra = `<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="dns-prefetch" href="https://cdn.jsdelivr.net"><link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js" crossorigin><style>
     .detail{display:grid;grid-template-columns:minmax(160px,280px) 1fr;gap:28px;align-items:start;margin-top:12px}
     .detail img{width:100%;border-radius:16px;border:1px solid var(--line);box-shadow:var(--shadow)}
     .detail h1{font-size:clamp(1.5rem,4vw,2.35rem);line-height:1.1;margin:0 0 12px}
@@ -1733,7 +1742,7 @@ function renderTitleHtml(page, cloudflareUrl, filestoreUsername = "") {
 }
 
 function renderPanelHtml(settings) {
-  const headExtra = `<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="dns-prefetch" href="https://cdn.jsdelivr.net"><style>
+  const headExtra = `<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="dns-prefetch" href="https://cdn.jsdelivr.net"><link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js" crossorigin><style>
     .admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
     .admin-card{padding:18px}
     .switch{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #1e3d64}
@@ -2424,7 +2433,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   const groupName = (watchGroups[groupIndex] && watchGroups[groupIndex].name) || '';
   const curBtnName = (watchGroups[groupIndex] && watchGroups[groupIndex].buttons && watchGroups[groupIndex].buttons[buttonIndex] && watchGroups[groupIndex].buttons[buttonIndex].name) || 'Auto';
 
-  const headExtra = `<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="dns-prefetch" href="https://cdn.jsdelivr.net"><style>
+  const headExtra = `<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="dns-prefetch" href="https://cdn.jsdelivr.net"><link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js" crossorigin><style>
     .watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:18px;margin-top:14px;align-items:start}
     @media(max-width:960px){.watch-grid{grid-template-columns:1fr}}
     .p4u-stage{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.12);box-shadow:0 20px 50px rgba(0,0,0,.55);user-select:none;-webkit-tap-highlight-color:transparent}
@@ -2541,7 +2550,7 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
   <div>
     <div class="p4u-stage" id="playerWrapper">
   ${posterUrl ? `<div class="p4u-backdrop" style="background-image:url('${escapeHtml(posterUrl)}')"></div>` : ''}
-  <movi-player id="moviPlayer" playsinline controls sw="auto" fallback="native" subtitlepicker fastseek resume persist theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
+  <movi-player id="moviPlayer" playsinline controls preload="auto" spinnerdelay="800" sw="auto" fallback="native" subtitlepicker fastseek resume persist theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
   <div class="p4u-loading" id="playerLoading"><div class="p4u-spinner"></div></div>
   
   <div class="p4u-top">
@@ -2607,14 +2616,15 @@ const PLAY_ORIGIN = window.location.origin;
 const PROXY_STREAM_URL = PLAY_ORIGIN + '/stream/' + SHORT_CODE;
 const DIRECT_STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
 const HAS_DIRECT_TUNNEL = /^https:\/\//i.test(STREAM_ORIGIN) && !STREAM_ORIGIN.includes('vercel.app') && !STREAM_ORIGIN.includes('pages.dev');
-const STREAM_URL = HAS_DIRECT_TUNNEL ? DIRECT_STREAM_URL : PROXY_STREAM_URL;
+const IS_SAME_VPS_HOST = !PLAY_ORIGIN.includes('vercel.app') && !PLAY_ORIGIN.includes('pages.dev');
+const STREAM_URL = IS_SAME_VPS_HOST ? PROXY_STREAM_URL : (HAS_DIRECT_TUNNEL ? DIRECT_STREAM_URL : PROXY_STREAM_URL);
 const FILE_NAME = ${safeJsonForScript(file.filename || 'video.mkv')};
 const EXT_FILE_PART = '/' + encodeURIComponent(FILE_NAME || 'video.mkv');
-const EXTERNAL_STREAM_URL = DIRECT_STREAM_URL + EXT_FILE_PART;
+const EXTERNAL_STREAM_URL = (IS_SAME_VPS_HOST ? PROXY_STREAM_URL : DIRECT_STREAM_URL) + EXT_FILE_PART;
 const DOWNLOADS_ENABLED = ${safeJsonForScript(downloadsEnabled)};
 const FILESTORE_BOT = ${safeJsonForScript(fsUser)};
 const DL_URL = DOWNLOADS_ENABLED ? (PLAY_ORIGIN + '/dl/' + SHORT_CODE) : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (PLAY_ORIGIN + '/dl/' + SHORT_CODE));
-const REMUX_URL = (HAS_DIRECT_TUNNEL ? STREAM_ORIGIN : PLAY_ORIGIN) + '/remux/' + SHORT_CODE;
+const REMUX_URL = (IS_SAME_VPS_HOST ? PLAY_ORIGIN : (HAS_DIRECT_TUNNEL ? STREAM_ORIGIN : PLAY_ORIGIN)) + '/remux/' + SHORT_CODE;
 const PLAYER_MIME = ${safeJsonForScript(file.mime_type || 'video/mp4')};
 const INTENT_MIME = (!PLAYER_MIME || PLAYER_MIME === 'application/octet-stream') ? 'video/*' : PLAYER_MIME;
 const WATCH_GROUPS = ${safeJsonForScript(watchGroups)};
@@ -3052,7 +3062,7 @@ document.addEventListener('click', (e) => { const t = e.target; if (t?.closest &
 
 // Smooth Movi-Player v0.4.1 playback, resume position, and buffering/stall recovery
 let stallRetries = 0, lastProgressAt = Date.now(), recoveryInFlight = false, stallTimer = null, usedBackendFallback = false;
-const BACKEND_STREAM_URL = HAS_DIRECT_TUNNEL ? PROXY_STREAM_URL : DIRECT_STREAM_URL;
+const BACKEND_STREAM_URL = (DIRECT_STREAM_URL !== STREAM_URL) ? DIRECT_STREAM_URL : PROXY_STREAM_URL;
 const RESUME_KEY = 'ddstream:pos:' + SHORT_CODE;
 let pendingResume = 0;
 try { pendingResume = parseFloat(localStorage.getItem(RESUME_KEY)) || 0; } catch (_) {}
@@ -3072,7 +3082,7 @@ function scheduleStallRecovery() {
   if (!mp || mp.paused || mp.ended || recoveryInFlight) return;
   const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
   const eff = String((conn && conn.effectiveType) || '').toLowerCase();
-  const waitMs = (conn && conn.saveData) || eff === '2g' || eff === 'slow-2g' ? 45000 : 35000;
+  const waitMs = (conn && conn.saveData) || eff === '2g' || eff === 'slow-2g' ? 22000 : 15000;
   stallTimer = setTimeout(() => {
     if (!mp || mp.paused || mp.ended) return;
     if (Date.now() - lastProgressAt < waitMs) { scheduleStallRecovery(); return; }
@@ -3163,7 +3173,10 @@ function loadScript(src) { return new Promise((res, rej) => { const s = document
   showLoading();
   try {
     try { await loadScript('https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js'); }
-    catch (_) { await loadScript('https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js'); }
+    catch (_) {
+      try { await loadScript('https://unpkg.com/movi-player@0.4.1/dist/element.global.js'); }
+      catch (__) { await loadScript('https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js'); }
+    }
     await customElements.whenDefined('movi-player');
     mp.muted = false;
     mp.removeAttribute('muted');

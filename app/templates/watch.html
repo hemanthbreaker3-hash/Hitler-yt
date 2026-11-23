@@ -295,9 +295,18 @@
     opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 100;
   }
   .toast.active { opacity: 1; }
+  /* Polished Watch UI */
+  .p4u-stage{border:1px solid rgba(99,102,241,.28)!important;box-shadow:0 24px 60px rgba(0,0,0,.68),0 0 0 1px rgba(255,255,255,.04) inset!important}
+  .p4u-below-bar{background:rgba(15,20,32,.78);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:8px 10px;backdrop-filter:blur(12px)}
+  .p4u-below-bar .p4u-ep-pill,.p4u-below-bar .p4u-up-btn{transition:transform .15s,background .15s,border-color .15s}
+  .p4u-below-bar .p4u-ep-pill:hover:not(:disabled),.p4u-below-bar .p4u-up-btn:hover{transform:translateY(-1px);border-color:rgba(59,130,246,.55);background:rgba(30,41,66,.92)}
+  .watch-info-card,.watch-side-card{background:linear-gradient(160deg,rgba(18,23,36,.95),rgba(11,15,24,.98))!important;border:1px solid rgba(255,255,255,.09)!important;box-shadow:0 14px 36px rgba(0,0,0,.42)}
+  .watch-meta-pills span{background:rgba(59,130,246,.1)!important;border-color:rgba(59,130,246,.24)!important;color:#dbeafe!important;font-weight:700}
+  .audio-track-select{transition:border-color .15s}
+  .audio-track-select:focus,.audio-track-select:hover{border-color:#60a5fa}
 </style>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+<link rel="dns-prefetch" href="https://cdn.jsdelivr.net"><link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js" crossorigin>
 <script>
 (function () {
   var CDN = 'https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/';
@@ -333,7 +342,7 @@
     <div class="p4u-stage" id="playerWrapper">
   {% if _bg %}<div class="p4u-backdrop" style="background-image:url('{{ _bg }}')"></div>{% endif %}
 
-  <movi-player id="moviPlayer" playsinline controls sw="auto" fallback="native" subtitlepicker fastseek resume persist theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
+  <movi-player id="moviPlayer" playsinline controls preload="auto" spinnerdelay="800" sw="auto" fallback="native" subtitlepicker fastseek resume persist theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
 
   <div class="p4u-loading" id="playerLoading"><div class="p4u-spinner"></div></div>
 
@@ -442,16 +451,17 @@ const PLAY_ORIGIN = window.location.origin;
 const PROXY_STREAM_URL = PLAY_ORIGIN + '/stream/' + SHORT_CODE;
 const DIRECT_STREAM_URL = STREAM_ORIGIN + '/stream/' + SHORT_CODE;
 const HAS_DIRECT_TUNNEL = /^https:\/\//i.test(STREAM_ORIGIN) && !STREAM_ORIGIN.includes('vercel.app') && !STREAM_ORIGIN.includes('pages.dev');
-const STREAM_URL = HAS_DIRECT_TUNNEL ? DIRECT_STREAM_URL : PROXY_STREAM_URL;
+const IS_SAME_VPS_HOST = !PLAY_ORIGIN.includes('vercel.app') && !PLAY_ORIGIN.includes('pages.dev');
+const STREAM_URL = IS_SAME_VPS_HOST ? PROXY_STREAM_URL : (HAS_DIRECT_TUNNEL ? DIRECT_STREAM_URL : PROXY_STREAM_URL);
 const FILE_NAME = {{ file.filename|tojson }};
 const EXT_FILE_PART = '/' + encodeURIComponent(FILE_NAME || 'video.mkv');
-const EXTERNAL_STREAM_URL = DIRECT_STREAM_URL + EXT_FILE_PART;
+const EXTERNAL_STREAM_URL = (IS_SAME_VPS_HOST ? PROXY_STREAM_URL : DIRECT_STREAM_URL) + EXT_FILE_PART;
 const DOWNLOADS_ENABLED = {{ player_settings.downloads_enabled|tojson }};
 const FILESTORE_BOT = {{ (player_settings.filestore_bot_username or '')|tojson }};
 const DL_URL = DOWNLOADS_ENABLED
   ? (PLAY_ORIGIN + '/dl/' + SHORT_CODE)
   : (FILESTORE_BOT ? ('https://t.me/' + FILESTORE_BOT + '?start=file_' + SHORT_CODE) : (PLAY_ORIGIN + '/dl/' + SHORT_CODE));
-const REMUX_URL = (HAS_DIRECT_TUNNEL ? STREAM_ORIGIN : PLAY_ORIGIN) + '/remux/' + SHORT_CODE;
+const REMUX_URL = (IS_SAME_VPS_HOST ? PLAY_ORIGIN : (HAS_DIRECT_TUNNEL ? STREAM_ORIGIN : PLAY_ORIGIN)) + '/remux/' + SHORT_CODE;
 const PLAYER_MIME = {{ file.mime_type|tojson }};
 const INTENT_MIME = (!PLAYER_MIME || PLAYER_MIME === 'application/octet-stream') ? 'video/*' : PLAYER_MIME;
 const WATCH_GROUPS = {{ (_wg if _wg is defined else [])|tojson }};
@@ -740,6 +750,7 @@ document.getElementById('pcRetryBtn')?.addEventListener('click', (e) => {
   e.stopPropagation();
   const t = Number(mp.currentTime) || 0;
   showLoading();
+  if (!customElements.get('movi-player')) { location.reload(); return; }
   mp.src = STREAM_URL;
   if (typeof mp.load === 'function') mp.load();
   mp.addEventListener('loadedmetadata', () => {
@@ -1066,7 +1077,7 @@ document.addEventListener('click', (e) => {
 
 // Smooth Movi-Player v0.4.1 playback, resume position, and buffering/stall recovery
 let stallRetries = 0, lastProgressAt = Date.now(), recoveryInFlight = false, stallTimer = null, usedBackendFallback = false;
-const BACKEND_STREAM_URL = HAS_DIRECT_TUNNEL ? PROXY_STREAM_URL : DIRECT_STREAM_URL;
+const BACKEND_STREAM_URL = (DIRECT_STREAM_URL !== STREAM_URL) ? DIRECT_STREAM_URL : PROXY_STREAM_URL;
 const RESUME_KEY = 'ddstream:pos:' + SHORT_CODE;
 let pendingResume = 0;
 try { pendingResume = parseFloat(localStorage.getItem(RESUME_KEY)) || 0; } catch (_) {}
@@ -1086,7 +1097,7 @@ function scheduleStallRecovery() {
   if (!mp || mp.paused || mp.ended || recoveryInFlight) return;
   const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
   const eff = String((conn && conn.effectiveType) || '').toLowerCase();
-  const waitMs = (conn && conn.saveData) || eff === '2g' || eff === 'slow-2g' ? 45000 : 35000;
+  const waitMs = (conn && conn.saveData) || eff === '2g' || eff === 'slow-2g' ? 22000 : 15000;
   stallTimer = setTimeout(() => {
     if (!mp || mp.paused || mp.ended) return;
     if (Date.now() - lastProgressAt < waitMs) { scheduleStallRecovery(); return; }
@@ -1173,11 +1184,15 @@ mp.addEventListener('loadedmetadata', () => {
 })();
 
 // Boot Movi-Player (sound ON by default)
+function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.async = true; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
 (async () => {
   showLoading();
   try {
     try { await loadScript('https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js'); }
-    catch (_) { await loadScript('https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js'); }
+    catch (_) {
+      try { await loadScript('https://unpkg.com/movi-player@0.4.1/dist/element.global.js'); }
+      catch (__) { await loadScript('https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js'); }
+    }
     await customElements.whenDefined('movi-player');
     mp.muted = false;
     mp.removeAttribute('muted');
