@@ -65,8 +65,12 @@ async def lifespan(app: FastAPI):
                 pass
         import asyncio as _asyncio
         _asyncio.create_task(_bg_backfill())
+        from app.utils.duckdns import start_duckdns_updater, sync_and_activate_duckdns
+        try:
+            await sync_and_activate_duckdns()
+        except Exception as _duck_err:
+            logger.warning('Startup DuckDNS activation skipped: %s', _duck_err)
         start_cloudflare_auto_tunnel()
-        from app.utils.duckdns import start_duckdns_updater
         start_duckdns_updater()
         session_manager.prepare_bot()
         register_handlers(session_manager.bot_client)

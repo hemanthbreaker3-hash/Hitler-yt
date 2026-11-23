@@ -811,6 +811,7 @@ async def setup_bot_commands(bot):
             BotCommand("backendurl", "Set backend / ngrok URL (admin)"),
             BotCommand("baseurl", "Set primary / ngrok URL (admin)"),
             BotCommand("duckdns", "Configure DuckDNS dynamic DNS (admin)"),
+            BotCommand("ip", "Get VPS public IP for DuckDNS (admin)"),
             BotCommand("filestore", "Set FileStore bot for deep-link downloads (admin)"),
             BotCommand("fspanel", "FileStore panel: admins, fsub, auto-delete (admin)"),
             BotCommand("categories", "Manage categories (admin)"),
@@ -2244,6 +2245,35 @@ def register_handlers(bot):
             await message.reply("❌ Could not save backend URL. Check the MongoDB connection.")
 
 
+    @bot.on_message(filters.command("ip"))
+    async def ip_handler(client, message: Message):
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        if not _is_admin_user(user.id):
+            return await message.reply("🚫 **Unauthorized Access**")
+        from app.utils.duckdns import get_duckdns_config, get_public_ip
+        wait_msg = await message.reply("🔍 Detecting VPS public IP...")
+        ip = await get_public_ip()
+        port = str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip()
+        dom, _ = await get_duckdns_config()
+        if not ip:
+            return await wait_msg.edit_text("❌ Could not detect VPS public IP.")
+        direct_url = f"http://{ip}" if port == "80" else f"http://{ip}:{port}"
+        duck_http = f"http://{dom}.duckdns.org" if port == "80" else f"http://{dom}.duckdns.org:{port}"
+        lines = [
+            "🌐 **VPS Public IP for DuckDNS**\n",
+            f"> 🖥 **Public IPv4:** `{ip}`",
+            f"> 🔌 **App Port:** `{port}`",
+            f"> 🔗 **Direct IP URL:** `{direct_url}`",
+        ]
+        if dom:
+            lines.append(f"> 🦆 **DuckDNS Host:** `{dom}.duckdns.org`")
+            lines.append(f"> 🌐 **DuckDNS HTTP URL:** `{duck_http}`")
+            lines.append(f"> 🔒 **DuckDNS HTTPS URL:** `https://{dom}.duckdns.org`")
+        lines.append("\n💡 Paste this IP in duckdns.org or run `/duckdns <subdomain> <token>`.")
+        await wait_msg.edit_text("\n".join(lines))
+
     @bot.on_message(filters.command("duckdns"))
     async def duckdns_handler(client, message: Message):
         user = message.from_user
@@ -2251,37 +2281,74 @@ def register_handlers(bot):
             return
         if not _is_admin_user(user.id):
             return await message.reply("🚫 **Unauthorized Access**")
-        from app.utils.duckdns import get_duckdns_config, normalize_duckdns_domain, update_duckdns_once
+        from app.utils.duckdns import (
+            get_duckdns_config,
+            get_public_ip,
+            normalize_duckdns_domain,
+            probe_duckdns_url,
+            update_duckdns_once,
+        )
         args = (message.text or "").split()
         if len(args) < 2:
             dom, tok = await get_duckdns_config()
+            ip = await get_public_ip()
+            port = str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip()
             masked = (tok[:4] + "..." + tok[-4:]) if len(tok) > 8 else ("set" if tok else "not set")
+            url_doc = await settings_col.find_one({"key": "duckdns_url"}) or {}
             return await message.reply(
                 "🦆 **DuckDNS Dynamic DNS**\n\n"
                 f"> 🌐 **Domain:** `{dom + '.duckdns.org' if dom else 'Not configured'}`\n"
+                f"> 🖥 **VPS IP:** `{ip or 'unknown'}` (Port `{port}`)\n"
+                f"> 🔗 **Active DuckDNS URL:** `{url_doc.get('value') or 'not set'}`\n"
                 f"> 🔑 **Token:** `{masked}`\n\n"
                 "**Usage:**\n"
-                "• `/duckdns <subdomain> <token>` — Set & update DuckDNS\n"
+                "• `/duckdns <subdomain> <token>` — Sync IP, test URL & activate\n"
                 "• `/duckdns off` — Disable DuckDNS updater\n"
-                "• Then run `/baseurl https://<subdomain>.duckdns.org` if streaming via DuckDNS"
+                "• `/ip` — Get VPS public IPv4"
             )
         if args[1].lower() in ("off", "disable", "clear"):
-            await settings_col.delete_many({"key": {"$in": ["duckdns_domain", "duckdns_token"]}})
+            await settings_col.delete_many({"key": {"$in": ["duckdns_domain", "duckdns_token", "duckdns_url"]}})
             return await message.reply("🦆 DuckDNS updater disabled.")
         if len(args) < 3:
             return await message.reply("⚠️ Usage: `/duckdns <subdomain> <token>`")
         dom = normalize_duckdns_domain(args[1])
         tok = args[2].strip()
-        ok, res = await update_duckdns_once(dom, tok)
+        status = await message.reply(f"🦆 Updating `{dom}.duckdns.org` with VPS IP...")
+        ok, res, ip = await update_duckdns_once(dom, tok)
         if not ok:
-            return await message.reply(f"❌ **DuckDNS update failed:** `{res}`")
+            return await status.edit_text(f"❌ **DuckDNS update failed:** `{res}`")
+        port = int(str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip())
+        best_url, reachable = await probe_duckdns_url(dom, port)
         now = datetime.datetime.utcnow()
         await settings_col.update_one({"key": "duckdns_domain"}, {"$set": {"value": dom, "updated_by": user.id, "updated_at": now}}, upsert=True)
         await settings_col.update_one({"key": "duckdns_token"}, {"$set": {"value": tok, "updated_by": user.id, "updated_at": now}}, upsert=True)
-        await message.reply(
-            "✅ **DuckDNS Configured & Updated!**\n\n"
+        await settings_col.update_one({"key": "duckdns_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
+        if reachable:
+            settings.BACKEND_URL = best_url
+            os.environ["BACKEND_URL"] = best_url
+            await settings_col.update_one({"key": "backend_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
+            await settings_col.update_one({"key": "cloudflare_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
+            if not await get_active_vercel_website_url():
+                settings.BASE_URL = best_url
+                os.environ["BASE_URL"] = best_url
+                await settings_col.update_one({"key": "base_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
+            rewritten = 0
+            try:
+                rewritten = await rewrite_all_stored_catalog_buttons(best_url)
+            except Exception:
+                pass
+            reach_note = f"✅ **Reachable:** `{best_url}` (auto-activated, `{rewritten}` catalog pages updated)"
+        else:
+            reach_note = (
+                f"⚠️ **DNS Updated, but `{best_url}/health` is not reachable externally yet.**\n"
+                f"• Open port `{port}` in your VPS firewall (`ufw allow {port}/tcp`) or put Nginx/Caddy HTTPS on port `443` pointing to `127.0.0.1:{port}`.\n"
+                f"• Meanwhile your `trycloudflare.com` tunnel stays active so the site never breaks."
+            )
+        await status.edit_text(
+            "✅ **DuckDNS Updated!**\n\n"
             f"> 🌐 **Host:** `{dom}.duckdns.org` (`{res}`)\n"
-            f"> 💡 Run `/baseurl https://{dom}.duckdns.org` to route streams through DuckDNS."
+            f"> 🖥 **Synced IP:** `{ip or 'auto'}`\n"
+            f"{reach_note}"
         )
 
     @bot.on_message(filters.command("baseurl"))

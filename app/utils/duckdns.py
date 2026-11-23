@@ -1,18 +1,27 @@
-"""DuckDNS dynamic DNS auto-updater for VPS deployments."""
+"""DuckDNS dynamic DNS auto-updater, startup auto-activator, and IP/reachability helpers."""
 from __future__ import annotations
 
 import asyncio
+import datetime
+import ipaddress
 import logging
 import os
 import urllib.parse
 import urllib.request
 
-from app.database.connection import settings_col
+from app.database.connection import get_active_vercel_website_url, settings, settings_col
 
 logger = logging.getLogger(__name__)
 
 _duckdns_task: asyncio.Task | None = None
 _duckdns_stop = False
+
+_IP_ENDPOINTS = (
+    "https://api.ipify.org",
+    "https://ifconfig.me/ip",
+    "https://icanhazip.com",
+    "https://checkip.amazonaws.com",
+)
 
 
 def normalize_duckdns_domain(raw: str | None) -> str:
@@ -23,6 +32,48 @@ def normalize_duckdns_domain(raw: str | None) -> str:
     if val.endswith(".duckdns.org"):
         val = val[: -len(".duckdns.org")]
     return val.strip(".")
+
+
+def _sync_get_public_ip() -> str | None:
+    for url in _IP_ENDPOINTS:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                candidate = resp.read().decode("utf-8", errors="replace").strip()
+            ipaddress.ip_address(candidate)
+            return candidate
+        except Exception:
+            continue
+    return None
+
+
+async def get_public_ip() -> str | None:
+    return await asyncio.to_thread(_sync_get_public_ip)
+
+
+def _sync_probe_health(base_url: str) -> bool:
+    try:
+        req = urllib.request.Request(
+            base_url.rstrip("/") + "/health",
+            headers={"User-Agent": "DuckDNS-Probe/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            return 200 <= getattr(resp, "status", 200) < 400
+    except Exception:
+        return False
+
+
+async def probe_duckdns_url(domain: str, port: int | None = None) -> tuple[str, bool]:
+    """Return (best_url, is_externally_reachable) for <domain>.duckdns.org."""
+    dom = normalize_duckdns_domain(domain)
+    p = int(port or os.getenv("PORT") or 8000)
+    https_url = f"https://{dom}.duckdns.org"
+    if await asyncio.to_thread(_sync_probe_health, https_url):
+        return https_url, True
+    http_url = f"http://{dom}.duckdns.org" if p == 80 else f"http://{dom}.duckdns.org:{p}"
+    if await asyncio.to_thread(_sync_probe_health, http_url):
+        return http_url, True
+    return http_url, False
 
 
 async def get_duckdns_config() -> tuple[str, str]:
@@ -40,8 +91,8 @@ async def get_duckdns_config() -> tuple[str, str]:
         return env_dom, env_tok
 
 
-def _sync_duckdns_update(domain: str, token: str) -> tuple[bool, str]:
-    qs = urllib.parse.urlencode({"domains": domain, "token": token, "ip": ""})
+def _sync_duckdns_update(domain: str, token: str, ip: str = "") -> tuple[bool, str]:
+    qs = urllib.parse.urlencode({"domains": domain, "token": token, "ip": ip})
     url = f"https://www.duckdns.org/update?{qs}"
     req = urllib.request.Request(url, headers={"User-Agent": "DuckDNS-Updater/1.0"})
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -49,15 +100,44 @@ def _sync_duckdns_update(domain: str, token: str) -> tuple[bool, str]:
     return body.upper().startswith("OK"), body
 
 
-async def update_duckdns_once(domain: str, token: str) -> tuple[bool, str]:
+async def update_duckdns_once(domain: str, token: str, ip: str | None = None) -> tuple[bool, str, str | None]:
     dom = normalize_duckdns_domain(domain)
     tok = (token or "").strip()
     if not dom or not tok:
-        return False, "Missing DuckDNS domain or token"
+        return False, "Missing DuckDNS domain or token", None
+    resolved_ip = (ip or "").strip() or (await get_public_ip()) or ""
     try:
-        return await asyncio.to_thread(_sync_duckdns_update, dom, tok)
+        ok, body = await asyncio.to_thread(_sync_duckdns_update, dom, tok, resolved_ip)
+        return ok, body, (resolved_ip or None)
     except Exception as exc:
-        return False, str(exc)
+        return False, str(exc), (resolved_ip or None)
+
+
+async def sync_and_activate_duckdns(updated_by: int | None = None) -> tuple[bool, str, str | None, str | None, bool]:
+    """Sync VPS IP to DuckDNS and automatically activate backend/website URLs if reachable."""
+    dom, tok = await get_duckdns_config()
+    if not dom or not tok:
+        return False, "Not configured", None, None, False
+    ok, res, ip = await update_duckdns_once(dom, tok)
+    if not ok:
+        return False, res, ip, None, False
+    port = int(str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip())
+    best_url, reachable = await probe_duckdns_url(dom, port)
+    now = datetime.datetime.utcnow()
+    meta = {"value": best_url, "updated_at": now}
+    if updated_by is not None:
+        meta["updated_by"] = updated_by
+    await settings_col.update_one({"key": "duckdns_url"}, {"$set": meta}, upsert=True)
+    if reachable:
+        settings.BACKEND_URL = best_url
+        os.environ["BACKEND_URL"] = best_url
+        await settings_col.update_one({"key": "backend_url"}, {"$set": meta}, upsert=True)
+        await settings_col.update_one({"key": "cloudflare_url"}, {"$set": meta}, upsert=True)
+        if not await get_active_vercel_website_url():
+            settings.BASE_URL = best_url
+            os.environ["BASE_URL"] = best_url
+            await settings_col.update_one({"key": "base_url"}, {"$set": meta}, upsert=True)
+    return True, res, ip, best_url, reachable
 
 
 async def _duckdns_loop() -> None:
@@ -65,9 +145,12 @@ async def _duckdns_loop() -> None:
         try:
             dom, tok = await get_duckdns_config()
             if dom and tok:
-                ok, res = await update_duckdns_once(dom, tok)
+                ok, res, ip, best_url, reachable = await sync_and_activate_duckdns()
                 if ok:
-                    logger.info("DuckDNS updated: %s.duckdns.org -> %s", dom, res)
+                    logger.info(
+                        "DuckDNS synced: %s.duckdns.org (%s) -> %s | url=%s (reachable=%s)",
+                        dom, ip or "auto", res, best_url, reachable,
+                    )
                 else:
                     logger.warning("DuckDNS update failed for %s.duckdns.org: %s", dom, res)
         except asyncio.CancelledError:
