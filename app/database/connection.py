@@ -187,19 +187,20 @@ async def get_active_vercel_website_url() -> str | None:
     except Exception:
         stored = {}
 
-    candidates = [
+    candidates = []
+    base_val = stored.get("base_url") or settings.BASE_URL
+    if base_val and not is_trycloudflare_url(str(base_val)):
+        candidates.append(base_val)
+    candidates.extend([
         stored.get("vercel_url"),
         settings.WEBSITE_URL,
         os.getenv("WEBSITE_URL"),
-    ]
+    ])
     website_urls = stored.get("website_urls")
     if isinstance(website_urls, list):
         for u in website_urls:
             if not is_trycloudflare_url(str(u)):
                 candidates.append(u)
-    base_val = stored.get("base_url") or settings.BASE_URL
-    if base_val and not is_trycloudflare_url(str(base_val)):
-        candidates.append(base_val)
 
     for c in candidates:
         norm = _valid_public_candidate(str(c) if c else None)

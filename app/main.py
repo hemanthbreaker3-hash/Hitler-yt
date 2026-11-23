@@ -133,10 +133,10 @@ async def auto_cloudflare_and_vercel_routing_middleware(request: Request, call_n
 
         path = request.url.path
         if path in ("/", "/search") or path.startswith("/title/"):
-            vercel_site = await get_active_vercel_website_url()
-            if vercel_site:
+            target_site = await get_active_website_url()
+            if target_site and not target_site.rstrip("/").endswith(raw_host):
                 query = f"?{request.url.query}" if request.url.query else ""
-                return RedirectResponse(url=f"{vercel_site}{path}{query}", status_code=307)
+                return RedirectResponse(url=f"{target_site}{path}{query}", status_code=307)
 
     gated = await gate_request(request)
     if gated is not None:

@@ -2401,8 +2401,15 @@ def register_handlers(bot):
                     {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}},
                     upsert=True,
                 )
+                if is_duckdns_url(new_url):
+                    await settings_col.update_one({"key": "vercel_url"}, {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
                 rewritten = await rewrite_all_stored_catalog_buttons(new_url)
             else:
+                await settings_col.update_one(
+                    {"key": "vercel_url"},
+                    {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}},
+                    upsert=True,
+                )
                 await settings_col.update_one(
                     {"key": "website_urls"},
                     {"$addToSet": {"value": new_url}, "$set": {"updated_at": now}},
