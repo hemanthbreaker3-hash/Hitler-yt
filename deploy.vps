@@ -111,8 +111,11 @@ def norm_dns(raw):
 
 def port_in_use(port_num):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.3)
-        return s.connect_ex(('127.0.0.1', port_num)) == 0
+        try:
+            s.bind(('0.0.0.0', port_num))
+            return False
+        except OSError:
+            return True
 
 values = read_env(p)
 values.update(read_env(pathlib.Path('config.env')))
@@ -144,6 +147,8 @@ for alias, canonical in aliases.items():
         values[canonical] = values[alias]
 
 values['DNS_PROVIDER'] = norm_dns(values.get('DNS_PROVIDER', 'auto'))
+if not values.get('DATABASE_NAME'):
+    values['DATABASE_NAME'] = 'tg_media_bot'
 
 # Auto-pick a free port if PORT was not explicitly exported and desired port is occupied by another deployment
 own_port = os.environ.get('OWN_WEB_PORT', '').strip()
@@ -304,6 +309,11 @@ PY_DUCK
       fi
       if command -v caddy >/dev/null 2>&1; then
         run_root mkdir -p /etc/caddy/conf.d
+        if [ -f /etc/caddy/Caddyfile ] && ! grep -q 'conf\.d/\*\.caddy' /etc/caddy/Caddyfile 2>/dev/null; then
+          if grep -Eq '\{\s*$' /etc/caddy/Caddyfile 2>/dev/null && [ ! -f /etc/caddy/conf.d/legacy-default.caddy ]; then
+            run_root cp /etc/caddy/Caddyfile /etc/caddy/conf.d/legacy-default.caddy
+          fi
+        fi
         if [ ! -f /etc/caddy/Caddyfile ] || ! grep -q 'conf\.d/\*\.caddy' /etc/caddy/Caddyfile 2>/dev/null; then
           printf "import /etc/caddy/conf.d/*.caddy\n" | run_root tee /etc/caddy/Caddyfile >/dev/null
         fi

@@ -15,6 +15,17 @@
   <button type="submit">Search</button>
 </form>
 
+<section class="hero-spotlight" id="hero-spotlight" hidden>
+  <div class="hero-bg" id="hero-bg"></div>
+  <div class="hero-scrim"></div>
+  <div class="hero-body">
+    <span class="hero-kicker"><i class="fa-solid fa-bolt"></i> Featured</span>
+    <h1 id="hero-title"></h1>
+    <div class="hero-meta" id="hero-meta"></div>
+    <a class="btn btn-accent" id="hero-cta" href="#"><i class="fa-solid fa-play"></i> Watch &amp; Download</a>
+  </div>
+</section>
+
 <div class="cat-nav" id="category-nav"></div>
 
 <div class="section-head" id="catalog">
@@ -137,6 +148,26 @@ window.__INITIAL_CATEGORIES__ = {{ initial_categories|default([])|tojson }};
     return a;
   }
 
+
+  function renderSpotlight(items) {
+    const box = document.getElementById('hero-spotlight');
+    if (!box) return;
+    const pick = Array.isArray(items) && items.length ? (items.find(x => x && x.backdrop_path) || items[0]) : null;
+    if (!pick || !pick.slug) { box.hidden = true; return; }
+    const bg = document.getElementById('hero-bg');
+    const title = document.getElementById('hero-title');
+    const meta = document.getElementById('hero-meta');
+    const cta = document.getElementById('hero-cta');
+    if (bg) bg.style.backgroundImage = 'url("' + homeImageUrl(pick).replace(/"/g, '\"') + '")';
+    if (title) title.textContent = pick.title || 'Featured Title';
+    const year = (pick.release_date || pick.first_air_date || '').toString().slice(0, 4);
+    const kind = String(pick.media_type || '').toLowerCase() === 'tv' ? 'Series' : 'Movie';
+    const genre = Array.isArray(pick.genres) && pick.genres.length ? pick.genres[0] : '';
+    if (meta) meta.textContent = [kind, year, genre].filter(Boolean).join(' · ');
+    if (cta) cta.href = '/title/' + encodeURIComponent(pick.slug);
+    box.hidden = false;
+  }
+
   function renderCatalogPage() {
     const pages = Math.max(1, Math.ceil(catalogItems.length / CATALOG_PER_PAGE));
     catalogPage = Math.min(Math.max(1, catalogPage), pages);
@@ -219,6 +250,7 @@ window.__INITIAL_CATEGORIES__ = {{ initial_categories|default([])|tojson }};
         return;
       }
       catalogItems = list;
+      renderSpotlight(list);
       catalogPage = 1;
       renderCatalogPage();
     } catch (err) {
@@ -237,6 +269,7 @@ window.__INITIAL_CATEGORIES__ = {{ initial_categories|default([])|tojson }};
   }
   if (Array.isArray(window.__INITIAL_CATALOG__) && window.__INITIAL_CATALOG__.length && !category && !q) {
     catalogItems = window.__INITIAL_CATALOG__;
+    renderSpotlight(catalogItems);
     countEl.textContent = catalogItems.length + (catalogItems.length === 1 ? ' title' : ' titles');
     catalogPage = 1;
     renderCatalogPage();
