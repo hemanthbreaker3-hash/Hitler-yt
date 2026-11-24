@@ -820,7 +820,12 @@ async def setup_bot_commands(bot):
             BotCommand("backendurl", "Set backend / ngrok URL (admin)"),
             BotCommand("baseurl", "Set primary / ngrok URL (admin)"),
             BotCommand("duckdns", "Configure DuckDNS dynamic DNS (admin)"),
-            BotCommand("dynu", "Configure Dynu dynamic DNS (admin)"),
+            BotCommand("dynu", "Dynu DDNS/API status, guide, test & off (admin)"),
+            BotCommand("dynuhost", "Set Dynu hostname (admin)"),
+            BotCommand("dynukey", "Set Dynu API Key auth (admin)"),
+            BotCommand("dynuoauth", "Set Dynu OAuth2 client ID & secret (admin)"),
+            BotCommand("dynuuser", "Set Dynu DDNS username (admin)"),
+            BotCommand("dynupass", "Set Dynu DDNS password (admin)"),
             BotCommand("ip", "Get VPS public IP for DuckDNS (admin)"),
             BotCommand("filestore", "Set FileStore bot for deep-link downloads (admin)"),
             BotCommand("fspanel", "FileStore panel: admins, fsub, auto-delete (admin)"),
@@ -2365,6 +2370,12 @@ def register_handlers(bot):
             f"{reach_note}"
         )
 
+    async def _try_delete_secret_msg(message: Message) -> None:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
     @bot.on_message(filters.command("dynu"))
     async def dynu_handler(client, message: Message):
         user = message.from_user
@@ -2372,90 +2383,228 @@ def register_handlers(bot):
             return
         if not _is_admin_user(user.id):
             return await message.reply("🚫 **Unauthorized Access**")
+
         from app.utils.dynu import (
-            get_dns_provider,
-            get_dynu_config,
-            normalize_dynu_domain,
-            probe_dynu_url,
-            update_dynu_once,
+            clear_dynu_config,
+            get_full_config,
+            get_public_ip,
+            is_method_ready,
+            mask_secret,
+            save_dynu_setting,
+            sync_activate_detailed,
+            verify_dns_ip,
         )
-        from app.utils.duckdns import get_public_ip
+
         args = (message.text or "").split()
-        if len(args) < 2:
-            cfg = await get_dynu_config()
-            dom = cfg["domain"]
-            secret = cfg["api_key"] or cfg["client_secret"] or cfg["password"]
-            auth_mode = "OAuth2" if (cfg["client_id"] and cfg["client_secret"]) else ("API Key" if cfg["api_key"] else ("Password" if cfg["password"] else "not set"))
-            ip = await get_public_ip()
-            prov = await get_dns_provider()
-            port = str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip()
-            masked = (secret[:4] + "..." + secret[-4:]) if len(secret) > 8 else ("set" if secret else "not set")
-            url_doc = await settings_col.find_one({"key": "dynu_url"}) or {}
-            return await message.reply(
-                "🌐 **Dynu Dynamic DNS**\n\n"
-                f"> 🔀 **Active Provider:** `{prov}`\n"
-                f"> 🌐 **Hostname:** `{dom or 'Not configured'}`\n"
-                f"> 🔐 **Auth Mode:** `{auth_mode}` (`{masked}`)\n"
-                f"> 🖥 **VPS IP:** `{ip or 'unknown'}` (Port `{port}`)\n"
-                f"> 🔗 **Active Dynu URL:** `{url_doc.get('value') or 'not set'}`\n\n"
-                "**Usage:**\n"
-                "• `/dynu <hostname> <api_key_or_password>` — Sync via API Key or IP Update Password\n"
-                "• `/dynu <hostname> <client_id> <client_secret>` — Sync via Dynu OAuth2\n"
-                "• `/dynu off` — Disable Dynu updater\n"
-                "• `/ip` — Get VPS public IPv4"
+        sub = args[1].lower() if len(args) > 1 else ""
+
+        if sub in ("off", "disable", "clear"):
+            await clear_dynu_config()
+            return await message.reply("🛑 **Dynu configuration and stored credentials cleared.**")
+
+        if sub == "method":
+            target_method = args[2].lower() if len(args) > 2 else ""
+            alias_map = {
+                "apikey": "api_key",
+                "api_key": "api_key",
+                "key": "api_key",
+                "oauth": "oauth2",
+                "oauth2": "oauth2",
+                "ddns": "ddns",
+                "nic": "ddns",
+            }
+            chosen = alias_map.get(target_method, "")
+            if not chosen:
+                return await message.reply(
+                    "⚠️ Usage: `/dynu method <api_key|oauth2|ddns>`"
+                )
+            await save_dynu_setting("dynu_method", chosen, encrypt=False, updated_by=user.id)
+            cfg = await get_full_config()
+            ready, reason = is_method_ready(cfg)
+            note = "Run `/dynu test` to verify." if ready else reason
+            return await message.reply(f"✅ Active Dynu method set to `{chosen}`.\n{note}")
+
+        if sub == "test":
+            cfg = await get_full_config()
+            ready, reason = is_method_ready(cfg)
+            if not ready:
+                return await message.reply(f"⚠️ {reason}")
+            status = await message.reply(
+                f"🔄 Testing Dynu (`{cfg['method']}`), verifying DNS/IP & probing `/health`…"
             )
-        if args[1].lower() in ("off", "disable", "clear"):
-            await settings_col.delete_many({"key": {"$in": ["dynu_domain", "dynu_password", "dynu_api_key", "dynu_client_id", "dynu_client_secret", "dynu_username", "dynu_url"]}})
-            return await message.reply("🌐 Dynu updater disabled.")
-        if len(args) < 3:
-            return await message.reply("⚠️ Usage:\n• `/dynu <hostname> <api_key_or_password>`\n• `/dynu <hostname> <client_id> <client_secret>`")
-        dom = normalize_dynu_domain(args[1])
-        cid = args[2].strip() if len(args) >= 4 else ""
-        csec = args[3].strip() if len(args) >= 4 else ""
-        pw_or_key = "" if len(args) >= 4 else args[2].strip()
-        status = await message.reply(f"🌐 Updating `{dom}` on Dynu with VPS IP...")
-        ok, res, ip = await update_dynu_once(dom, password=pw_or_key, client_id=cid, client_secret=csec)
-        if not ok:
-            return await status.edit_text(f"❌ **Dynu update failed:** `{res}`")
-        port = int(str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip())
-        best_url, reachable = await probe_dynu_url(dom, port)
-        now = datetime.datetime.utcnow()
-        await settings_col.update_one({"key": "dns_provider"}, {"$set": {"value": "dynu", "updated_by": user.id, "updated_at": now}}, upsert=True)
-        await settings_col.update_one({"key": "dynu_domain"}, {"$set": {"value": dom, "updated_by": user.id, "updated_at": now}}, upsert=True)
-        if cid and csec:
-            await settings_col.update_one({"key": "dynu_client_id"}, {"$set": {"value": cid, "updated_by": user.id, "updated_at": now}}, upsert=True)
-            await settings_col.update_one({"key": "dynu_client_secret"}, {"$set": {"value": csec, "updated_by": user.id, "updated_at": now}}, upsert=True)
-        else:
-            await settings_col.update_one({"key": "dynu_password"}, {"$set": {"value": pw_or_key, "updated_by": user.id, "updated_at": now}}, upsert=True)
-            await settings_col.update_one({"key": "dynu_api_key"}, {"$set": {"value": pw_or_key if len(pw_or_key) >= 20 else "", "updated_by": user.id, "updated_at": now}}, upsert=True)
-        await settings_col.update_one({"key": "dynu_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
-        if reachable:
-            settings.BACKEND_URL = best_url
-            os.environ["BACKEND_URL"] = best_url
-            await settings_col.update_one({"key": "backend_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
-            await settings_col.update_one({"key": "cloudflare_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
-            settings.BASE_URL = best_url
-            os.environ["BASE_URL"] = best_url
-            await settings_col.update_one({"key": "base_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
-            await settings_col.update_one({"key": "vercel_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
-            rewritten = 0
-            try:
-                rewritten = await rewrite_all_stored_catalog_buttons(best_url)
-            except Exception:
-                pass
-            reach_note = f"✅ **Reachable:** `{best_url}` (auto-activated, `{rewritten}` catalog pages updated)"
-        else:
-            reach_note = (
-                f"⚠️ **DNS Updated, but `{best_url}/health` is not reachable externally yet.**\n"
-                f"• Ensure ports `80` and `443` (or `{port}`) are open and run Caddy for `{dom}`.\n"
-                f"• Meanwhile your `trycloudflare.com` tunnel stays active as fallback."
+            ok, res, ip, url, reach, details = await sync_activate_detailed(user.id)
+            if not ok:
+                return await status.edit_text(
+                    f"❌ **Dynu update failed** (`{cfg['method']}`)\n"
+                    f"> Error: `{res}`\n"
+                    f"> Public IP: `{ip or 'unknown'}`"
+                )
+            dns_ips = ", ".join(details.get("dns_ips") or []) or "none resolved"
+            dns_match = "✅ Matches VPS IP" if details.get("dns_match") else "⚠️ Propagation pending / mismatch"
+            health_code = details.get("health_status")
+            health_str = f"HTTP {health_code}" if health_code else ("OK" if reach else "unreachable")
+            extra_note = ""
+            if not reach:
+                local_ok = details.get("local_healthy")
+                extra_note = (
+                    "\n\n⚠️ **External `/health` is unreachable** "
+                    + ("(local app is healthy — open ports `80`/`443` and re-run `./deploy.vps` to configure Caddy HTTPS reverse proxy)."
+                       if local_ok else "(local app `/health` did not respond; check container logs).")
+                )
+            return await status.edit_text(
+                f"✅ **Dynu Verified & Updated** (`{details.get('method')}`)\n\n"
+                f"> **Result:** `{res}`\n"
+                f"> **VPS Public IP:** `{ip or 'unknown'}`\n"
+                f"> **DNS Resolved IP(s):** `{dns_ips}` ({dns_match})\n"
+                f"> **Active URL:** `{url}`\n"
+                f"> **Health Check:** `{reach}` ({health_str})"
+                + extra_note
             )
-        await status.edit_text(
-            "✅ **Dynu Updated!**\n\n"
-            f"> 🌐 **Host:** `{dom}` (`{res}`)\n"
-            f"> 🖥 **Synced IP:** `{ip or 'auto'}`\n"
-            f"{reach_note}"
+
+        cfg = await get_full_config()
+        ip = await get_public_ip()
+        dns_info = await verify_dns_ip(cfg["hostname"], ip) if cfg["hostname"] else {"resolved_ips": [], "matches": False}
+        dns_ips_str = ", ".join(dns_info.get("resolved_ips") or []) or "not resolved"
+        method_label = cfg["method"] or "not selected"
+        oauth_state = "not set"
+        if cfg["oauth_client_id"] and cfg["oauth_client_secret"]:
+            if cfg["oauth_token"] and cfg["oauth_expires_at"] > 0:
+                rem = max(0, int(cfg["oauth_expires_at"] - datetime.datetime.utcnow().timestamp()))
+                oauth_state = f"configured (token {'valid ' + str(rem // 60) + 'm' if rem > 0 else 'expired, auto-refreshes'})"
+            else:
+                oauth_state = "configured (token fetched on test/update)"
+
+        return await message.reply(
+            "🌐 **Dynu DDNS & API Control Panel**\n\n"
+            f"> **Active Method:** `{method_label}`\n"
+            f"> **Hostname:** `{cfg['hostname'] or 'not set'}`\n"
+            f"> **API Key:** `{mask_secret(cfg['api_key'])}`\n"
+            f"> **OAuth2:** `{oauth_state}`\n"
+            f"> **DDNS User / Pass:** `{cfg['username'] or 'not set'}` / `{mask_secret(cfg['password'])}`\n"
+            f"> **VPS Public IP:** `{ip or 'unknown'}`\n"
+            f"> **DNS Resolved IP(s):** `{dns_ips_str}`\n"
+            f"> **Active URL:** `{cfg['dynu_url'] or 'not set'}`\n\n"
+            "**Setup Guide (choose ONE method):**\n"
+            "1️⃣ **API Key (Recommended REST v2)**\n"
+            "   • `/dynuhost your-host.dynu.net`\n"
+            "   • `/dynukey YOUR_DYNU_API_KEY`\n"
+            "2️⃣ **OAuth2 (Auto-refreshing Bearer token)**\n"
+            "   • `/dynuhost your-host.dynu.net`\n"
+            "   • `/dynuoauth CLIENT_ID CLIENT_SECRET`\n"
+            "3️⃣ **DDNS IP Update Protocol (/nic/update)**\n"
+            "   • `/dynuhost your-host.dynu.net`\n"
+            "   • `/dynuuser YOUR_DYNU_USERNAME`\n"
+            "   • `/dynupass YOUR_DDNS_PASSWORD`\n\n"
+            "**Management Commands:**\n"
+            "• `/dynu test` — update IP, verify DNS & probe `/health`\n"
+            "• `/dynu method <api_key|oauth2|ddns>` — switch active method\n"
+            "• `/dynu off` — clear all Dynu credentials & settings\n\n"
+            "🔒 Credentials are encrypted at rest. Send secret commands in private DM."
         )
+
+    @bot.on_message(filters.command(["dynuhost", "dynukey", "dynuoauth", "dynuuser", "dynupass", "dynu_test"]))
+    async def dynu_value_handler(client, message: Message):
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        if not _is_admin_user(user.id):
+            return await message.reply("🚫 **Unauthorized Access**")
+
+        from app.utils.dynu import (
+            get_full_config,
+            is_method_ready,
+            is_valid_fqdn,
+            mask_secret,
+            normalize_dynu_host,
+            save_dynu_setting,
+        )
+
+        raw_text = (message.text or "").strip()
+        cmd = (
+            message.command[0]
+            if getattr(message, "command", None)
+            else raw_text.split()[0].lstrip("/")
+        ).lower()
+
+        if cmd == "dynu_test":
+            return await message.reply("Use `/dynu test` to run Dynu update and verification.")
+
+        parts = raw_text.split(maxsplit=1)
+        val = parts[1].strip() if len(parts) > 1 else ""
+
+        if cmd == "dynukey":
+            if not val:
+                return await message.reply("⚠️ Usage: `/dynukey <your_dynu_api_key>`")
+            await save_dynu_setting("dynu_api_key", val, encrypt=True, updated_by=user.id)
+            await save_dynu_setting("dynu_method", "api_key", encrypt=False, updated_by=user.id)
+            await _try_delete_secret_msg(message)
+            cfg = await get_full_config()
+            ready, reason = is_method_ready(cfg)
+            return await message.reply(
+                f"✅ **Dynu API Key saved securely** (`{mask_secret(val)}`, method: `api_key`).\n"
+                + ("Run `/dynu test` to update and verify." if ready else reason)
+            )
+
+        if cmd == "dynuoauth":
+            creds = val.split() if " " in val else (val.split(":", 1) if ":" in val else [])
+            if len(creds) != 2 or not creds[0].strip() or not creds[1].strip():
+                return await message.reply(
+                    "⚠️ Usage: `/dynuoauth <client_id> <client_secret>` (or `client_id:client_secret`)"
+                )
+            cid, csec = creds[0].strip(), creds[1].strip()
+            await save_dynu_setting("dynu_oauth_client_id", cid, encrypt=True, updated_by=user.id)
+            await save_dynu_setting("dynu_oauth_client_secret", csec, encrypt=True, updated_by=user.id)
+            await save_dynu_setting("dynu_oauth_token", "", encrypt=False, updated_by=user.id)
+            await save_dynu_setting("dynu_oauth_expires_at", 0.0, encrypt=False, updated_by=user.id)
+            await save_dynu_setting("dynu_method", "oauth2", encrypt=False, updated_by=user.id)
+            await _try_delete_secret_msg(message)
+            cfg = await get_full_config()
+            ready, reason = is_method_ready(cfg)
+            return await message.reply(
+                f"✅ **Dynu OAuth2 credentials saved securely** (`{mask_secret(cid)}`, method: `oauth2`).\n"
+                + ("Run `/dynu test` to fetch token, update IP & verify." if ready else reason)
+            )
+
+        if cmd == "dynuhost":
+            host = normalize_dynu_host(val)
+            if not is_valid_fqdn(host):
+                return await message.reply(
+                    "⚠️ Enter a valid full Dynu hostname, such as `mybot.dynu.net` or `name.webredirect.org`."
+                )
+            await save_dynu_setting("dynu_hostname", host, encrypt=False, updated_by=user.id)
+            cfg = await get_full_config()
+            ready, reason = is_method_ready(cfg)
+            return await message.reply(
+                f"✅ **Dynu hostname saved:** `{host}`\n"
+                + ("Run `/dynu test` to update and verify." if ready else reason)
+            )
+
+        if cmd == "dynuuser":
+            if not val:
+                return await message.reply("⚠️ Usage: `/dynuuser <dynu_username>`")
+            await save_dynu_setting("dynu_username", val, encrypt=False, updated_by=user.id)
+            cfg = await get_full_config()
+            if cfg.get("password") or not cfg.get("method"):
+                await save_dynu_setting("dynu_method", "ddns", encrypt=False, updated_by=user.id)
+                cfg = await get_full_config()
+            ready, reason = is_method_ready(cfg)
+            return await message.reply(
+                f"✅ **Dynu DDNS username saved:** `{val}`\n"
+                + ("Run `/dynu test` to update and verify." if ready else reason)
+            )
+
+        if cmd == "dynupass":
+            if not val:
+                return await message.reply("⚠️ Usage: `/dynupass <dynu_ddns_password>`")
+            await save_dynu_setting("dynu_password", val, encrypt=True, updated_by=user.id)
+            await save_dynu_setting("dynu_method", "ddns", encrypt=False, updated_by=user.id)
+            await _try_delete_secret_msg(message)
+            cfg = await get_full_config()
+            ready, reason = is_method_ready(cfg)
+            return await message.reply(
+                f"✅ **Dynu DDNS password saved securely** (`{mask_secret(val)}`, method: `ddns`).\n"
+                + ("Run `/dynu test` to update and verify." if ready else reason)
+            )
 
     @bot.on_message(filters.command("baseurl"))
     async def baseurl_handler(client, message: Message):

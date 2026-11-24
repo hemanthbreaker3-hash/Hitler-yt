@@ -154,6 +154,14 @@ async def sync_and_activate_duckdns(updated_by: int | None = None) -> tuple[bool
     return True, res, ip, best_url, reachable
 
 
+def is_duckdns_enabled_for_deployment() -> bool:
+    raw = os.getenv("DNS_PROVIDER") or os.getenv("dns") or os.getenv("DNS") or getattr(settings, "DNS_PROVIDER", "auto")
+    val = str(raw or "").strip().lower()
+    if val in ("dynu", "dyno", "dynu.com", "dynu.net", "none", "off", "disabled"):
+        return False
+    return True
+
+
 async def _duckdns_loop() -> None:
     while not _duckdns_stop:
         try:
@@ -161,16 +169,17 @@ async def _duckdns_loop() -> None:
             if await get_dns_provider() == "dynu":
                 await asyncio.sleep(60)
                 continue
-            dom, tok = await get_duckdns_config()
-            if dom and tok:
-                ok, res, ip, best_url, reachable = await sync_and_activate_duckdns()
-                if ok:
-                    logger.info(
-                        "DuckDNS synced: %s.duckdns.org (%s) -> %s | url=%s (reachable=%s)",
-                        dom, ip or "auto", res, best_url, reachable,
-                    )
-                else:
-                    logger.warning("DuckDNS update failed for %s.duckdns.org: %s", dom, res)
+            if is_duckdns_enabled_for_deployment():
+                dom, tok = await get_duckdns_config()
+                if dom and tok:
+                    ok, res, ip, best_url, reachable = await sync_and_activate_duckdns()
+                    if ok:
+                        logger.info(
+                            "DuckDNS synced: %s.duckdns.org (%s) -> %s | url=%s (reachable=%s)",
+                            dom, ip or "auto", res, best_url, reachable,
+                        )
+                    else:
+                        logger.warning("DuckDNS update failed for %s.duckdns.org: %s", dom, res)
         except asyncio.CancelledError:
             break
         except Exception as exc:

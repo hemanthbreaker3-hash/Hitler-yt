@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     BRANDING: str = "HITLER YT"
     LOGO_URL: str = ""
     STREAM_CHUNK_SIZE: int = 4194304
+    DNS_PROVIDER: str = "auto"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=True)
 
@@ -69,6 +70,20 @@ class Settings(BaseSettings):
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("BASE_URL cannot contain credentials, query, or fragment")
         return value
+
+    @field_validator("DNS_PROVIDER", mode="before")
+    @classmethod
+    def normalize_dns_provider_setting(cls, value: Any) -> str:
+        raw = str(value or os.getenv("dns") or os.getenv("DNS") or "auto").strip().lower()
+        if raw in ("duck", "duckdns", "duckdns.org"):
+            return "duckdns"
+        if raw in ("dynu", "dyno", "dynu.com", "dynu.net"):
+            return "dynu"
+        if raw in ("both", "all"):
+            return "both"
+        if raw in ("none", "off", "disabled", "false", "0"):
+            return "none"
+        return "auto"
 
     @field_validator("STREAM_CHUNK_SIZE")
     @classmethod
