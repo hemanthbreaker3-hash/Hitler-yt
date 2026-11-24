@@ -1,8 +1,10 @@
-"""Dynu.com dynamic DNS auto-updater, startup auto-activator, and IP/reachability helpers."""
+"""Dynu.com dynamic DNS auto-updater (API Key, OAuth2, and IP Update Password)."""
 from __future__ import annotations
 
 import asyncio
+import base64
 import datetime
+import json
 import logging
 import os
 import urllib.parse
@@ -47,36 +49,128 @@ async def get_dns_provider() -> str:
     return "auto"
 
 
-async def get_dynu_config() -> tuple[str, str, str]:
-    """Return (hostname, password_or_token, username)."""
-    env_dom = normalize_dynu_domain(os.getenv("DYNU_DOMAIN") or os.getenv("DYNU_HOST") or "")
-    env_pw = (os.getenv("DYNU_PASSWORD") or os.getenv("DYNU_TOKEN") or "").strip()
-    env_user = (os.getenv("DYNU_USERNAME") or "").strip()
-    if env_dom and env_pw:
-        return env_dom, env_pw, env_user
+async def get_dynu_config() -> dict[str, str]:
+    """Return dict with domain, password, api_key, client_id, client_secret, username."""
+    env_cfg = {
+        "domain": normalize_dynu_domain(os.getenv("DYNU_DOMAIN") or os.getenv("DYNU_HOST") or ""),
+        "password": (os.getenv("DYNU_PASSWORD") or os.getenv("DYNU_TOKEN") or "").strip(),
+        "api_key": (os.getenv("DYNU_API_KEY") or "").strip(),
+        "client_id": (os.getenv("DYNU_CLIENT_ID") or "").strip(),
+        "client_secret": (os.getenv("DYNU_CLIENT_SECRET") or "").strip(),
+        "username": (os.getenv("DYNU_USERNAME") or "").strip(),
+    }
+    if env_cfg["domain"] and (env_cfg["api_key"] or env_cfg["password"] or (env_cfg["client_id"] and env_cfg["client_secret"])):
+        return env_cfg
     try:
         rows = await settings_col.find(
-            {"key": {"$in": ["dynu_domain", "dynu_password", "dynu_username"]}},
+            {"key": {"$in": ["dynu_domain", "dynu_password", "dynu_api_key", "dynu_client_id", "dynu_client_secret", "dynu_username"]}},
             {"key": 1, "value": 1},
-        ).to_list(10)
-        stored = {r["key"]: r.get("value") for r in rows if isinstance(r, dict)}
-        dom = normalize_dynu_domain(stored.get("dynu_domain") or env_dom)
-        pw = str(stored.get("dynu_password") or env_pw).strip()
-        user = str(stored.get("dynu_username") or env_user).strip()
-        return dom, pw, user
+        ).to_list(15)
+        stored = {r["key"]: str(r.get("value") or "").strip() for r in rows if isinstance(r, dict)}
+        return {
+            "domain": normalize_dynu_domain(stored.get("dynu_domain") or env_cfg["domain"]),
+            "password": stored.get("dynu_password") or env_cfg["password"],
+            "api_key": stored.get("dynu_api_key") or env_cfg["api_key"],
+            "client_id": stored.get("dynu_client_id") or env_cfg["client_id"],
+            "client_secret": stored.get("dynu_client_secret") or env_cfg["client_secret"],
+            "username": stored.get("dynu_username") or env_cfg["username"],
+        }
     except Exception:
-        return env_dom, env_pw, env_user
+        return env_cfg
 
 
-def _sync_dynu_update(hostname: str, password: str, username: str = "", ip: str = "") -> tuple[bool, str]:
-    import base64
+def _dynu_v2_request(path: str, auth_headers: dict[str, str], payload: dict | None = None) -> dict:
+    url = f"https://api.dynu.com/v2{path}"
+    headers = {"Accept": "application/json", "User-Agent": "Dynu-Updater/2.0", **auth_headers}
+    data = None
+    method = "GET"
+    if payload is not None:
+        method = "POST"
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+
+
+def _dynu_get_oauth_token(client_id: str, client_secret: str) -> str:
+    b64 = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+    req = urllib.request.Request(
+        "https://api.dynu.com/v2/oauth2/token",
+        headers={"Accept": "application/json", "Authorization": f"Basic {b64}", "User-Agent": "Dynu-Updater/2.0"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+    tok = str(data.get("access_token") or "").strip()
+    if not tok:
+        raise RuntimeError("Dynu OAuth2 did not return an access_token")
+    return tok
+
+
+def _dynu_v2_update_ip(hostname: str, ip: str, auth_headers: dict[str, str]) -> tuple[bool, str]:
+    domains_res = _dynu_v2_request("/dns", auth_headers)
+    dom_list = domains_res.get("domains") or []
+    target = None
+    for d in dom_list:
+        if str(d.get("name") or "").strip().lower() == hostname:
+            target = d
+            break
+    if not target:
+        for d in dom_list:
+            name = str(d.get("name") or "").strip().lower()
+            if hostname == name or hostname.endswith("." + name):
+                target = d
+                break
+    if not target or not target.get("id"):
+        return False, f"Hostname {hostname} not found in Dynu account"
+    dom_id = target["id"]
+    cur_ip = str(target.get("ipv4Address") or "").strip()
+    if cur_ip == ip:
+        return True, f"nochg {ip}"
+    body = {
+        "name": target.get("name") or hostname,
+        "group": target.get("group") or "",
+        "ipv4Address": ip,
+        "ipv6Address": target.get("ipv6Address"),
+        "ttl": target.get("ttl") or 90,
+        "ipv4": True,
+        "ipv6": bool(target.get("ipv6", False)),
+        "ipv4WildcardAlias": bool(target.get("ipv4WildcardAlias", True)),
+        "ipv6WildcardAlias": bool(target.get("ipv6WildcardAlias", False)),
+        "allowZoneTransfer": bool(target.get("allowZoneTransfer", False)),
+        "dnssec": bool(target.get("dnssec", False)),
+    }
+    _dynu_v2_request(f"/dns/{dom_id}", auth_headers, payload=body)
+    return True, f"good {ip}"
+
+
+def _sync_dynu_update(
+    hostname: str,
+    password: str = "",
+    username: str = "",
+    ip: str = "",
+    api_key: str = "",
+    client_id: str = "",
+    client_secret: str = "",
+) -> tuple[bool, str]:
+    # 1. OAuth2 Client ID + Secret
+    if client_id and client_secret:
+        tok = _dynu_get_oauth_token(client_id, client_secret)
+        return _dynu_v2_update_ip(hostname, ip, {"Authorization": f"Bearer {tok}"})
+
+    # 2. Explicit Dynu API Key
+    if api_key:
+        return _dynu_v2_update_ip(hostname, ip, {"API-Key": api_key})
+
+    # 3. Classic DDNS /nic/update (with automatic fallback to v2 API-Key if password is an API Key)
     params = {"hostname": hostname}
     if ip:
         params["myip"] = ip
-    headers = {"User-Agent": "Dynu-Updater/1.0"}
+    headers = {"User-Agent": "Dynu-Updater/2.0"}
     if username:
-        token_b64 = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-        headers["Authorization"] = f"Basic {token_b64}"
+        b64 = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+        headers["Authorization"] = f"Basic {b64}"
     else:
         params["password"] = password
     qs = urllib.parse.urlencode(params)
@@ -85,21 +179,40 @@ def _sync_dynu_update(hostname: str, password: str, username: str = "", ip: str 
     with urllib.request.urlopen(req, timeout=15) as resp:
         body = resp.read().decode("utf-8", errors="replace").strip()
     low = body.lower()
-    ok = low.startswith("good") or low.startswith("nochg")
-    return ok, body
+    if low.startswith("good") or low.startswith("nochg"):
+        return True, body
+    if password and not username and len(password) >= 20:
+        try:
+            return _dynu_v2_update_ip(hostname, ip, {"API-Key": password})
+        except Exception:
+            pass
+    return False, body
 
 
 async def update_dynu_once(
-    hostname: str, password: str, username: str = "", ip: str | None = None
+    hostname: str,
+    password: str = "",
+    username: str = "",
+    ip: str | None = None,
+    api_key: str = "",
+    client_id: str = "",
+    client_secret: str = "",
 ) -> tuple[bool, str, str | None]:
     dom = normalize_dynu_domain(hostname)
-    pw = (password or "").strip()
-    user = (username or "").strip()
-    if not dom or not pw:
-        return False, "Missing Dynu hostname or password/token", None
+    if not dom or not (api_key or password or (client_id and client_secret)):
+        return False, "Missing Dynu hostname or credentials", None
     resolved_ip = (ip or "").strip() or (await get_public_ip()) or ""
     try:
-        ok, body = await asyncio.to_thread(_sync_dynu_update, dom, pw, user, resolved_ip)
+        ok, body = await asyncio.to_thread(
+            _sync_dynu_update,
+            dom,
+            (password or "").strip(),
+            (username or "").strip(),
+            resolved_ip,
+            (api_key or "").strip(),
+            (client_id or "").strip(),
+            (client_secret or "").strip(),
+        )
         return ok, body, (resolved_ip or None)
     except Exception as exc:
         return False, str(exc), (resolved_ip or None)
@@ -121,10 +234,18 @@ async def probe_dynu_url(hostname: str, port: int | None = None) -> tuple[str, b
 
 
 async def sync_and_activate_dynu(updated_by: int | None = None) -> tuple[bool, str, str | None, str | None, bool]:
-    dom, pw, user = await get_dynu_config()
-    if not dom or not pw:
+    cfg = await get_dynu_config()
+    dom = cfg["domain"]
+    if not dom or not (cfg["api_key"] or cfg["password"] or (cfg["client_id"] and cfg["client_secret"])):
         return False, "Not configured", None, None, False
-    ok, res, ip = await update_dynu_once(dom, pw, user)
+    ok, res, ip = await update_dynu_once(
+        dom,
+        password=cfg["password"],
+        username=cfg["username"],
+        api_key=cfg["api_key"],
+        client_id=cfg["client_id"],
+        client_secret=cfg["client_secret"],
+    )
     if not ok:
         return False, res, ip, None, False
     port = int(str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip())
@@ -169,9 +290,8 @@ async def sync_and_activate_active_ddns() -> None:
         from app.utils.duckdns import sync_and_activate_duckdns
         await sync_and_activate_duckdns()
         return
-    # Auto: prefer Dynu if configured, else DuckDNS
-    dom, pw, _ = await get_dynu_config()
-    if dom and pw:
+    cfg = await get_dynu_config()
+    if cfg["domain"] and (cfg["api_key"] or cfg["password"] or (cfg["client_id"] and cfg["client_secret"])):
         await sync_and_activate_dynu()
         return
     from app.utils.duckdns import sync_and_activate_duckdns
@@ -184,13 +304,14 @@ async def _dynu_loop() -> None:
         try:
             provider = await get_dns_provider()
             if provider in ("dynu", "auto"):
-                dom, pw, _ = await get_dynu_config()
-                if dom and pw and (provider == "dynu" or not os.getenv("DUCKDNS_DOMAIN")):
+                cfg = await get_dynu_config()
+                has_creds = bool(cfg["domain"] and (cfg["api_key"] or cfg["password"] or (cfg["client_id"] and cfg["client_secret"])))
+                if has_creds and (provider == "dynu" or not os.getenv("DUCKDNS_DOMAIN")):
                     ok, res, ip, best_url, reachable = await sync_and_activate_dynu()
                     if ok:
-                        logger.info("Dynu synced: %s (%s) -> %s | url=%s (reachable=%s)", dom, ip or "auto", res, best_url, reachable)
+                        logger.info("Dynu synced: %s (%s) -> %s | url=%s (reachable=%s)", cfg["domain"], ip or "auto", res, best_url, reachable)
                     else:
-                        logger.warning("Dynu update failed for %s: %s", dom, res)
+                        logger.warning("Dynu update failed for %s: %s", cfg["domain"], res)
         except asyncio.CancelledError:
             break
         except Exception as exc:

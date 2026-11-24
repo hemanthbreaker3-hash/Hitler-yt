@@ -2267,6 +2267,8 @@ def register_handlers(bot):
         ip = await get_public_ip()
         port = str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip()
         dom, _ = await get_duckdns_config()
+        from app.utils.dynu import get_dynu_config
+        dynu_cfg = await get_dynu_config()
         if not ip:
             return await wait_msg.edit_text("❌ Could not detect VPS public IP.")
         direct_url = f"http://{ip}" if port == "80" else f"http://{ip}:{port}"
@@ -2281,7 +2283,9 @@ def register_handlers(bot):
             lines.append(f"> 🦆 **DuckDNS Host:** `{dom}.duckdns.org`")
             lines.append(f"> 🌐 **DuckDNS HTTP URL:** `{duck_http}`")
             lines.append(f"> 🔒 **DuckDNS HTTPS URL:** `https://{dom}.duckdns.org`")
-        lines.append("\n💡 Paste this IP in duckdns.org or run `/duckdns <subdomain> <token>`.")
+        if dynu_cfg.get("domain"):
+            lines.append(f"> 🌐 **Dynu Host:** `{dynu_cfg['domain']}` (https://{dynu_cfg['domain']})")
+        lines.append("\n💡 Paste this IP in duckdns.org/dynu.com or run `/duckdns` / `/dynu`.")
         await wait_msg.edit_text("\n".join(lines))
 
     @bot.on_message(filters.command("duckdns"))
@@ -2378,35 +2382,39 @@ def register_handlers(bot):
         from app.utils.duckdns import get_public_ip
         args = (message.text or "").split()
         if len(args) < 2:
-            dom, pw, uname = await get_dynu_config()
+            cfg = await get_dynu_config()
+            dom = cfg["domain"]
+            secret = cfg["api_key"] or cfg["client_secret"] or cfg["password"]
+            auth_mode = "OAuth2" if (cfg["client_id"] and cfg["client_secret"]) else ("API Key" if cfg["api_key"] else ("Password" if cfg["password"] else "not set"))
             ip = await get_public_ip()
             prov = await get_dns_provider()
             port = str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip()
-            masked = (pw[:3] + "..." + pw[-3:]) if len(pw) > 6 else ("set" if pw else "not set")
+            masked = (secret[:4] + "..." + secret[-4:]) if len(secret) > 8 else ("set" if secret else "not set")
             url_doc = await settings_col.find_one({"key": "dynu_url"}) or {}
             return await message.reply(
                 "🌐 **Dynu Dynamic DNS**\n\n"
                 f"> 🔀 **Active Provider:** `{prov}`\n"
                 f"> 🌐 **Hostname:** `{dom or 'Not configured'}`\n"
+                f"> 🔐 **Auth Mode:** `{auth_mode}` (`{masked}`)\n"
                 f"> 🖥 **VPS IP:** `{ip or 'unknown'}` (Port `{port}`)\n"
-                f"> 🔗 **Active Dynu URL:** `{url_doc.get('value') or 'not set'}`\n"
-                f"> 🔑 **Password/Token:** `{masked}`\n\n"
+                f"> 🔗 **Active Dynu URL:** `{url_doc.get('value') or 'not set'}`\n\n"
                 "**Usage:**\n"
-                "• `/dynu <hostname> <password_or_token>` — Sync IP, test URL & activate\n"
-                "• `/dynu <hostname> <username> <password>` — Sync with username\n"
+                "• `/dynu <hostname> <api_key_or_password>` — Sync via API Key or IP Update Password\n"
+                "• `/dynu <hostname> <client_id> <client_secret>` — Sync via Dynu OAuth2\n"
                 "• `/dynu off` — Disable Dynu updater\n"
                 "• `/ip` — Get VPS public IPv4"
             )
         if args[1].lower() in ("off", "disable", "clear"):
-            await settings_col.delete_many({"key": {"$in": ["dynu_domain", "dynu_password", "dynu_username", "dynu_url"]}})
+            await settings_col.delete_many({"key": {"$in": ["dynu_domain", "dynu_password", "dynu_api_key", "dynu_client_id", "dynu_client_secret", "dynu_username", "dynu_url"]}})
             return await message.reply("🌐 Dynu updater disabled.")
         if len(args) < 3:
-            return await message.reply("⚠️ Usage: `/dynu <hostname> <password_or_token>`")
+            return await message.reply("⚠️ Usage:\n• `/dynu <hostname> <api_key_or_password>`\n• `/dynu <hostname> <client_id> <client_secret>`")
         dom = normalize_dynu_domain(args[1])
-        uname = args[2].strip() if len(args) >= 4 else ""
-        pw = args[3].strip() if len(args) >= 4 else args[2].strip()
+        cid = args[2].strip() if len(args) >= 4 else ""
+        csec = args[3].strip() if len(args) >= 4 else ""
+        pw_or_key = "" if len(args) >= 4 else args[2].strip()
         status = await message.reply(f"🌐 Updating `{dom}` on Dynu with VPS IP...")
-        ok, res, ip = await update_dynu_once(dom, pw, uname)
+        ok, res, ip = await update_dynu_once(dom, password=pw_or_key, client_id=cid, client_secret=csec)
         if not ok:
             return await status.edit_text(f"❌ **Dynu update failed:** `{res}`")
         port = int(str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip())
@@ -2414,9 +2422,12 @@ def register_handlers(bot):
         now = datetime.datetime.utcnow()
         await settings_col.update_one({"key": "dns_provider"}, {"$set": {"value": "dynu", "updated_by": user.id, "updated_at": now}}, upsert=True)
         await settings_col.update_one({"key": "dynu_domain"}, {"$set": {"value": dom, "updated_by": user.id, "updated_at": now}}, upsert=True)
-        await settings_col.update_one({"key": "dynu_password"}, {"$set": {"value": pw, "updated_by": user.id, "updated_at": now}}, upsert=True)
-        if uname:
-            await settings_col.update_one({"key": "dynu_username"}, {"$set": {"value": uname, "updated_by": user.id, "updated_at": now}}, upsert=True)
+        if cid and csec:
+            await settings_col.update_one({"key": "dynu_client_id"}, {"$set": {"value": cid, "updated_by": user.id, "updated_at": now}}, upsert=True)
+            await settings_col.update_one({"key": "dynu_client_secret"}, {"$set": {"value": csec, "updated_by": user.id, "updated_at": now}}, upsert=True)
+        else:
+            await settings_col.update_one({"key": "dynu_password"}, {"$set": {"value": pw_or_key, "updated_by": user.id, "updated_at": now}}, upsert=True)
+            await settings_col.update_one({"key": "dynu_api_key"}, {"$set": {"value": pw_or_key if len(pw_or_key) >= 20 else "", "updated_by": user.id, "updated_at": now}}, upsert=True)
         await settings_col.update_one({"key": "dynu_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
         if reachable:
             settings.BACKEND_URL = best_url

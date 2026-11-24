@@ -126,7 +126,7 @@ aliases = {'APP_ID':'API_ID', 'DATABASE_URI':'MONGODB_URI', 'DATABASE_URL':'MONG
 for alias, canonical in aliases.items():
     if os.environ.get(alias) and not os.environ.get(canonical):
         os.environ[canonical] = os.environ[alias]
-keys = ('API_ID','API_HASH','BOT_TOKEN','OWNER_ID','ADMINS','CHANNEL_ID','FORCE_SUB_CHANNELS','MONGODB_URI','DATABASE_NAME','REDIS_URL','BASE_URL','BACKEND_URL','WEBSITE_URL','PORT','DEBUG','DEFAULT_EXPIRY','SESSIONS','ADMIN_PANEL_TOKEN','TMDB_API_KEY','BRANDING','LOGO_URL','STREAM_CHUNK_SIZE','NGROK_AUTHTOKEN','TUNNEL_PROVIDER','CLOUDFLARE_URL','NGROK_URL','DUCKDNS_DOMAIN','DUCKDNS_TOKEN','DNS_PROVIDER','DYNU_DOMAIN','DYNU_PASSWORD','DYNU_USERNAME')
+keys = ('API_ID','API_HASH','BOT_TOKEN','OWNER_ID','ADMINS','CHANNEL_ID','FORCE_SUB_CHANNELS','MONGODB_URI','DATABASE_NAME','REDIS_URL','BASE_URL','BACKEND_URL','WEBSITE_URL','PORT','DEBUG','DEFAULT_EXPIRY','SESSIONS','ADMIN_PANEL_TOKEN','TMDB_API_KEY','BRANDING','LOGO_URL','STREAM_CHUNK_SIZE','NGROK_AUTHTOKEN','TUNNEL_PROVIDER','CLOUDFLARE_URL','NGROK_URL','DUCKDNS_DOMAIN','DUCKDNS_TOKEN','DNS_PROVIDER','DYNU_DOMAIN','DYNU_PASSWORD','DYNU_USERNAME','DYNU_API_KEY','DYNU_CLIENT_ID','DYNU_CLIENT_SECRET')
 for key in keys:
     if key in os.environ: values[key] = os.environ[key]
 # Also accept legacy alias values from .env/config.env.
@@ -249,10 +249,13 @@ duck_tok = (v.get('DUCKDNS_TOKEN') or '').strip()
 
 dynu_dom = clean_host(v.get('DYNU_DOMAIN'))
 if dynu_dom and '.' not in dynu_dom: dynu_dom = f"{dynu_dom}.dynu.net"
-dynu_pw = (v.get('DYNU_PASSWORD') or '').strip()
+dynu_pw = (v.get('DYNU_API_KEY') or v.get('DYNU_PASSWORD') or '').strip()
+dynu_cid = (v.get('DYNU_CLIENT_ID') or '').strip()
+dynu_csec = (v.get('DYNU_CLIENT_SECRET') or '').strip()
 
-if prov in ('dynu','dynu.com','dynu.net') or (prov == 'auto' and dynu_dom and dynu_pw and not (duck_dom and duck_tok)):
-    print(f"dynu|{dynu_dom}|{dynu_pw}|")
+has_dynu = bool(dynu_dom and (dynu_pw or (dynu_cid and dynu_csec)))
+if (prov in ('dynu','dynu.com','dynu.net') and dynu_dom) or (prov == 'auto' and has_dynu and not (duck_dom and duck_tok)):
+    print(f"dynu|{dynu_dom}|{dynu_pw or dynu_cid}|")
 elif duck_dom and duck_tok:
     print(f"duck|{duck_dom}.duckdns.org|{duck_tok}|{duck_dom}")
 else:
