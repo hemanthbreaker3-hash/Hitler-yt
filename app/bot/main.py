@@ -755,44 +755,137 @@ async def catalog_page_suggestions(query: str, limit: int = 8) -> list[str]:
     return lines
 
 
-def parse_groups_text(text: str, box: str = "watch") -> list[dict]:
+def _clean_group_heading(raw: str) -> str:
+    s = (raw or "").strip()
+    s = re.sub(r"^\d+[\.\)]\s*", "", s).strip()
+    return s
+
+
+def parse_groups_chunk(
+    text: str,
+    box: str = "watch",
+    *,
+    pending_group: dict | None = None,
+    pending_button_name: str | None = None,
+    last_group: dict | None = None,
+) -> tuple[list[dict], int, dict | None, str | None]:
     """
-    Parse admin group/button text into structured groups.
-    Format:
-      1. Group name
-         Button name: Button URL
-      2. Another group
-         Btn: https://...
+    Stateful parser for /addgroups supporting:
+    - Split Telegram messages (e.g. group heading at end of msg 1, buttons in msg 2)
+    - Button-only messages (attaches to pending_group, last_group, or creates default group)
+    - Split button label/URL across lines or messages ("Label:\\nhttps://...")
+    - Multiple formats: "Name: URL", "Name - URL", "Name | URL", "[Name](URL)", bare URL
+    Returns: (new_groups, appended_to_last_count, next_pending_group, next_pending_button_name)
     """
-    groups: list[dict] = []
-    current: dict | None = None
-    lines = (text or "").splitlines()
-    for raw_line in lines:
+    new_groups: list[dict] = []
+    appended_to_last = 0
+    current: dict | None = dict(pending_group) if pending_group else None
+    if current is not None:
+        current["buttons"] = list(current.get("buttons") or [])
+    using_last_group = False
+    pending_btn: str | None = (pending_button_name or "").strip() or None
+    default_group_name = "Watch Links" if box == "watch" else "Download Links"
+
+    def _commit_current() -> None:
+        nonlocal current, using_last_group
+        if current and current.get("buttons") and not using_last_group:
+            new_groups.append(current)
+        current = None
+        using_last_group = False
+
+    def _ensure_target_group() -> dict:
+        nonlocal current, using_last_group
+        if current is not None:
+            return current
+        if last_group is not None and not new_groups:
+            current = last_group
+            using_last_group = True
+            return current
+        current = {"box": box, "name": default_group_name, "buttons": []}
+        using_last_group = False
+        return current
+
+    def _add_button(bname: str, burl: str) -> None:
+        nonlocal appended_to_last
+        tgt = _ensure_target_group()
+        tgt.setdefault("buttons", []).append({"name": bname.strip(), "url": burl.strip()})
+        if using_last_group:
+            appended_to_last += 1
+
+    for raw_line in (text or "").splitlines():
         line = raw_line.strip()
         if not line:
             continue
-        # New group: "1. Name" or "1) Name" or just numbered
-        gm = re.match(r"^\d+[\.\)]\s*(.+)$", line)
-        if gm:
-            if current and current.get("buttons"):
-                groups.append(current)
-            gname = gm.group(1).strip()
-            current = {"box": box, "name": gname or f"{'Watch' if box == 'watch' else 'Download'} Group", "buttons": []}
+
+        # 1. Markdown link: [Button Name](https://...)
+        md_m = re.match(r"^\[([^\]]+)\]\((https?://[^\s)]+)\)\s*$", line, re.I)
+        if md_m:
+            pending_btn = None
+            _add_button(md_m.group(1), md_m.group(2))
             continue
-        # Button: "Name: URL" or "Name - URL"
-        bm = re.match(r"^(.+?)\s*[:：\-–]\s*(https?://\S+)\s*$", line, re.I)
-        if bm and current is not None:
+
+        # 2. Button with separator: "Name: URL", "Name - URL", "Name | URL", "Name => URL"
+        bm = re.match(r"^(.+?)\s*(?:[:：\|]|=>|[-–—])\s*(https?://\S+)\s*$", line, re.I)
+        if bm:
+            pending_btn = None
             bname = bm.group(1).strip()
             burl = bm.group(2).strip()
             if bname and burl:
-                current["buttons"].append({"name": bname, "url": burl})
+                _add_button(bname, burl)
+                continue
+
+        # 3. Bare URL (may complete a pending_btn from previous line/message)
+        um = re.match(r"^(https?://\S+)\s*$", line, re.I)
+        if um:
+            burl = um.group(1).strip()
+            bname = pending_btn or ("Watch" if box == "watch" else "Download")
+            pending_btn = None
+            _add_button(bname, burl)
             continue
-        # If we have a group but no buttons yet and line looks like a name only, treat as group name refresh
-        if current is None and line and not line.startswith("http"):
-            current = {"box": box, "name": line, "buttons": []}
-    if current and current.get("buttons"):
-        groups.append(current)
-    return groups
+
+        # 4. Numbered group header: "1. Group Name" or "1) Group Name"
+        gm = re.match(r"^\d+[\.\)]\s*(.+)$", line)
+        if gm:
+            pending_btn = None
+            _commit_current()
+            gname = gm.group(1).strip()
+            current = {"box": box, "name": gname or default_group_name, "buttons": []}
+            using_last_group = False
+            continue
+
+        # 5. Split button label ending with ":" / "|" / "-" (waiting for URL on next line/message)
+        split_btn_m = re.match(r"^(.+?)\s*[:：\|]\s*$", line)
+        if split_btn_m and (current is not None or last_group is not None):
+            cand = split_btn_m.group(1).strip()
+            if cand and not cand.lower().startswith("group"):
+                pending_btn = cand
+                continue
+
+        # 6. Plain text line without URL -> treat as a (possibly unnumbered) group header
+        pending_btn = None
+        if current is None or current.get("buttons"):
+            _commit_current()
+            current = {"box": box, "name": _clean_group_heading(line) or default_group_name, "buttons": []}
+            using_last_group = False
+        else:
+            # Consecutive header line before any buttons were added
+            current["name"] = _clean_group_heading(line) or current["name"]
+
+    next_pending_group: dict | None = None
+    if current is not None:
+        if current.get("buttons"):
+            if not using_last_group:
+                new_groups.append(current)
+        elif not using_last_group:
+            next_pending_group = current
+
+    return new_groups, appended_to_last, next_pending_group, pending_btn
+
+
+def parse_groups_text(text: str, box: str = "watch") -> list[dict]:
+    """Parse admin group/button text into structured groups."""
+    new_groups, _, _, _ = parse_groups_chunk(text, box=box)
+    return new_groups
 
 
 async def is_access_allowed(user_id: int) -> bool:
@@ -1563,23 +1656,47 @@ def register_handlers(bot):
             if not page_slug:
                 _awaiting_addgroups.pop(user.id, None)
                 return await message.reply("Session expired. Reply to a page link with /addgroups again.")
-            new_groups = parse_groups_text(raw, box=box)
-            if not new_groups:
-                return await message.reply(
-                    "❌ Could not parse any groups/buttons from this message.\n\n"
-                    "Use this format:\n\n"
-                    "`1. Group Name`\n"
-                    "`Button Name: https://example.com`\n\n"
-                    "`2. Another Group`\n"
-                    "`Watch Now: https://...`\n\n"
-                    "Or send `/done` to save already collected groups, or `/cancel` to stop."
-                )
             collected = state.setdefault("groups", [])
+            pending_group = state.get("pending_group")
+            pending_btn = state.get("pending_button_name")
+            last_group = collected[-1] if collected else None
+
+            new_groups, appended_to_last, next_pending_group, next_pending_btn = parse_groups_chunk(
+                raw,
+                box=box,
+                pending_group=pending_group,
+                pending_button_name=pending_btn,
+                last_group=last_group,
+            )
+            state["pending_group"] = next_pending_group
+            state["pending_button_name"] = next_pending_btn
+
+            if not new_groups and appended_to_last == 0 and next_pending_group is None and not next_pending_btn:
+                return await message.reply(
+                    "❌ Could not parse any groups or buttons from this message.\n\n"
+                    "Send either:\n"
+                    "• `1. Group Name` + `Button Name: https://example.com`\n"
+                    "• Or just `Button Name: https://example.com` (attaches to the previous/default group)\n\n"
+                    "Send `/done` to save collected groups, or `/cancel` to stop."
+                )
+
             collected.extend(new_groups)
-            msg_btns = sum(len(g.get("buttons") or []) for g in new_groups)
+            msg_btns = sum(len(g.get("buttons") or []) for g in new_groups) + appended_to_last
             total_btns = sum(len(g.get("buttons") or []) for g in collected)
+            notes = []
+            if new_groups:
+                notes.append(f"`+{len(new_groups)}` group(s)")
+            if appended_to_last:
+                notes.append(f"`+{appended_to_last}` button(s) added to `{last_group.get('name')}`")
+            elif msg_btns:
+                notes.append(f"`+{msg_btns}` button(s)")
+            if next_pending_group:
+                notes.append(f"pending group `{next_pending_group.get('name')}` (send its buttons next)")
+            if next_pending_btn:
+                notes.append(f"pending button `{next_pending_btn}` (send its URL next)")
+            summary = " · ".join(notes) if notes else "updated"
             return await message.reply(
-                f"📥 **Collected** `+{len(new_groups)}` group(s) (`+{msg_btns}` button(s)) for `/{page_slug}` (**{box.upper()}**)\n"
+                f"📥 **Collected** {summary} for `/{page_slug}` (**{box.upper()}**)\n"
                 f"📦 Total queued: `{len(collected)}` group(s) · `{total_btns}` button(s)\n\n"
                 f"Send more messages, or send `/done` to save all to the page."
             )
@@ -3420,7 +3537,7 @@ def register_handlers(bot):
         if not page:
             return await callback.answer("Page not found in bot DB", show_alert=True)
         page_slug = page.get("slug") or page_slug
-        _awaiting_addgroups[user.id] = {"page_slug": page_slug, "box": box, "groups": []}
+        _awaiting_addgroups[user.id] = {"page_slug": page_slug, "box": box, "groups": [], "pending_group": None, "pending_button_name": None}
         # Escape for HTML; long names OK across multiple messages until /done
         safe_slug = html.escape(page_slug)
         try:
