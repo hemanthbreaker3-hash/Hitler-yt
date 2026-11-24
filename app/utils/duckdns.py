@@ -157,6 +157,10 @@ async def sync_and_activate_duckdns(updated_by: int | None = None) -> tuple[bool
 async def _duckdns_loop() -> None:
     while not _duckdns_stop:
         try:
+            from app.utils.dynu import get_dns_provider
+            if await get_dns_provider() == "dynu":
+                await asyncio.sleep(60)
+                continue
             dom, tok = await get_duckdns_config()
             if dom and tok:
                 ok, res, ip, best_url, reachable = await sync_and_activate_duckdns()

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.database.connection import db, settings, settings_col
-from app.utils.helpers import normalize_public_base_url, rewrite_page_groups_to_cloudflare, is_trycloudflare_url, is_duckdns_url
+from app.utils.helpers import normalize_public_base_url, rewrite_page_groups_to_cloudflare, is_trycloudflare_url, is_duckdns_url, is_dynu_url
 
 logger = logging.getLogger(__name__)
 _monitor_task: asyncio.Task | None = None

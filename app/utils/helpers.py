@@ -133,8 +133,28 @@ def is_trycloudflare_url(value: str | None) -> bool:
             host == "ngrok-free.app" or host.endswith(".ngrok-free.app")
             or host == "ngrok-free.dev" or host.endswith(".ngrok-free.dev")
             or host == "ngrok.io" or host.endswith(".ngrok.io")
-            or host == "trycloudflare.com" or host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok-free.dev", ".ngrok.io", ".duckdns.org"))
+            or host == "trycloudflare.com" or host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok-free.dev", ".ngrok.io", ".duckdns.org", ".dynu.net", ".dynu.com", ".dynu.org"))
         )
+    except Exception:
+        return False
+
+
+def is_dynu_url(value: str | None) -> bool:
+    if not value or not isinstance(value, str):
+        return False
+    try:
+        raw = value.strip()
+        if not raw.startswith(("http://", "https://")):
+            raw = "https://" + raw
+        host = (urlparse(raw).hostname or "").lower().rstrip(".")
+        dynu_env = (os.getenv("DYNU_DOMAIN") or "").strip().lower()
+        if dynu_env and (host == dynu_env or host.endswith("." + dynu_env)):
+            return True
+        return any(host == d or host.endswith("." + d) for d in (
+            "dynu.net", "dynu.com", "dynu.org", "dynuddns.com",
+            "ddnsfree.com", "ddnsgeek.com", "freeddns.org", "giize.com",
+            "loseyourip.com", "mywire.org", "ooguy.com", "theworkpc.com", "webredirect.org",
+        ))
     except Exception:
         return False
 
@@ -192,7 +212,7 @@ def rewrite_media_or_button_url(target_url: str, cloudflare_base: str | None, fo
     should_replace_domain = (
         force_replace_domain
         or parsed.path.startswith(media_prefixes)
-        or host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok-free.dev", ".ngrok.io", ".duckdns.org"))
+        or host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok-free.dev", ".ngrok.io", ".duckdns.org", ".dynu.net", ".dynu.com", ".dynu.org"))
         or host.endswith((".vercel.app", ".pages.dev"))
     )
     if should_replace_domain:
