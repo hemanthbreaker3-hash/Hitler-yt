@@ -2,11 +2,13 @@
 {% block title %}{{ BRANDING }} · Movies & Series{% endblock %}
 {% block nav_home %}active{% endblock %}
 {% block head %}
+<style>
   .pager-bar{display:flex;align-items:center;justify-content:center;gap:8px;margin:24px 0;flex-wrap:wrap}
   .pager-bar[hidden]{display:none!important}
   .pager-bar button{background:var(--bg-card);border:1px solid var(--line-strong);color:var(--text);border-radius:10px;padding:8px 13px;cursor:pointer;font-weight:700;font-size:13px}
   .pager-bar button:disabled{opacity:.4;cursor:not-allowed}
   .pager-bar button.active{background:linear-gradient(125deg,var(--accent),var(--accent-2));color:#061019;border-color:transparent}
+</style>
 {% endblock %}
 {% block content %}
 <form class="search-bar" action="/search" method="get" role="search">

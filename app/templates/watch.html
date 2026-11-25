@@ -354,7 +354,7 @@
     <div class="p4u-stage" id="playerWrapper">
   {% if _bg %}<div class="p4u-backdrop" style="background-image:url('{{ _bg }}')"></div>{% endif %}
 
-  <movi-player id="moviPlayer" playsinline controls preload="auto" spinnerdelay="800" sw="auto" fallback="native" subtitlepicker fastseek resume persist theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
+  <movi-player id="moviPlayer" playsinline controls preload="auto" spinnerdelay="800" fallback="native" subtitlepicker fastseek resume persist theme="dark" themecolor="#3b82f6" tabindex="0"></movi-player>
   <video id="nativeVideo" playsinline preload="metadata" crossorigin="anonymous"></video>
 
   <button type="button" class="p4u-center-play" id="centerPlayBtn" aria-label="Play or Pause">
@@ -452,10 +452,22 @@
         {% if _wg and _wg|length > 1 %}
         <button type="button" class="p4u-up-btn" id="episodesDrawerBtn">^ EPISODES</button>
         {% endif %}
-        <button type="button" class="p4u-up-btn" id="toggleEngineBtn" title="Switch between Movi Player and Built-in HTML5 Player">🎬 Built-in Player</button>
+        <button type="button" class="p4u-up-btn" id="toggleEngineBtn" title="Active: Player (tap to switch to Built-in HTML5 Player)">🎬 Player</button>
         <button type="button" class="p4u-up-btn" id="pcSwitchBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg> Switch</button>
       </div>
       <button type="button" class="p4u-ep-pill" id="nextGroupBtn" disabled>Next Episode →</button>
+    </div>
+    <div class="p4u-below-bar" id="tracksBar" style="margin-top:8px;justify-content:flex-start;gap:12px">
+      <div class="audio-track-row" id="audioTrackRow" style="display:flex;margin-top:0">
+        <span style="font-size:12px;font-weight:800;color:#93c5fd">🔊 Audio:</span>
+        <select id="audioSelect" class="audio-track-select" aria-label="Audio track"><option value="remux:0">Default / Auto</option></select>
+        <span id="audioTrackStatus" class="audio-track-status"></span>
+      </div>
+      <div class="audio-track-row" id="subtitleTrackRow" style="display:flex;margin-top:0">
+        <span style="font-size:12px;font-weight:800;color:#93c5fd">💬 Subtitles:</span>
+        <select id="subtitleSelect" class="audio-track-select" aria-label="Subtitle track"><option value="">Off</option><option value="__local__">+ Load .srt / .vtt…</option></select>
+        <span id="subtitleTrackStatus" class="audio-track-status"></span>
+      </div>
     </div>
     {% if _wg and _wg|length > 1 %}
     <div class="watch-side-card side-eps" id="sideEpsCard" style="margin-top:14px">
@@ -479,8 +491,7 @@
         {% if _cur_group_name %}<span>{{ _cur_group_name }}</span>{% endif %}
       </div>
       {% if title_page and title_page.overview %}<p class="muted" style="font-size:13px;line-height:1.55">{{ title_page.overview }}</p>{% endif %}
-      <div class="audio-track-row" id="audioTrackRow" style="display:none"><select id="audioSelect" class="audio-track-select" aria-label="Audio track"></select><span id="audioTrackStatus" class="audio-track-status"></span></div>
-      <div class="audio-track-row" id="subtitleTrackRow" style="display:none"><select id="subtitleSelect" class="audio-track-select" aria-label="Subtitle track"></select><span id="subtitleTrackStatus" class="audio-track-status"></span></div>
+
       <div class="watch-tools">
         {% if player_settings.downloads_enabled %}
         <a class="btn btn-accent" id="infoDlBtn" href="{{ effective_stream_base }}/dl/{{ file.short_code }}" download>⬇ Download</a>
@@ -611,7 +622,7 @@ function switchPlayerEngine(toNative, sourceUrl) {
   useNativeEngine = !!toNative;
   wrapper.classList.toggle('use-native', useNativeEngine);
   const toggleBtn = document.getElementById('toggleEngineBtn');
-  if (toggleBtn) toggleBtn.textContent = useNativeEngine ? '🎬 Movi Player' : '🎬 Built-in Player';
+  if (toggleBtn) toggleBtn.textContent = useNativeEngine ? '🎬 Built-in Player' : '🎬 Player';
   const target = activeEl();
   const srcToPlay = sourceUrl || (prev && prev.src) || STREAM_URL;
   if (target) {
@@ -626,7 +637,7 @@ function switchPlayerEngine(toNative, sourceUrl) {
     }, { once: true });
     target.play()?.catch(() => { syncPlayUI(); hideLoading(); });
   }
-  showToast(useNativeEngine ? 'Switched to Built-in HTML5 Player' : 'Switched to Movi Player');
+  showToast(useNativeEngine ? 'Switched to Built-in HTML5 Player' : 'Switched to Player');
 }
 
 document.getElementById('toggleEngineBtn')?.addEventListener('click', (e) => {
@@ -841,7 +852,7 @@ const epDrawer = document.getElementById('episodesDrawer');
   swList.appendChild(aacBtn);
   const engBtn = document.createElement('button');
   engBtn.type = 'button';
-  engBtn.textContent = '🎬 Switch Engine (Movi / Built-in)';
+  engBtn.textContent = '🎬 Switch Player (Player / Built-in)';
   engBtn.onclick = (e) => {
     e.stopPropagation();
     swPop.classList.remove('open');
@@ -1425,18 +1436,25 @@ function loadScript(src) { return new Promise((res, rej) => { const s = document
     mp.removeAttribute('muted');
     mp.volume = 1;
     let gotMeta = false;
-    mp.addEventListener('loadedmetadata', () => { gotMeta = true; hideLoading(); }, { once: true });
+    const onReady = () => { gotMeta = true; hideLoading(); };
+    mp.addEventListener('loadedmetadata', onReady, { once: true });
+    mp.addEventListener('loadeddata', onReady, { once: true });
+    mp.addEventListener('canplay', onReady, { once: true });
     mp.src = STREAM_URL;
     if (typeof mp.load === 'function') mp.load();
     setTimeout(() => {
-      if (!gotMeta && !useNativeEngine && !usedBackendFallback && BACKEND_STREAM_URL && BACKEND_STREAM_URL !== STREAM_URL) {
-        usedBackendFallback = true;
-        mp.src = BACKEND_STREAM_URL;
-        if (typeof mp.load === 'function') mp.load();
-        mp.muted = false;
-        mp.play()?.catch(() => { syncPlayUI(); hideLoading(); });
+      if (!gotMeta && !useNativeEngine) {
+        if (!usedBackendFallback && BACKEND_STREAM_URL && BACKEND_STREAM_URL !== STREAM_URL) {
+          usedBackendFallback = true;
+          mp.src = BACKEND_STREAM_URL;
+          if (typeof mp.load === 'function') mp.load();
+          mp.muted = false;
+          mp.play()?.catch(() => { syncPlayUI(); hideLoading(); });
+        } else {
+          hideLoading();
+        }
       }
-    }, 5000);
+    }, 6500);
     mp.play()?.catch(() => {
       try { mp.pause(); } catch (_) {}
       mp.muted = false;
