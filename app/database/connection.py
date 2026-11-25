@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     BACKEND_URL: Optional[str] = None
     WEBSITE_URL: Optional[str] = None
     CHANNEL_ID: Optional[int] = None
-    UPDATE_CHANNEL_URL: str = "https://t.me/HiTLERYT"
+    UPDATE_CHANNEL_URL: str = "https://t.me/hitlerytofficial"
     PORT: int = 8000
     DEBUG: bool = False
     SESSIONS: str = ""

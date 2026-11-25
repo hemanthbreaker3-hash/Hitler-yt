@@ -354,6 +354,48 @@
     }
     .poster-card:hover .play-hint span{transform:scale(1.08)}
 
+
+    /* Join Updates Channel Popup */
+    .uc-modal-backdrop{
+      position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;
+      padding:18px;background:rgba(4,6,12,.72);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+      animation:ucFadeIn .22s ease;
+    }
+    .uc-modal-backdrop.open{display:flex}
+    @keyframes ucFadeIn{from{opacity:0}to{opacity:1}}
+    .uc-modal{
+      position:relative;width:min(420px,100%);border-radius:20px;padding:26px 22px 22px;
+      background:linear-gradient(165deg,rgba(20,27,45,.98),rgba(10,14,24,.99));
+      border:1px solid rgba(139,92,246,.42);
+      box-shadow:0 26px 70px rgba(0,0,0,.72),0 0 36px rgba(34,211,238,.14);
+      text-align:center;color:#f8fafc;
+    }
+    .uc-close{
+      position:absolute;top:12px;right:12px;width:32px;height:32px;border-radius:50%;
+      border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#cbd5e1;
+      cursor:pointer;font-size:16px;display:grid;place-items:center;
+    }
+    .uc-close:hover{background:rgba(255,255,255,.14);color:#fff}
+    .uc-icon{
+      width:54px;height:54px;margin:0 auto 12px;border-radius:16px;display:grid;place-items:center;
+      background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;font-size:24px;
+      box-shadow:0 10px 26px rgba(14,165,233,.35);
+    }
+    .uc-modal h3{font-size:1.2rem;margin-bottom:6px;color:#fff}
+    .uc-modal p{font-size:13px;color:#94a3b8;line-height:1.5;margin-bottom:18px}
+    .uc-join-btn{
+      display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;
+      min-height:44px;padding:0 18px;border-radius:12px;font-weight:800;font-size:14px;
+      background:linear-gradient(125deg,#0ea5e9,#6366f1);color:#fff;border:0;
+      box-shadow:0 10px 26px rgba(14,165,233,.35);transition:transform .15s,filter .15s;
+    }
+    .uc-join-btn:hover{filter:brightness(1.08);transform:translateY(-1px)}
+    .uc-later-btn{
+      margin-top:10px;background:transparent;border:0;color:#94a3b8;font-size:12px;font-weight:700;
+      cursor:pointer;padding:6px 12px;
+    }
+    .uc-later-btn:hover{color:#e2e8f0}
+
     {% block head %}{% endblock %}
     /* Enhanced Card & Search Polish */
   .poster-card{transition:transform .22s cubic-bezier(.22,1,.36,1),box-shadow .22s,border-color .22s}
@@ -448,6 +490,44 @@
       })
       .catch(() => {});
   }
+})();
+</script>
+
+  <div class="uc-modal-backdrop" id="ucJoinModal" role="dialog" aria-modal="true" aria-labelledby="ucJoinTitle">
+    <div class="uc-modal">
+      <button type="button" class="uc-close" id="ucCloseBtn" aria-label="Close">×</button>
+      <div class="uc-icon"><i class="fa-brands fa-telegram"></i></div>
+      <h3 id="ucJoinTitle">Join {{ BRANDING }} Updates Channel</h3>
+      <p>Get instant alerts for new releases, latest episodes, and backup domain links.</p>
+      <a class="uc-join-btn" id="ucJoinLink" href="https://t.me/hitlerytofficial" target="_blank" rel="noopener">
+        <i class="fa-brands fa-telegram"></i> Join Updates Channel
+      </a>
+      <button type="button" class="uc-later-btn" id="ucLaterBtn">Maybe Later</button>
+    </div>
+  </div>
+<script>
+(function initUpdateChannelPopup(){
+  const modal = document.getElementById('ucJoinModal');
+  const closeBtn = document.getElementById('ucCloseBtn');
+  const laterBtn = document.getElementById('ucLaterBtn');
+  const joinLink = document.getElementById('ucJoinLink');
+  if (!modal) return;
+  function showPopup() {
+    if (document.fullscreenElement || document.webkitFullscreenElement) return;
+    modal.classList.add('open');
+  }
+  function hidePopup() {
+    modal.classList.remove('open');
+  }
+  setTimeout(showPopup, 650);
+  closeBtn?.addEventListener('click', hidePopup);
+  laterBtn?.addEventListener('click', hidePopup);
+  joinLink?.addEventListener('click', hidePopup);
+  modal.addEventListener('click', (e) => { if (e.target === modal) hidePopup(); });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) setTimeout(showPopup, 350); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') setTimeout(showPopup, 250);
+  });
 })();
 </script>
 </body>
