@@ -2859,6 +2859,22 @@ function renderWatchHtml(file, settings, streamBaseUrl, extra = {}) {
       </div>
       <button type="button" class="p4u-ep-pill" id="nextGroupBtn" disabled>Next Episode →</button>
     </div>
+    ${watchGroups.length > 1 ? `<div class="watch-side-card side-eps" id="sideEpsCard" style="margin-top:14px"><h3>Episodes / Seasons</h3><div class="side-season-bar" id="sideSeasonBar"></div><div class="side-ep-tools"><select id="seasonFilter" aria-label="Select season"><option value="all">All Seasons</option></select><input id="episodeSearch" type="search" placeholder="Search EP…"></div><div class="side-ep-list" id="sideEpList"></div><div class="side-ep-count" id="episodeCount"></div></div>` : ''}
+    <div class="watch-info-card">
+      <h1>${escapeHtml(file.filename || 'Media')}</h1>
+      <div class="watch-meta-pills">
+        <span>${escapeHtml(sizeMb)} MB</span>
+        <span>${escapeHtml(file.access_count || 0)} views</span>
+        ${groupName ? `<span>${escapeHtml(groupName)}</span>` : ''}
+      </div>
+      <div class="watch-tools">
+        ${downloadsEnabled ? `<a class="btn btn-accent" id="infoDlBtn" href="${escapeHtml(dlHref)}" download>⬇ Download</a>` : ''}
+        ${fsUser ? `<a class="btn" id="tgBotBtn" href="https://t.me/${encodeURIComponent(fsUser)}?start=file_${encodeURIComponent(file.short_code)}" target="_blank" rel="noopener" style="background:linear-gradient(135deg,#0ea5e9,#2563eb);color:#fff;border:0">✈ Get in Telegram</a>` : (!downloadsEnabled ? `<a class="btn btn-accent" id="infoDlBtn" href="${escapeHtml(dlHref)}" target="_blank" rel="noopener">⬇ Download</a>` : '')}
+        <button type="button" class="btn" onclick="navigator.clipboard?.writeText(location.href).then(()=>showToast('Watch link copied!'))">Copy Watch Link</button>
+        <button type="button" class="btn" onclick="navigator.clipboard?.writeText(STREAM_URL).then(()=>showToast('Stream URL copied!'))">Copy Stream URL</button>
+      </div>
+    </div>
+  </div>
   <aside class="watch-side">
     <div class="watch-side-card">
       <h3>Open in External Player</h3>
