@@ -10,10 +10,12 @@
     border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.12);
     box-shadow:0 20px 50px rgba(0,0,0,.55);user-select:none;-webkit-tap-highlight-color:transparent;
   }
-  .p4u-stage:fullscreen,.p4u-stage:-webkit-full-screen{
+  .p4u-stage:fullscreen,.p4u-stage:-webkit-full-screen,.p4u-stage.is-pseudo-fs{
+    position:fixed!important;inset:0!important;z-index:9999!important;
     width:100vw!important;height:100dvh!important;aspect-ratio:auto!important;
-    border-radius:0!important;border:0!important;
+    border-radius:0!important;border:0!important;margin:0!important;
   }
+  body.p4u-fs-lock{overflow:hidden!important}
   .watch-info-card{
     background:var(--bg-card,#121722);border:1px solid var(--line,rgba(255,255,255,.08));
     border-radius:16px;padding:18px;margin-top:14px;
@@ -50,8 +52,10 @@
   }
   movi-player.player-fit-cover, movi-player.player-fit-cover::part(video) { object-fit: cover !important; }
   movi-player.player-fit-contain, movi-player.player-fit-contain::part(video) { object-fit: contain !important; }
-  
-  /* Show Movi-Player's built-in controls (audio/subtitles/seek/speed) when visible; hide on tap */
+  video#nativeVideo.player-fit-cover { object-fit: cover !important; }
+  video#nativeVideo.player-fit-contain { object-fit: contain !important; }
+
+  /* Show Movi-Player's built-in controls (audio/subtitles/seek/speed) when visible; hide on tap or Hide Controls */
   #playerWrapper:not(.controls-hidden) movi-player::part(chrome),
   #playerWrapper:not(.controls-hidden) movi-player::part(controls),
   #playerWrapper:not(.controls-hidden) movi-player::part(bottom-controls),
@@ -75,7 +79,6 @@
     .p4u-below-bar { gap: 6px; }
     .p4u-below-bar .p4u-ep-pill, .p4u-below-bar .p4u-up-btn { padding: 7px 10px; font-size: 11px; }
   }
-
 
   /* Center Play Triangle */
   .p4u-center-play {
@@ -130,7 +133,7 @@
   }
   .p4u-sub .p4u-lang { color: #38bdf8; font-weight: 600; }
 
-  .p4u-top-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+  .p4u-top-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
   .p4u-circle-btn {
     width: 38px; height: 38px; border-radius: 50%; border: 1px solid rgba(255,255,255,.16);
     background: rgba(15,18,28,.78); color: #f8fafc; display: inline-flex; align-items: center; justify-content: center;
@@ -148,7 +151,7 @@
     transition: opacity .22s ease, visibility .22s ease;
   }
 
-  /* Episode Prev/Next Pills Above Scrubber */
+  /* Episode Prev/Next Pills */
   .p4u-ep-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .p4u-ep-pill {
     padding: 7px 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,.18);
@@ -195,29 +198,29 @@
     display: inline-flex; align-items: center; gap: 5px; cursor: pointer; transition: background .15s, border-color .15s;
   }
   .p4u-up-btn:hover { background: rgba(139,92,246,.32); border-color: rgba(139,92,246,.65); }
+  .p4u-up-btn.is-active { background: rgba(59,130,246,.3); border-color: rgba(59,130,246,.75); color: #dbeafe; }
 
-  /* Controls Hidden on Tap */
+  /* Controls Hidden on Tap or Button */
   .p4u-stage.controls-hidden .p4u-top,
   .p4u-stage.controls-hidden .p4u-bottom,
   .p4u-stage.controls-hidden .p4u-center-play,
-  .p4u-stage.controls-hidden .p4u-pop,
-  .p4u-stage.controls-hidden .p4u-drawer {
+  .p4u-stage.controls-hidden .p4u-pop {
     opacity: 0 !important;
     visibility: hidden !important;
     pointer-events: none !important;
     display: none !important;
   }
 
-  /* Upward Popups (Quality/Switch, External Player) */
+  /* Upward / Stage Popups (Quality/Switch, External Player) */
   .p4u-pop {
-    position: absolute; z-index: 50; min-width: 190px; max-width: min(290px, 88vw);
-    max-height: min(55dvh, 320px); overflow-y: auto;
+    position: absolute; z-index: 60; min-width: 210px; max-width: min(300px, 88vw);
+    max-height: min(58dvh, 340px); overflow-y: auto;
     background: rgba(12,15,24,.97); border: 1px solid rgba(139,92,246,.42);
     border-radius: 14px; padding: 6px; display: none; flex-direction: column; gap: 2px;
     box-shadow: 0 18px 40px rgba(0,0,0,.7); backdrop-filter: blur(14px);
   }
   .p4u-pop.open { display: flex; }
-  .p4u-pop.quality-pop { right: 56px; bottom: 64px; }
+  .p4u-pop.quality-pop { right: 16px; bottom: 14px; }
   .p4u-pop.external-pop { right: 16px; top: 60px; }
   .p4u-pop .pop-title { font-size: 10px; color: #93c5fd; padding: 6px 10px 4px; text-transform: uppercase; font-weight: 800; letter-spacing: .06em; }
   .p4u-pop button, .p4u-pop a {
@@ -226,49 +229,17 @@
     cursor: pointer; text-decoration: none;
   }
   .p4u-pop button:hover, .p4u-pop a:hover { background: rgba(59,130,246,.22); }
-
-  /* Episodes Slide-Up Drawer */
-  .p4u-drawer {
-    position: absolute; right: 16px; bottom: 64px; z-index: 55;
-    width: min(360px, calc(100vw - 32px)); max-height: min(65dvh, 440px);
-    background: rgba(11,14,22,.98); border: 1px solid rgba(59,130,246,.4);
-    border-radius: 16px; padding: 14px; display: none; flex-direction: column; gap: 10px;
-    box-shadow: 0 22px 50px rgba(0,0,0,.78); backdrop-filter: blur(16px);
-  }
-  .p4u-drawer.open { display: flex; }
-  .p4u-drawer-head { display: flex; align-items: center; justify-content: space-between; font-weight: 800; font-size: 14px; }
-  .p4u-season-bar { display: flex; gap: 6px; flex-wrap: wrap; }
-  .p4u-season-bar button {
-    border: 1px solid rgba(255,255,255,.15); background: #151b29; color: #cbd5e1;
-    border-radius: 999px; padding: 5px 11px; font-size: 11px; font-weight: 700; cursor: pointer;
-  }
-  .p4u-season-bar button.active { background: linear-gradient(125deg,#3b82f6,#8b5cf6); color: #fff; border-color: transparent; }
-  .p4u-drawer-tools { display: flex; gap: 8px; }
-  .p4u-drawer-tools select, .p4u-drawer-tools input {
-    flex: 1; min-width: 0; background: #0b0e16; border: 1px solid rgba(255,255,255,.14);
-    color: #fff; border-radius: 9px; padding: 7px 10px; font-size: 12px; outline: none;
-  }
-  .p4u-ep-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; max-height: 240px; }
-  .p4u-ep-item {
-    display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-radius: 10px;
-    background: #141a28; border: 1px solid rgba(255,255,255,.08); color: #e2e8f0;
-    text-decoration: none; font-size: 12px; font-weight: 700;
-  }
-  .p4u-ep-item.active { border-color: #3b82f6; background: rgba(59,130,246,.2); color: #fff; }
-  .p4u-ep-tag { background: rgba(139,92,246,.25); color: #c4b5fd; padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 800; flex: 0 0 auto; }
-  .p4u-ep-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
+  .p4u-pop button.active-opt { background: rgba(59,130,246,.2); color: #93c5fd; }
 
   /* Allow taps on empty top/bottom gradient areas to toggle controls; only buttons capture clicks */
   .p4u-top, .p4u-bottom { pointer-events: none !important; }
-  .p4u-top button, .p4u-top a, .p4u-bottom button, .p4u-bottom input, .p4u-bottom .p4u-scrub { pointer-events: auto !important; }
+  .p4u-top button, .p4u-top a, .p4u-bottom button, .p4u-bottom input, .p4u-bottom select, .p4u-bottom .p4u-scrub { pointer-events: auto !important; }
   @media (max-width: 600px) {
     .p4u-top { padding: 8px 10px 14px !important; }
     .p4u-bottom { padding: 18px 10px 8px !important; gap: 6px !important; }
     .p4u-circle-btn, .p4u-back-btn { width: 32px !important; height: 32px !important; }
     .p4u-ep-pill { padding: 4px 10px !important; font-size: 11px !important; }
   }
-
 
   /* Inline Episodes / Seasons & EXTRA side/below card */
   .side-eps{display:flex;flex-direction:column;gap:10px;max-height:540px}
@@ -292,9 +263,70 @@
     position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%);
     background: rgba(12,16,26,.95); border: 1px solid rgba(59,130,246,.45);
     color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13px;
-    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 100;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 10050;
   }
   .toast.active { opacity: 1; }
+  
+  /* Mobile Vertical: full edge-to-edge player + touch-scrollable popups */
+  @media (max-width: 768px) {
+    .watch-grid { margin-top: 8px; gap: 12px; }
+    .p4u-stage:not(:fullscreen):not(:-webkit-full-screen):not(.is-pseudo-fs) {
+      width: calc(100% + 28px) !important;
+      max-width: none !important;
+      margin-left: -14px !important;
+      margin-right: -14px !important;
+      border-radius: 0 !important;
+      border-left: 0 !important;
+      border-right: 0 !important;
+    }
+    @media (max-width: 600px) {
+      .p4u-stage:not(:fullscreen):not(:-webkit-full-screen):not(.is-pseudo-fs) {
+        width: calc(100% + 20px) !important;
+        margin-left: -10px !important;
+        margin-right: -10px !important;
+      }
+    }
+    .p4u-stage:not(:fullscreen):not(:-webkit-full-screen):not(.is-pseudo-fs) .p4u-pop.open {
+      position: fixed !important;
+      left: 12px !important;
+      right: 12px !important;
+      bottom: 14px !important;
+      top: auto !important;
+      width: auto !important;
+      max-width: none !important;
+      max-height: 68dvh !important;
+      overflow-y: auto !important;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
+      overscroll-behavior: contain;
+      z-index: 10020 !important;
+    }
+    .p4u-stage.is-pseudo-fs .p4u-pop.open,
+    .p4u-stage:fullscreen .p4u-pop.open,
+    .p4u-stage:-webkit-full-screen .p4u-pop.open {
+      max-height: calc(100dvh - 80px) !important;
+      overflow-y: auto !important;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
+      overscroll-behavior: contain;
+    }
+    .audio-track-row { width: 100%; }
+    .audio-track-select { flex: 1 1 180px; min-width: 0; max-width: 100%; }
+  }
+  /* Mobile Horizontal (Landscape): fit entire player in viewport */
+  @media (max-height: 520px) and (orientation: landscape) {
+    .p4u-stage:not(:fullscreen):not(:-webkit-full-screen):not(.is-pseudo-fs) {
+      aspect-ratio: auto !important;
+      height: 82dvh !important;
+      max-height: 82dvh !important;
+    }
+  }
+  .p4u-pop {
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    overscroll-behavior: contain;
+  }
+
   /* Polished Watch UI */
   .p4u-stage{border:1px solid rgba(99,102,241,.28)!important;box-shadow:0 24px 60px rgba(0,0,0,.68),0 0 0 1px rgba(255,255,255,.04) inset!important}
   .p4u-below-bar{background:rgba(15,20,32,.78);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:8px 10px;backdrop-filter:blur(12px)}
@@ -375,6 +407,9 @@
       </div>
     </div>
     <div class="p4u-top-actions">
+      <button type="button" class="p4u-circle-btn" id="pcTopSwitchBtn" title="Switch Quality / Source" aria-label="Switch Quality or Source">
+        <svg viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+      </button>
       <button type="button" class="p4u-circle-btn" id="pcLaptopBtn" title="External Player" aria-label="External Player">
         <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>
       </button>
@@ -390,15 +425,18 @@
       <button type="button" class="p4u-circle-btn" id="pcShareBtn" title="Share" aria-label="Share">
         <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
       </button>
+      <button type="button" class="p4u-circle-btn" id="pcTopHideBtn" title="Hide Controls" aria-label="Hide Controls">
+        <svg viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+      </button>
       <button type="button" class="p4u-circle-btn" id="pcTopFsBtn" title="Fullscreen" aria-label="Fullscreen">
-        <svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+        <svg id="topFsIcon" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
       </button>
     </div>
   </div>
 
   <!-- Quality / Source Popup -->
   <div class="p4u-pop quality-pop" id="switchPop" role="menu">
-    <div class="pop-title">This Group</div>
+    <div class="pop-title">Switch Quality / Stream</div>
     <div id="switchPopList"></div>
   </div>
 
@@ -454,6 +492,7 @@
         {% endif %}
         <button type="button" class="p4u-up-btn" id="toggleEngineBtn" title="Active: Player (tap to switch to Built-in HTML5 Player)">🎬 Player</button>
         <button type="button" class="p4u-up-btn" id="pcSwitchBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg> Switch</button>
+        <button type="button" class="p4u-up-btn" id="pcHideCtrlBtn" aria-pressed="false" title="Hide or show player overlay controls">👁 Hide Controls</button>
       </div>
       <button type="button" class="p4u-ep-pill" id="nextGroupBtn" disabled>Next Episode →</button>
     </div>
@@ -544,6 +583,8 @@ const mp = document.getElementById('moviPlayer');
 const nv = document.getElementById('nativeVideo');
 const loadingEl = document.getElementById('playerLoading');
 let useNativeEngine = false;
+let isRemuxMode = false;
+let currentAudioTrackIdx = 0;
 
 function activeEl() {
   return useNativeEngine ? nv : mp;
@@ -551,9 +592,11 @@ function activeEl() {
 
 function showToast(msg) {
   const t = document.getElementById('toast');
-  document.getElementById('toast-message').textContent = msg || 'Done';
-  t.classList.add('active');
-  setTimeout(() => t.classList.remove('active'), 2400);
+  const m = document.getElementById('toast-message');
+  if (m) m.textContent = msg || 'Done';
+  t?.classList.add('active');
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => t?.classList.remove('active'), 2400);
 }
 function showLoading() { loadingEl?.classList.add('active'); }
 function hideLoading() { loadingEl?.classList.remove('active'); }
@@ -615,28 +658,57 @@ function forceUnmuteActive() {
 }
 function forceUnmuteMovi() { forceUnmuteActive(); }
 
+function loadStreamOnActive(url, resumeAt, toastMsg) {
+  const el = activeEl();
+  if (!el) return;
+  const t = Number.isFinite(resumeAt) ? resumeAt : (Number(el.currentTime) || 0);
+  showLoading();
+  const onReady = () => {
+    if (t > 1) { try { el.currentTime = t; } catch (_) {} }
+    forceUnmuteActive();
+    hideLoading();
+    const p = el.play && el.play();
+    if (p && p.catch) p.catch(() => { syncPlayUI(); hideLoading(); });
+  };
+  el.addEventListener('loadedmetadata', onReady, { once: true });
+  el.addEventListener('error', () => { hideLoading(); }, { once: true });
+  el.src = url;
+  if (typeof el.load === 'function') el.load();
+  if (toastMsg) showToast(toastMsg);
+}
+
 function switchPlayerEngine(toNative, sourceUrl) {
   const prev = activeEl();
   const curT = Number(prev && prev.currentTime) || 0;
+  const curRate = Number(prev && prev.playbackRate) || Number(document.getElementById('speedSelect')?.value) || 1;
   try { prev && prev.pause && prev.pause(); } catch (_) {}
   useNativeEngine = !!toNative;
   wrapper.classList.toggle('use-native', useNativeEngine);
   const toggleBtn = document.getElementById('toggleEngineBtn');
-  if (toggleBtn) toggleBtn.textContent = useNativeEngine ? '🎬 Built-in Player' : '🎬 Player';
+  if (toggleBtn) {
+    toggleBtn.textContent = useNativeEngine ? '🎬 Built-in Player' : '🎬 Player';
+    toggleBtn.title = useNativeEngine
+      ? 'Active: Built-in HTML5 Player (tap to switch to Player)'
+      : 'Active: Player (tap to switch to Built-in HTML5 Player)';
+  }
   const target = activeEl();
-  const srcToPlay = sourceUrl || (prev && prev.src) || STREAM_URL;
+  const defaultUrl = isRemuxMode ? (REMUX_URL + '?audio=' + currentAudioTrackIdx + '&aac=1') : STREAM_URL;
+  const srcToPlay = sourceUrl || (prev && (prev.currentSrc || prev.src)) || defaultUrl;
   if (target) {
     showLoading();
-    target.src = srcToPlay;
-    if (typeof target.load === 'function') target.load();
-    target.addEventListener('loadedmetadata', () => {
+    const onReady = () => {
       if (curT > 1) { try { target.currentTime = curT; } catch (_) {} }
+      try { target.playbackRate = curRate; } catch (_) {}
       forceUnmuteActive();
       hideLoading();
-      target.play()?.catch(() => { syncPlayUI(); hideLoading(); });
-    }, { once: true });
-    target.play()?.catch(() => { syncPlayUI(); hideLoading(); });
+      (typeof target.play === 'function' ? target.play() : null)?.catch(() => { syncPlayUI(); hideLoading(); });
+    };
+    target.addEventListener('loadedmetadata', onReady, { once: true });
+    target.src = srcToPlay;
+    if (typeof target.load === 'function') target.load();
+    (typeof target.play === 'function' ? target.play() : null)?.catch(() => { syncPlayUI(); hideLoading(); });
   }
+  syncPlayUI();
   showToast(useNativeEngine ? 'Switched to Built-in HTML5 Player' : 'Switched to Player');
 }
 
@@ -645,9 +717,12 @@ document.getElementById('toggleEngineBtn')?.addEventListener('click', (e) => {
   switchPlayerEngine(!useNativeEngine);
 });
 
-// Tap empty video area to hide/show controls
+// Hide / Show Controls (both tap on empty video area AND explicit Hide/Show Controls buttons)
 (function setupTapToggle(){
   let visible = true;
+  const belowHideBtn = document.getElementById('pcHideCtrlBtn');
+  const topHideBtn = document.getElementById('pcTopHideBtn');
+
   function syncMoviShadow(show) {
     try {
       const sr = mp && mp.shadowRoot;
@@ -657,7 +732,7 @@ document.getElementById('toggleEngineBtn')?.addEventListener('click', (e) => {
         if (!st) {
           st = document.createElement('style');
           st.id = 'amz-hide-controls-style';
-          st.textContent = '[part*="chrome"],[part*="controls"],[part*="bottom-bar"],[part*="control-bar"],[part*="progress-container"]{opacity:0!important;pointer-events:none!important}';
+          st.textContent = '[part*="chrome"],[part*="controls"],[part*="bottom-bar"],[part*="control-bar"],[part*="progress-container"]{opacity:0!important;visibility:hidden!important;pointer-events:none!important}';
           sr.appendChild(st);
         }
       } else if (st) {
@@ -665,15 +740,41 @@ document.getElementById('toggleEngineBtn')?.addEventListener('click', (e) => {
       }
     } catch (_) {}
   }
+
   function setVisible(on) {
     visible = !!on;
     wrapper.classList.toggle('controls-hidden', !visible);
     syncMoviShadow(visible);
+    if (belowHideBtn) {
+      belowHideBtn.textContent = visible ? '👁 Hide Controls' : '👁 Show Controls';
+      belowHideBtn.setAttribute('aria-pressed', String(!visible));
+      belowHideBtn.classList.toggle('is-active', !visible);
+    }
+    if (topHideBtn) {
+      topHideBtn.title = visible ? 'Hide Controls' : 'Show Controls';
+      topHideBtn.setAttribute('aria-label', visible ? 'Hide Controls' : 'Show Controls');
+    }
     if (!visible) {
       document.getElementById('switchPop')?.classList.remove('open');
       document.getElementById('laptopPop')?.classList.remove('open');
     }
   }
+
+  window.togglePlayerControls = function (force) {
+    const next = typeof force === 'boolean' ? force : !visible;
+    setVisible(next);
+    return visible;
+  };
+
+  belowHideBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setVisible(!visible);
+  });
+  topHideBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setVisible(!visible);
+  });
+
   wrapper.addEventListener('pointerdown', () => { forceUnmuteActive(); }, { once: true, capture: true });
   wrapper.addEventListener('click', (e) => {
     if (!visible) {
@@ -730,7 +831,10 @@ document.getElementById('seekFwdBtn')?.addEventListener('click', (e) => {
 document.getElementById('speedSelect')?.addEventListener('change', (e) => {
   const el = activeEl();
   const rate = Number(e.target.value) || 1;
-  if (el) try { el.playbackRate = rate; } catch (_) {}
+  if (el) {
+    try { el.playbackRate = rate; } catch (_) {}
+    try { el.shadowRoot?.querySelectorAll('video').forEach(v => { v.playbackRate = rate; }); } catch (_) {}
+  }
   showToast('Speed: ' + rate + 'x');
 });
 
@@ -795,6 +899,11 @@ volRange?.addEventListener('input', () => {
 
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && wrapper.classList.contains('is-pseudo-fs')) {
+    e.preventDefault();
+    exitPseudoFullscreen();
+    return;
+  }
   if (e.target && /^(INPUT|TEXTAREA|SELECT)$/i.test(e.target.tagName)) return;
   const el = activeEl();
   if (!el) return;
@@ -803,25 +912,27 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'arrowleft') { e.preventDefault(); try { el.currentTime = Math.max(0, (Number(el.currentTime) || 0) - 10); } catch (_) {} }
   else if (k === 'arrowright') { e.preventDefault(); try { el.currentTime = Math.min(Number(el.duration) || 1e9, (Number(el.currentTime) || 0) + 10); } catch (_) {} }
   else if (k === 'm') { e.preventDefault(); el.muted = !el.muted; showToast(el.muted ? 'Muted' : 'Unmuted'); }
-  else if (k === 'f') { e.preventDefault(); document.getElementById('pcTopFsBtn')?.click(); }
+  else if (k === 'f') { e.preventDefault(); toggleFullscreen(); }
 });
 
 // Top & Bottom Action Buttons
 const swBtn = document.getElementById('pcSwitchBtn');
+const topSwBtn = document.getElementById('pcTopSwitchBtn');
 const swPop = document.getElementById('switchPop');
 const swList = document.getElementById('switchPopList');
 const lpBtn = document.getElementById('pcLaptopBtn');
 const lpPop = document.getElementById('laptopPop');
 const lpList = document.getElementById('laptopPopList');
-const epDrawer = document.getElementById('episodesDrawer');
 
-(function initSwitchPop(){
+function renderSwitchMenu() {
+  if (!swList) return;
+  swList.innerHTML = '';
   const g = WATCH_GROUPS[GROUP_INDEX];
   const btns = (g && Array.isArray(g.buttons)) ? g.buttons : [];
-  let count = 0;
   btns.forEach((b, i) => {
     const el = document.createElement('button');
     el.type = 'button';
+    if (i === BUTTON_INDEX) el.className = 'active-opt';
     el.textContent = (b.name || ('Source ' + (i + 1))) + (i === BUTTON_INDEX ? ' ✓' : '');
     el.onclick = (e) => {
       e.stopPropagation();
@@ -829,44 +940,59 @@ const epDrawer = document.getElementById('episodesDrawer');
       if (i !== BUTTON_INDEX) goToGroupButton(GROUP_INDEX, i);
     };
     swList.appendChild(el);
-    count++;
   });
+
   const aacBtn = document.createElement('button');
   aacBtn.type = 'button';
-  aacBtn.textContent = '🔊 Fix Audio (AAC Remux)';
+  if (isRemuxMode) aacBtn.className = 'active-opt';
+  aacBtn.textContent = isRemuxMode ? '🔊 AAC Remux Active ✓' : '🔊 Fix Audio (AAC Remux)';
   aacBtn.onclick = (e) => {
     e.stopPropagation();
     swPop.classList.remove('open');
-    const el = activeEl();
-    const t = Number(el && el.currentTime) || 0;
-    showLoading();
-    el.src = REMUX_URL + '?audio=0&aac=1';
-    if (typeof el.load === 'function') el.load();
-    el.addEventListener('loadedmetadata', () => {
-      try { el.currentTime = t; } catch (_) {}
-      forceUnmuteActive();
-      el.play()?.catch(() => {});
-    }, { once: true });
-    showToast('Switched to AAC audio stream');
+    isRemuxMode = true;
+    loadStreamOnActive(REMUX_URL + '?audio=' + currentAudioTrackIdx + '&aac=1', null, 'Switched to AAC audio stream');
+    renderSwitchMenu();
   };
   swList.appendChild(aacBtn);
+
+  if (isRemuxMode) {
+    const origBtn = document.createElement('button');
+    origBtn.type = 'button';
+    origBtn.textContent = '↺ Original Direct Stream';
+    origBtn.onclick = (e) => {
+      e.stopPropagation();
+      swPop.classList.remove('open');
+      isRemuxMode = false;
+      loadStreamOnActive(STREAM_URL, null, 'Switched back to original stream');
+      renderSwitchMenu();
+    };
+    swList.appendChild(origBtn);
+  }
+
   const engBtn = document.createElement('button');
   engBtn.type = 'button';
-  engBtn.textContent = '🎬 Switch Player (Player / Built-in)';
+  engBtn.textContent = useNativeEngine ? '🎬 Switch to Player (Movi)' : '🎬 Switch to Built-in HTML5 Player';
   engBtn.onclick = (e) => {
     e.stopPropagation();
     swPop.classList.remove('open');
     switchPlayerEngine(!useNativeEngine);
+    renderSwitchMenu();
   };
   swList.appendChild(engBtn);
-  count += 2;
-  swBtn?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    lpPop?.classList.remove('open');
-    if (count === 0) return showToast('No sources available');
-    swPop.classList.toggle('open');
-  });
-})();
+}
+
+function toggleSwitchPop(e) {
+  e.stopPropagation();
+  lpPop?.classList.remove('open');
+  if (wrapper.classList.contains('controls-hidden') && typeof window.togglePlayerControls === 'function') {
+    window.togglePlayerControls(true);
+  }
+  renderSwitchMenu();
+  swPop?.classList.toggle('open');
+}
+swBtn?.addEventListener('click', toggleSwitchPop);
+topSwBtn?.addEventListener('click', toggleSwitchPop);
+renderSwitchMenu();
 
 function androidIntent(url, pkg, mime) {
   const u = new URL(url);
@@ -937,8 +1063,7 @@ function androidIntent(url, pkg, mime) {
 lpBtn?.addEventListener('click', (e) => {
   e.stopPropagation();
   swPop?.classList.remove('open');
-  epDrawer?.classList.remove('open');
-  lpPop.classList.toggle('open');
+  lpPop?.classList.toggle('open');
 });
 
 document.getElementById('pcDownloadBtn')?.addEventListener('click', (e) => {
@@ -964,44 +1089,102 @@ document.getElementById('pcFitBtn')?.addEventListener('click', (e) => {
 
 document.getElementById('pcRetryBtn')?.addEventListener('click', (e) => {
   e.stopPropagation();
-  const el = activeEl();
-  const t = Number(el && el.currentTime) || 0;
-  showLoading();
+  stallRetries = 0;
+  recoveryInFlight = false;
+  clearStallWatch();
   if (!useNativeEngine && !customElements.get('movi-player')) {
     switchPlayerEngine(true, STREAM_URL);
     return;
   }
-  el.src = STREAM_URL;
-  if (typeof el.load === 'function') el.load();
-  el.addEventListener('loadedmetadata', () => {
-    try { el.currentTime = t; } catch (_) {}
-    forceUnmuteActive();
-    el.play()?.catch(() => {});
-  }, { once: true });
-  showToast('Retrying stream…');
+  const url = isRemuxMode ? (REMUX_URL + '?audio=' + currentAudioTrackIdx + '&aac=1') : STREAM_URL;
+  loadStreamOnActive(url, null, 'Retrying stream…');
 });
 
 document.getElementById('pcShareBtn')?.addEventListener('click', (e) => {
   e.stopPropagation();
-  if (navigator.share) navigator.share({ title: document.title, url: location.href }).catch(() => {});
-  else if (navigator.clipboard) navigator.clipboard.writeText(location.href).then(() => showToast('Link copied!'));
+  if (navigator.share) {
+    navigator.share({ title: document.title, url: location.href }).catch((err) => {
+      if (err && err.name === 'AbortError') return;
+      navigator.clipboard?.writeText(location.href).then(() => showToast('Link copied!'));
+    });
+  } else if (navigator.clipboard) {
+    navigator.clipboard.writeText(location.href).then(() => showToast('Link copied!'));
+  }
 });
 
-function toggleFullscreen() {
-  const active = document.fullscreenElement || document.webkitFullscreenElement;
-  if (!active) (wrapper.requestFullscreen || wrapper.webkitRequestFullscreen)?.call(wrapper).catch(() => {});
-  else (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
-}
+// Fullscreen with safe Promise handling + CSS pseudo-fullscreen fallback
 const fsBtn = document.getElementById('pcFullscreenBtn');
+const topFsBtn = document.getElementById('pcTopFsBtn');
 const fsIcon = document.getElementById('fsIcon');
-fsBtn?.addEventListener('click', (e) => { e.stopPropagation(); toggleFullscreen(); });
-document.getElementById('pcTopFsBtn')?.addEventListener('click', (e) => { e.stopPropagation(); toggleFullscreen(); });
-document.addEventListener('fullscreenchange', () => {
-  const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement);
-  if (fsIcon) fsIcon.innerHTML = isFull
+const topFsIcon = document.getElementById('topFsIcon');
+
+function isFullscreenActive() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement || wrapper.classList.contains('is-pseudo-fs'));
+}
+function syncFullscreenUI() {
+  const isFull = isFullscreenActive();
+  const path = isFull
     ? '<path d="M9 4v5H4M15 4v5h5M20 15h-5v5M4 15h5v5"/>'
     : '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>';
-});
+  if (fsIcon) fsIcon.innerHTML = path;
+  if (topFsIcon) topFsIcon.innerHTML = path;
+  if (topFsBtn) topFsBtn.title = isFull ? 'Exit Fullscreen' : 'Fullscreen';
+  if (fsBtn) fsBtn.title = isFull ? 'Exit Fullscreen' : 'Fullscreen';
+}
+function enterPseudoFullscreen() {
+  wrapper.classList.add('is-pseudo-fs');
+  document.body.classList.add('p4u-fs-lock');
+  syncFullscreenUI();
+}
+function exitPseudoFullscreen() {
+  wrapper.classList.remove('is-pseudo-fs');
+  document.body.classList.remove('p4u-fs-lock');
+  syncFullscreenUI();
+}
+function toggleFullscreen() {
+  const nativeActive = document.fullscreenElement || document.webkitFullscreenElement;
+  if (nativeActive) {
+    const exitFn = document.exitFullscreen || document.webkitExitFullscreen;
+    try {
+      Promise.resolve(exitFn && exitFn.call(document)).catch(() => exitPseudoFullscreen());
+    } catch (_) {
+      exitPseudoFullscreen();
+    }
+    return;
+  }
+  if (wrapper.classList.contains('is-pseudo-fs')) {
+    exitPseudoFullscreen();
+    return;
+  }
+  const reqFn = wrapper.requestFullscreen || wrapper.webkitRequestFullscreen;
+  if (reqFn) {
+    const fsTimeout = setTimeout(() => {
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        enterPseudoFullscreen();
+      }
+    }, 250);
+    try {
+      Promise.resolve(reqFn.call(wrapper)).then(() => {
+        clearTimeout(fsTimeout);
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+          enterPseudoFullscreen();
+        }
+      }).catch(() => {
+        clearTimeout(fsTimeout);
+        enterPseudoFullscreen();
+      });
+    } catch (_) {
+      clearTimeout(fsTimeout);
+      enterPseudoFullscreen();
+    }
+  } else {
+    enterPseudoFullscreen();
+  }
+}
+fsBtn?.addEventListener('click', (e) => { e.stopPropagation(); toggleFullscreen(); });
+topFsBtn?.addEventListener('click', (e) => { e.stopPropagation(); toggleFullscreen(); });
+document.addEventListener('fullscreenchange', syncFullscreenUI);
+document.addEventListener('webkitfullscreenchange', syncFullscreenUI);
 
 // Prev / Next Episode
 const prevBtn = document.getElementById('prevGroupBtn');
@@ -1011,13 +1194,19 @@ if (WATCH_GROUPS.length) {
   if (nextBtn) { nextBtn.disabled = GROUP_INDEX >= WATCH_GROUPS.length - 1; nextBtn.onclick = () => { if (GROUP_INDEX < WATCH_GROUPS.length - 1) goToGroupButton(GROUP_INDEX + 1, preferredButtonForGroup(GROUP_INDEX + 1)); }; }
 }
 
-// Episodes Drawer
-document.getElementById('episodesDrawerBtn')?.addEventListener('click', (e) => { e.stopPropagation(); document.getElementById('sideEpsCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
-document.getElementById('closeDrawerBtn')?.addEventListener('click', (e) => { e.stopPropagation(); epDrawer?.classList.remove('open'); });
+// Episodes scroll button (exits fullscreen first if active)
+document.getElementById('episodesDrawerBtn')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (isFullscreenActive()) toggleFullscreen();
+  setTimeout(() => {
+    document.getElementById('sideEpsCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 80);
+});
 document.addEventListener('click', (e) => {
   const t = e.target;
-  if (t?.closest && (t.closest('.p4u-pop') || t.closest('.p4u-drawer') || t.closest('#pcSwitchBtn') || t.closest('#pcLaptopBtn') || t.closest('#episodesDrawerBtn'))) return;
-  swPop?.classList.remove('open'); lpPop?.classList.remove('open'); epDrawer?.classList.remove('open');
+  if (t?.closest && (t.closest('.p4u-pop') || t.closest('#pcSwitchBtn') || t.closest('#pcTopSwitchBtn') || t.closest('#pcLaptopBtn'))) return;
+  swPop?.classList.remove('open');
+  lpPop?.classList.remove('open');
 });
 
 (function initEpisodesSidePanel(){
@@ -1034,7 +1223,6 @@ document.addEventListener('click', (e) => {
   if (card) card.style.display = '';
   function parseEp(name) {
     const t = String(name || '').replace(/[._]+/g, ' ').trim();
-    // Use [0-9] and [ ] only so template literals never strip backslashes
     let m = t.match(/S0*([0-9]{1,3})[ -]*E(?:p|pisode)?[ ]*0*([0-9]{1,4})/i);
     if (m) return { s: Number(m[1]), e: Number(m[2]) };
     m = t.match(/0*([0-9]{1,3})[ ]*[xX][ ]*0*([0-9]{1,4})/);
@@ -1130,7 +1318,7 @@ document.addEventListener('click', (e) => {
   render();
 })();
 
-// Native Movi-Player Audio & Subtitle Track Selectors (0 server load) + /api/tracks fallback
+// Audio & Subtitle Track Selectors (works across Movi-Player, Built-in HTML5, and AAC Remux)
 (function initAudioAndSubtitleSelectors(){
   const aBox = document.getElementById('audioTrackRow');
   const aSel = document.getElementById('audioSelect');
@@ -1140,8 +1328,51 @@ document.addEventListener('click', (e) => {
   const sSt = document.getElementById('subtitleTrackStatus');
   let serverTracksPromise = null;
   let tracksPopulatedFromMovi = false;
+  let lastSubValue = '';
+  const localTracks = [];
+
+  function srtToVtt(srtText) {
+    const clean = String(srtText || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/^\uFEFF/, '');
+    const converted = clean.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+    return 'WEBVTT\n\n' + converted;
+  }
+
+  function applyAudioSelection(val, opt) {
+    if (val === 'orig') {
+      isRemuxMode = false;
+      loadStreamOnActive(STREAM_URL, null, 'Switched to original stream');
+      renderSwitchMenu();
+      return;
+    }
+    if (val === 'remux_cur') {
+      isRemuxMode = true;
+      loadStreamOnActive(REMUX_URL + '?audio=' + currentAudioTrackIdx + '&aac=1', null, 'Loading AAC audio stream…');
+      renderSwitchMenu();
+      return;
+    }
+    const idx = Number(opt?.dataset?.idx ?? (val.startsWith('remux:') ? val.slice(6) : val.split(':')[1])) || 0;
+    currentAudioTrackIdx = idx;
+
+    if (!useNativeEngine && !isRemuxMode && val.startsWith('movi:') && mp && typeof mp.selectAudioLang === 'function') {
+      const langCode = opt?.dataset?.lang || val.split(':').slice(2).join(':');
+      try {
+        const res = mp.selectAudioLang(langCode);
+        if (res && typeof res.then === 'function') {
+          res.then(() => { forceUnmuteActive(); }).catch(() => {});
+        } else {
+          forceUnmuteActive();
+        }
+        showToast('Audio: ' + (opt?.textContent || ('Track ' + (idx + 1))));
+        return;
+      } catch (_) {}
+    }
+    isRemuxMode = true;
+    loadStreamOnActive(REMUX_URL + '?audio=' + idx + '&aac=1', null, 'Loading Audio Track ' + (idx + 1) + ' (AAC)…');
+    renderSwitchMenu();
+  }
 
   function populateAudioFromMovi() {
+    if (isRemuxMode && aSel && aSel.options.length > 1) return true;
     if (!aBox || !aSel || !mp || typeof mp.getAudioLangs !== 'function') return false;
     let langs = [];
     try { langs = mp.getAudioLangs() || []; } catch (_) { langs = []; }
@@ -1151,47 +1382,36 @@ document.addEventListener('click', (e) => {
     langs.forEach((tr, i) => {
       const opt = document.createElement('option');
       const code = tr.lang || tr.language || String(i);
-      opt.value = 'movi:' + code;
+      opt.value = 'movi:' + i + ':' + code;
+      opt.dataset.idx = String(i);
+      opt.dataset.lang = code;
       opt.textContent = tr.label || tr.title || ('Audio ' + (i + 1) + (code ? ' (' + String(code).toUpperCase() + ')' : ''));
-      if (tr.active) opt.selected = true;
+      if (tr.active) { opt.selected = true; currentAudioTrackIdx = i; }
       aSel.appendChild(opt);
     });
     const remuxOpt = document.createElement('option');
-    remuxOpt.value = 'remux:0';
+    remuxOpt.value = 'remux_cur';
     remuxOpt.textContent = '🔊 Fix Audio (AAC Remux)';
     aSel.appendChild(remuxOpt);
+    const origOpt = document.createElement('option');
+    origOpt.value = 'orig';
+    origOpt.textContent = '↺ Original Stream';
+    aSel.appendChild(origOpt);
     aBox.style.display = 'flex';
     if (aSt) aSt.textContent = langs.length + ' audio track' + (langs.length === 1 ? '' : 's');
     aSel.onchange = () => {
-      const val = String(aSel.value || '');
-      if (val.startsWith('movi:')) {
-        const langCode = val.slice(5);
-        try {
-          mp.selectAudioLang(langCode);
-          forceUnmuteMovi();
-          showToast('Audio switched');
-          return;
-        } catch (_) {}
-      }
-      const idx = val.startsWith('remux:') ? (Number(val.slice(6)) || 0) : 0;
-      const t = Number(mp && mp.currentTime) || 0;
-      showLoading();
-      mp.src = REMUX_URL + '?audio=' + idx + '&aac=1';
-      if (typeof mp.load === 'function') mp.load();
-      mp.addEventListener('loadedmetadata', () => {
-        if (t > 1) { try { mp.currentTime = t; } catch (_) {} }
-        forceUnmuteMovi();
-        mp.play()?.catch(() => {});
-      }, { once: true });
-      showToast('Loading AAC audio stream…');
+      const opt = aSel.options[aSel.selectedIndex];
+      applyAudioSelection(String(aSel.value || ''), opt);
     };
     return true;
   }
 
   function populateSubsFromMovi() {
-    if (!sBox || !sSel || !mp || typeof mp.getSubtitleLangs !== 'function') return;
+    if (!sBox || !sSel) return;
     let subs = [];
-    try { subs = mp.getSubtitleLangs() || []; } catch (_) { subs = []; }
+    if (mp && typeof mp.getSubtitleLangs === 'function') {
+      try { subs = mp.getSubtitleLangs() || []; } catch (_) { subs = []; }
+    }
     if (!Array.isArray(subs)) subs = [];
     sSel.innerHTML = '';
     const offOpt = document.createElement('option');
@@ -1202,46 +1422,95 @@ document.addEventListener('click', (e) => {
     subs.forEach((tr, i) => {
       const opt = document.createElement('option');
       const code = tr.lang || tr.language || String(i);
-      opt.value = code;
+      opt.value = 'movi:' + code;
+      opt.dataset.lang = code;
       opt.textContent = tr.label || tr.title || ('Subtitle ' + (i + 1) + (code ? ' (' + String(code).toUpperCase() + ')' : ''));
-      if (tr.active) { opt.selected = true; hasActive = true; }
+      if (tr.active) { opt.selected = true; hasActive = true; lastSubValue = opt.value; }
+      sSel.appendChild(opt);
+    });
+    localTracks.forEach((lt, i) => {
+      const opt = document.createElement('option');
+      opt.value = 'local:' + i;
+      opt.textContent = lt.label;
+      if (lastSubValue === opt.value) { opt.selected = true; hasActive = true; }
       sSel.appendChild(opt);
     });
     const localOpt = document.createElement('option');
     localOpt.value = '__local__';
     localOpt.textContent = '+ Load .srt / .vtt file…';
     sSel.appendChild(localOpt);
-    if (!hasActive) offOpt.selected = true;
+    if (!hasActive) { offOpt.selected = true; lastSubValue = ''; }
     sBox.style.display = 'flex';
-    if (sSt) sSt.textContent = subs.length ? (subs.length + ' subtitle' + (subs.length === 1 ? '' : 's')) : 'Load .srt / .vtt';
+    const totalSubs = subs.length + localTracks.length;
+    if (sSt && !sSt.dataset.serverCount) {
+      sSt.textContent = totalSubs ? (totalSubs + ' subtitle' + (totalSubs === 1 ? '' : 's')) : 'Load .srt / .vtt';
+    }
     sSel.onchange = async () => {
       const val = sSel.value;
       if (val === '__local__') {
+        sSel.value = lastSubValue;
         const inp = document.createElement('input');
         inp.type = 'file';
         inp.accept = '.srt,.vtt,.ass,.ssa,.ttml';
-        inp.onchange = () => {
+        inp.onchange = async () => {
           const f = inp.files && inp.files[0];
-          if (!f) { sSel.value = ''; return; }
-          const url = URL.createObjectURL(f);
-          const track = document.createElement('track');
-          track.kind = 'subtitles';
-          track.label = f.name;
-          track.srclang = 'en';
-          track.src = url;
-          track.default = true;
-          if (/\.srt$/i.test(f.name)) track.setAttribute('data-format', 'srt');
-          mp.appendChild(track);
+          if (!f) return;
+          let url;
+          if (/\.srt$/i.test(f.name)) {
+            const vtt = srtToVtt(await f.text());
+            url = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }));
+          } else {
+            url = URL.createObjectURL(f);
+          }
+          const idx = localTracks.length;
+          localTracks.push({ label: f.name, url });
+          [mp, nv].forEach(target => {
+            if (!target) return;
+            const track = document.createElement('track');
+            track.kind = 'subtitles';
+            track.label = f.name;
+            track.srclang = 'en';
+            track.src = url;
+            track.default = true;
+            target.appendChild(track);
+          });
+          if (nv && nv.textTracks) {
+            for (let i = 0; i < nv.textTracks.length; i++) {
+              nv.textTracks[i].mode = (nv.textTracks[i].label === f.name) ? 'showing' : 'disabled';
+            }
+          }
+          lastSubValue = 'local:' + idx;
           showToast('Subtitle loaded: ' + f.name);
-          setTimeout(populateSubsFromMovi, 400);
+          setTimeout(populateSubsFromMovi, 250);
         };
         inp.click();
         return;
       }
+      lastSubValue = val;
+      if (!val) {
+        if (nv && nv.textTracks) {
+          for (let i = 0; i < nv.textTracks.length; i++) nv.textTracks[i].mode = 'disabled';
+        }
+        try { if (mp && typeof mp.selectSubtitleLang === 'function') await mp.selectSubtitleLang(null); } catch (_) {}
+        showToast('Subtitles off');
+        return;
+      }
+      if (val.startsWith('local:')) {
+        const lt = localTracks[Number(val.slice(6))];
+        if (nv && nv.textTracks && lt) {
+          for (let i = 0; i < nv.textTracks.length; i++) {
+            nv.textTracks[i].mode = (nv.textTracks[i].label === lt.label) ? 'showing' : 'disabled';
+          }
+        }
+        try { if (mp && typeof mp.selectSubtitleLang === 'function') await mp.selectSubtitleLang('en'); } catch (_) {}
+        showToast('Subtitle enabled');
+        return;
+      }
+      const langCode = val.startsWith('movi:') ? val.slice(5) : val;
       try {
-        if (typeof mp.selectSubtitleLang === 'function') {
-          await mp.selectSubtitleLang(val || null);
-          showToast(val ? 'Subtitle enabled' : 'Subtitles off');
+        if (mp && typeof mp.selectSubtitleLang === 'function') {
+          await mp.selectSubtitleLang(langCode || null);
+          showToast(langCode ? 'Subtitle enabled' : 'Subtitles off');
         }
       } catch (_) {}
     };
@@ -1252,33 +1521,36 @@ document.addEventListener('click', (e) => {
     serverTracksPromise = fetch('/api/tracks/' + encodeURIComponent(SHORT_CODE))
       .then(r => r.ok ? r.json() : null)
       .then(data => {
+        if (!data) return;
+        const subTracks = Array.isArray(data.subtitle_tracks) ? data.subtitle_tracks : [];
+        if (sSt && subTracks.length) {
+          sSt.dataset.serverCount = String(subTracks.length);
+          sSt.textContent = subTracks.length + ' embedded';
+        }
         if (tracksPopulatedFromMovi) return;
-        const tracks = (data && Array.isArray(data.audio_tracks)) ? data.audio_tracks : [];
+        const tracks = Array.isArray(data.audio_tracks) ? data.audio_tracks : [];
         if (!tracks.length) return;
         aSel.innerHTML = '';
         tracks.forEach((tr, i) => {
           const opt = document.createElement('option');
-          opt.value = String(i);
+          const idx = Number.isFinite(tr.audio_index) ? tr.audio_index : i;
+          opt.value = 'remux:' + idx;
+          opt.dataset.idx = String(idx);
           const lang = tr.language || tr.lang || '';
           const title = tr.title || '';
           const codec = tr.codec || '';
           opt.textContent = tr.label || ['Track ' + (i + 1), lang.toUpperCase(), title, codec].filter(Boolean).join(' · ');
           aSel.appendChild(opt);
         });
+        const origOpt = document.createElement('option');
+        origOpt.value = 'orig';
+        origOpt.textContent = '↺ Original Stream';
+        aSel.appendChild(origOpt);
         aBox.style.display = 'flex';
         if (aSt) aSt.textContent = tracks.length + ' audio track' + (tracks.length === 1 ? '' : 's');
         aSel.onchange = () => {
-          const idx = Number(aSel.value) || 0;
-          const t = Number(mp && mp.currentTime) || 0;
-          showLoading();
-          mp.src = REMUX_URL + '?audio=' + idx + '&aac=1';
-          if (typeof mp.load === 'function') mp.load();
-          mp.addEventListener('loadedmetadata', () => {
-            if (t > 1) { try { mp.currentTime = t; } catch (_) {} }
-            forceUnmuteMovi();
-            mp.play()?.catch(() => {});
-          }, { once: true });
-          showToast('Loading Audio Track ' + (idx + 1) + '…');
+          const opt = aSel.options[aSel.selectedIndex];
+          applyAudioSelection(String(aSel.value || ''), opt);
         };
       })
       .catch(() => {});
@@ -1295,10 +1567,8 @@ document.addEventListener('click', (e) => {
   setTimeout(() => { if (!tracksPopulatedFromMovi) syncAll(); }, 3500);
 })();
 
-
-
 // Smooth Movi-Player v0.4.1 + Built-in HTML5 fallback playback, resume position & stall recovery
-let stallRetries = 0, lastProgressAt = Date.now(), recoveryInFlight = false, stallTimer = null, usedBackendFallback = false;
+let stallRetries = 0, lastProgressAt = Date.now(), recoveryInFlight = false, stallTimer = null, usedBackendFallback = false, triedNativeRemux = false;
 const BACKEND_STREAM_URL = (DIRECT_STREAM_URL !== STREAM_URL) ? DIRECT_STREAM_URL : PROXY_STREAM_URL;
 const RESUME_KEY = 'ddstream:pos:' + SHORT_CODE;
 let pendingResume = 0;
@@ -1359,7 +1629,7 @@ function recoverStream(url) {
       recoveryInFlight = false;
       if (t > 1) { try { el.currentTime = t; } catch (_) {} }
       forceUnmuteActive();
-      el.play()?.catch(() => {});
+      (typeof el.play === 'function' ? el.play() : null)?.catch(() => {});
     };
     el.addEventListener('loadedmetadata', restore, { once: true });
     setTimeout(() => { if (recoveryInFlight) { recoveryInFlight = false; hideLoading(); } }, 12000);
@@ -1386,6 +1656,11 @@ function recoverStream(url) {
       recoverStream(BACKEND_STREAM_URL);
     } else if (!useNativeEngine) {
       switchPlayerEngine(true, STREAM_URL);
+    } else if (!triedNativeRemux) {
+      triedNativeRemux = true;
+      isRemuxMode = true;
+      showToast('Remuxing stream for browser compatibility…');
+      recoverStream(REMUX_URL + '?audio=' + currentAudioTrackIdx + '&aac=1');
     } else {
       hideLoading();
       showToast('Stream error — tap Retry or use External Player');
@@ -1449,13 +1724,13 @@ function loadScript(src) { return new Promise((res, rej) => { const s = document
           mp.src = BACKEND_STREAM_URL;
           if (typeof mp.load === 'function') mp.load();
           mp.muted = false;
-          mp.play()?.catch(() => { syncPlayUI(); hideLoading(); });
+          (typeof mp.play === 'function' ? mp.play() : null)?.catch(() => { syncPlayUI(); hideLoading(); });
         } else {
           hideLoading();
         }
       }
     }, 6500);
-    mp.play()?.catch(() => {
+    (typeof mp.play === 'function' ? mp.play() : null)?.catch(() => {
       try { mp.pause(); } catch (_) {}
       mp.muted = false;
       syncPlayUI();
