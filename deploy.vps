@@ -65,7 +65,7 @@ else
 fi
 
 # Build .env without prompting for Dynu/DuckDNS credentials (bot-managed in Telegram).
-# Supports: export dns=duckdns | export dns=dynu | export dns=dyno | export dns=both | export dns=auto
+# Supports: export dns=duckdns | export dns=dynu | export dns=dyno | export dns=dyn6 | export dns=both | export dns=all | export dns=auto
 if [[ ! -f .env ]]; then
   [[ -f .env.example ]] || die ".env.example is missing."
   cp .env.example .env
@@ -105,6 +105,7 @@ def norm_dns(raw):
     v = str(raw or '').strip().lower()
     if v in ('duck', 'duckdns', 'duckdns.org'): return 'duckdns'
     if v in ('dynu', 'dyno', 'dynu.com', 'dynu.net'): return 'dynu'
+    if v in ('dyn6', 'dynv6', 'dynv6.com', 'dynv6.net'): return 'dyn6'
     if v in ('both', 'all'): return 'both'
     if v in ('none', 'off', 'disabled', 'false', '0'): return 'none'
     return 'auto' if not v else v
@@ -137,7 +138,7 @@ keys = (
     'MONGODB_URI','DATABASE_NAME','REDIS_URL','BASE_URL','BACKEND_URL','WEBSITE_URL','PORT',
     'DEBUG','DEFAULT_EXPIRY','SESSIONS','ADMIN_PANEL_TOKEN','TMDB_API_KEY','BRANDING',
     'LOGO_URL','STREAM_CHUNK_SIZE','NGROK_AUTHTOKEN','TUNNEL_PROVIDER','CLOUDFLARE_URL',
-    'NGROK_URL','DUCKDNS_DOMAIN','DUCKDNS_TOKEN','DNS_PROVIDER'
+    'NGROK_URL','DUCKDNS_DOMAIN','DUCKDNS_TOKEN','DYNV6_ZONE','DYNV6_HOSTNAME','DYNV6_TOKEN','DNS_PROVIDER'
 )
 for key in keys:
     if key in os.environ:
@@ -250,7 +251,7 @@ for _ in $(seq 1 90); do
     fi
 
     # Resolve active DuckDNS / Dynu hostnames according to DNS_MODE (duckdns | dynu | both | auto | none)
-    DUCK_DOM=""; DUCK_TOK=""; DYNU_HOST=""
+    DUCK_DOM=""; DUCK_TOK=""; DYNU_HOST=""; DYN6_ZONE=""; DYN6_TOK=""
     if [ "$DNS_MODE" = "duckdns" ] || [ "$DNS_MODE" = "both" ] || [ "$DNS_MODE" = "auto" ]; then
       DUCK_INFO="$(python3 - <<'PY_DUCK'
 import json, pathlib
@@ -286,6 +287,41 @@ PY_DUCK
       DYNU_HOST="$(printf '%s' "$DYNU_HOST" | tr -d '\r\n ')"
     fi
 
+
+    if [ "$DNS_MODE" = "dyn6" ] || [ "$DNS_MODE" = "all" ] || [ "$DNS_MODE" = "auto" ]; then
+      DYN6_INFO="$(python3 - <<'PY_DYN6'
+import json, pathlib
+from urllib.parse import urlparse
+v={}
+for line in pathlib.Path('.env').read_text().splitlines():
+    if not line or line.lstrip().startswith('#') or '=' not in line: continue
+    k, raw = line.split('=',1); raw=raw.strip()
+    try: val=json.loads(raw) if raw.startswith('"') else raw
+    except Exception: val=raw.strip('"')
+    v[k.strip()]=str(val)
+zone = (v.get('DYNV6_ZONE') or v.get('DYNV6_HOSTNAME') or '').strip().lower()
+if zone.startswith(('http://','https://')): zone = (urlparse(zone).hostname or '').lower()
+zone = zone.split('/',1)[0].split(':',1)[0].strip('.')
+tok = (v.get('DYNV6_TOKEN') or '').strip()
+print(f"{zone}|{tok}")
+PY_DYN6
+)"
+      DYN6_ZONE="${DYN6_INFO%%|*}"
+      DYN6_TOK="${DYN6_INFO#*|}"
+      if [ -z "$DYN6_ZONE" ] || [ -z "$DYN6_TOK" ]; then
+        MONGO_DYN6="$("${COMPOSE[@]}" exec -T web python3 -c "import asyncio; from app.utils.dynv6 import get_dynv6_config; z,t=asyncio.run(get_dynv6_config()); print(f'{z}|{t}')" 2>/dev/null | tail -n 1 || true)"
+        if [[ "$MONGO_DYN6" == *"|"* ]]; then
+          DYN6_ZONE="${MONGO_DYN6%%|*}"
+          DYN6_TOK="${MONGO_DYN6#*|}"
+        fi
+      fi
+    fi
+
+    if [ -n "$DYN6_ZONE" ] && [ -n "$DYN6_TOK" ]; then
+      PUBLIC_IP="${PUBLIC_IP:-$(curl -fsS --max-time 6 https://api.ipify.org 2>/dev/null || curl -fsS --max-time 6 https://ifconfig.me/ip 2>/dev/null || true)}"
+      curl -fsS --max-time 10 "https://ipv4.dynv6.com/api/update?zone=${DYN6_ZONE}&token=${DYN6_TOK}&ipv4=${PUBLIC_IP:-auto}" >/dev/null 2>&1 || warn "Dynv6 initial update returned an error"
+    fi
+
     if [ -n "$DUCK_DOM" ] && [ -n "$DUCK_TOK" ]; then
       PUBLIC_IP="$(curl -fsS --max-time 6 https://api.ipify.org 2>/dev/null || curl -fsS --max-time 6 https://ifconfig.me/ip 2>/dev/null || true)"
       curl -fsS --max-time 10 "https://www.duckdns.org/update?domains=${DUCK_DOM}&token=${DUCK_TOK}&ip=${PUBLIC_IP}" >/dev/null 2>&1 || warn "DuckDNS initial update returned an error"
@@ -293,7 +329,7 @@ PY_DUCK
 
     # Conflict-free multi-deployment Caddy setup:
     # Each deployment manages ONLY /etc/caddy/conf.d/${PROJECT_SLUG}.caddy
-    if { [ -n "$DUCK_DOM" ] && [ -n "$DUCK_TOK" ]; } || [ -n "$DYNU_HOST" ]; then
+    if { [ -n "$DUCK_DOM" ] && [ -n "$DUCK_TOK" ]; } || [ -n "$DYNU_HOST" ] || { [ -n "$DYN6_ZONE" ] && [ -n "$DYN6_TOK" ]; }; then
       if ! command -v caddy >/dev/null 2>&1; then
         info "Installing Caddy for automatic HTTPS reverse proxy..."
         if command -v apt-get >/dev/null 2>&1; then
@@ -325,6 +361,10 @@ PY_DUCK
         if [ -n "$DYNU_HOST" ]; then
           info "Configuring Caddy (/etc/caddy/conf.d/${PROJECT_SLUG}.caddy): ${DYNU_HOST} -> 127.0.0.1:${PORT_VALUE}"
           SITE_CONF+="${DYNU_HOST} {\n    encode zstd gzip\n    reverse_proxy 127.0.0.1:${PORT_VALUE} {\n        flush_interval -1\n    }\n}\n\n"
+        fi
+        if [ -n "$DYN6_ZONE" ] && [ -n "$DYN6_TOK" ]; then
+          info "Configuring Caddy (/etc/caddy/conf.d/${PROJECT_SLUG}.caddy): ${DYN6_ZONE} -> 127.0.0.1:${PORT_VALUE}"
+          SITE_CONF+="${DYN6_ZONE} {\n    encode zstd gzip\n    reverse_proxy 127.0.0.1:${PORT_VALUE} {\n        flush_interval -1\n    }\n}\n\n"
         fi
         printf "%b" "$SITE_CONF" | run_root tee "/etc/caddy/conf.d/${PROJECT_SLUG}.caddy" >/dev/null
         run_root systemctl enable --now caddy >/dev/null 2>&1 || true
@@ -362,6 +402,23 @@ PY_DUCK
             warn "https://${DYNU_HOST}/health is not reachable externally yet (check cloud Security Group / NSG for ports 80 & 443)."
           fi
           "${COMPOSE[@]}" exec -T web python3 -c "import asyncio; from app.utils.dynu import sync_activate; print(asyncio.run(sync_activate()))" >/dev/null 2>&1 || true
+        fi
+
+        if [ -n "$DYN6_ZONE" ] && [ -n "$DYN6_TOK" ]; then
+          info "Verifying external HTTPS https://${DYN6_ZONE}/health ..."
+          DYN6_HTTPS_OK=0
+          for _ in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 8 "https://${DYN6_ZONE}/health" >/dev/null 2>&1; then
+              DYN6_HTTPS_OK=1; break
+            fi
+            sleep 5
+          done
+          if [ "$DYN6_HTTPS_OK" -eq 1 ]; then
+            info "External HTTPS verified: https://${DYN6_ZONE}/health"
+          else
+            warn "https://${DYN6_ZONE}/health is not reachable externally yet (check cloud Security Group / NSG for ports 80 & 443)."
+          fi
+          "${COMPOSE[@]}" exec -T web python3 -c "import asyncio; from app.utils.dynv6 import sync_and_activate_dynv6; print(asyncio.run(sync_and_activate_dynv6()))" >/dev/null 2>&1 || true
         fi
       else
         warn "Could not install Caddy automatically; Cloudflare tunnel remains active as fallback."

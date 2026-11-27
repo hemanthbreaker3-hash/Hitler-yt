@@ -314,6 +314,8 @@ def normalize_dns_provider(raw: str | None) -> str:
         return "duckdns"
     if val in ("dynu", "dyno", "dynu.com", "dynu.net"):
         return "dynu"
+    if val in ("dyn6", "dynv6", "dynv6.com", "dynv6.net"):
+        return "dyn6"
     if val in ("both", "all"):
         return "both"
     if val in ("none", "off", "disabled", "false", "0"):

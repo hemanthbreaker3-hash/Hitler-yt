@@ -832,12 +832,20 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     /* Clean, larger responsive catalog cards across all devices */
     .poster-grid{
       display:grid!important;
-      grid-template-columns:1fr!important;
-      gap:18px!important;
+      grid-template-columns:repeat(2,minmax(0,1fr))!important;
+      gap:12px!important;
       margin-top:10px!important;
     }
     @media(min-width:600px){.poster-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:18px!important}}
-    @media(min-width:1024px){.poster-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:22px!important}}
+    @media(min-width:1024px){.poster-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:22px!important}}
+    @media(max-width:599px){
+      .poster-card .card-top-badges{top:7px;left:7px;right:7px;gap:4px}
+      .poster-card .badge-quality,.poster-card .badge-rating{padding:3px 6px;font-size:9.5px}
+      .poster-card .info{padding:10px 10px 11px!important;gap:6px!important}
+      .poster-card .title{font-size:13px!important}
+      .poster-card .meta{font-size:11px!important}
+      .poster-card .badge-genre{padding:2px 7px;font-size:9.5px}
+    }
     .poster-card{
       position:relative!important;overflow:hidden!important;border-radius:16px!important;
       background:linear-gradient(165deg,rgba(18,24,38,.96),rgba(10,14,24,.98))!important;

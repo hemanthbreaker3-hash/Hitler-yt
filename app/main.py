@@ -69,6 +69,7 @@ async def lifespan(app: FastAPI):
         _asyncio.create_task(_bg_backfill())
         from app.utils.duckdns import is_duckdns_enabled_for_deployment, start_duckdns_updater, sync_and_activate_duckdns
         from app.utils.dynu import is_dynu_enabled_for_deployment, start_updater as start_dynu_updater, sync_activate as sync_dynu_activate
+        from app.utils.dynv6 import is_dynv6_enabled_for_deployment, start_dynv6_updater, sync_and_activate_dynv6
         start_cloudflare_auto_tunnel()
         if is_duckdns_enabled_for_deployment():
             try:
@@ -82,6 +83,12 @@ async def lifespan(app: FastAPI):
             except Exception as _dynu_err:
                 logger.warning("Startup Dynu activation skipped: %s", _dynu_err)
             start_dynu_updater()
+        if is_dynv6_enabled_for_deployment():
+            try:
+                await sync_and_activate_dynv6()
+            except Exception as _dynv6_err:
+                logger.warning('Startup Dynv6 activation skipped: %s', _dynv6_err)
+            start_dynv6_updater()
         session_manager.prepare_bot()
         register_handlers(session_manager.bot_client)
         await session_manager.start()

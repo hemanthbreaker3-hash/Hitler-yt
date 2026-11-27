@@ -157,7 +157,7 @@ async def sync_and_activate_duckdns(updated_by: int | None = None) -> tuple[bool
 def is_duckdns_enabled_for_deployment() -> bool:
     raw = os.getenv("DNS_PROVIDER") or os.getenv("dns") or os.getenv("DNS") or getattr(settings, "DNS_PROVIDER", "auto")
     val = str(raw or "").strip().lower()
-    if val in ("dynu", "dyno", "dynu.com", "dynu.net", "none", "off", "disabled"):
+    if val in ("dynu", "dyno", "dynu.com", "dynu.net", "dyn6", "dynv6", "dynv6.com", "dynv6.net", "none", "off", "disabled"):
         return False
     return True
 

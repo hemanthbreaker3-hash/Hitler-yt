@@ -913,7 +913,7 @@ async def setup_bot_commands(bot):
             BotCommand("password", "Set website panel password (admin)"),
             BotCommand("backendurl", "Set backend / ngrok URL (admin)"),
             BotCommand("baseurl", "Set primary / ngrok URL (admin)"),
-            BotCommand("duckdns", "Configure DuckDNS dynamic DNS (admin)"),
+            BotCommand("duckdns", "dyn6", "dynv6", "Configure DuckDNS dynamic DNS (admin)"),
             BotCommand("dynu", "Dynu DDNS/API status, guide, test & off (admin)"),
             BotCommand("dynuhost", "Set Dynu hostname (admin)"),
             BotCommand("dynukey", "Set Dynu API Key auth (admin)"),
@@ -2723,6 +2723,101 @@ def register_handlers(bot):
                 f"✅ **Dynu DDNS password saved securely** (`{mask_secret(val)}`, method: `ddns`).\n"
                 + ("Run `/dynu test` to update and verify." if ready else reason)
             )
+
+
+    @bot.on_message(filters.command(["dyn6", "dynv6"]))
+    async def dynv6_handler(client, message: Message):
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        if not _is_admin_user(user.id):
+            return await message.reply("🚫 **Unauthorized Access**")
+        from app.utils.dynv6 import (
+            get_dynv6_config,
+            get_public_ip,
+            normalize_dynv6_zone,
+            probe_dynv6_url,
+            sync_and_activate_dynv6,
+            update_dynv6_once,
+        )
+        args = (message.text or "").split()
+        if len(args) < 2:
+            zone, tok = await get_dynv6_config()
+            ip = await get_public_ip()
+            port = str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip()
+            masked = (tok[:4] + "..." + tok[-4:]) if len(tok) > 8 else ("set" if tok else "not set")
+            url_doc = await settings_col.find_one({"key": "dynv6_url"}) or {}
+            st_doc = await settings_col.find_one({"key": "dynv6_last_status"}) or {}
+            return await message.reply(
+                "🌐 **Dynv6 Dynamic DNS (`dynv6.com`)**\n\n"
+                f"> 🏷 **Zone / Hostname:** `{zone or 'Not configured'}`\n"
+                f"> 🖥 **VPS IP:** `{ip or 'unknown'}` (Port `{port}`)\n"
+                f"> 🔗 **Active Dynv6 URL:** `{url_doc.get('value') or 'not set'}`\n"
+                f"> 📡 **Last Status:** `{st_doc.get('value') or 'none'}`\n"
+                f"> 🔑 **Token:** `{masked}`\n\n"
+                "**Usage:**\n"
+                "• `/dyn6 <zone.dynv6.net> <token>` — Sync IP, test URL & activate\n"
+                "• `/dyn6 test` — Re-sync & verify current Dynv6 config\n"
+                "• `/dyn6 off` — Disable Dynv6 updater\n"
+                "• `/ip` — Get VPS public IPv4"
+            )
+        sub = args[1].lower()
+        if sub in ("off", "disable", "clear"):
+            await settings_col.delete_many({"key": {"$in": ["dynv6_zone", "dynv6_token", "dynv6_url", "dynv6_last_status"]}})
+            return await message.reply("🌐 Dynv6 updater disabled.")
+        if sub == "test":
+            status = await message.reply("🌐 Testing Dynv6 sync & HTTPS reachability...")
+            ok, res, ip, best_url, reachable = await sync_and_activate_dynv6(updated_by=user.id)
+            if not ok:
+                return await status.edit_text(f"❌ **Dynv6 test failed:** `{res}`")
+            return await status.edit_text(
+                "✅ **Dynv6 Test Passed!**\n\n"
+                f"> 🔗 **URL:** `{best_url}`\n"
+                f"> 🖥 **IP:** `{ip or 'auto'}` (`{res}`)\n"
+                f"> 🌐 **Reachable:** `{'Yes' if reachable else 'Not yet (check Caddy/ports 80 & 443)'}`"
+            )
+        if len(args) < 3:
+            return await message.reply("⚠️ Usage: `/dyn6 <zone.dynv6.net> <token>`")
+        zone = normalize_dynv6_zone(args[1])
+        tok = args[2].strip()
+        status = await message.reply(f"🌐 Updating `{zone}` on dynv6.com with VPS IP...")
+        ok, res, ip = await update_dynv6_once(zone, tok)
+        if not ok:
+            return await status.edit_text(f"❌ **Dynv6 update failed:** `{res}`")
+        port = int(str(os.getenv("PORT") or getattr(settings, "PORT", None) or "8000").strip())
+        best_url, reachable = await probe_dynv6_url(zone, port)
+        now = datetime.datetime.utcnow()
+        await settings_col.update_one({"key": "dynv6_zone"}, {"$set": {"value": zone, "updated_by": user.id, "updated_at": now}}, upsert=True)
+        await settings_col.update_one({"key": "dynv6_token"}, {"$set": {"value": tok, "updated_by": user.id, "updated_at": now}}, upsert=True)
+        await settings_col.update_one({"key": "dynv6_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
+        await settings_col.update_one({"key": "dynv6_last_status"}, {"$set": {"value": f"{res} ({best_url})", "updated_at": now}}, upsert=True)
+        if reachable:
+            settings.BACKEND_URL = best_url
+            os.environ["BACKEND_URL"] = best_url
+            await settings_col.update_one({"key": "backend_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
+            await settings_col.update_one({"key": "cloudflare_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
+            if not await get_active_vercel_website_url():
+                settings.BASE_URL = best_url
+                os.environ["BASE_URL"] = best_url
+                await settings_col.update_one({"key": "base_url"}, {"$set": {"value": best_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
+            rewritten = 0
+            try:
+                rewritten = await rewrite_all_stored_catalog_buttons(best_url)
+            except Exception:
+                pass
+            reach_note = f"✅ **Reachable:** `{best_url}` (auto-activated, `{rewritten}` catalog pages updated)"
+        else:
+            reach_note = (
+                f"⚠️ **DNS Updated, but `{best_url}/health` is not reachable externally yet.**\n"
+                f"• Re-run `export dns=dyn6 && bash deploy.vps` or point Caddy/Nginx HTTPS (`443`) to `127.0.0.1:{port}` and open ports `80, 443`.\n"
+                f"• Meanwhile your tunnel/fallback remains active."
+            )
+        await status.edit_text(
+            "✅ **Dynv6 Updated!**\n\n"
+            f"> 🌐 **Zone:** `{zone}` (`{res}`)\n"
+            f"> 🖥 **Synced IP:** `{ip or 'auto'}`\n"
+            f"{reach_note}"
+        )
 
     @bot.on_message(filters.command("baseurl"))
     async def baseurl_handler(client, message: Message):
