@@ -119,19 +119,20 @@ window.__INITIAL_CATEGORIES__ = {{ initial_categories|default([])|tojson }};
     play.className = 'play-hint';
     play.innerHTML = '<span>▶</span>';
 
-    const cardBadges = document.createElement('div');
-    cardBadges.className = 'card-badges';
+    const topBadges = document.createElement('div');
+    topBadges.className = 'card-top-badges';
     const qPill = document.createElement('span');
     qPill.className = 'badge-quality';
     qPill.textContent = '1080P';
-    cardBadges.appendChild(qPill);
-    if (Array.isArray(p.genres) && p.genres.length) {
-      const g = document.createElement('span');
-      g.className = 'badge-genre';
-      g.textContent = String(p.genres[0]).toUpperCase();
-      cardBadges.appendChild(g);
+    topBadges.appendChild(qPill);
+    const rVal = Number(p && p.rating);
+    if (Number.isFinite(rVal) && rVal > 0) {
+      const rPill = document.createElement('span');
+      rPill.className = 'badge-rating';
+      rPill.textContent = '★ ' + rVal.toFixed(1);
+      topBadges.appendChild(rPill);
     }
-    media.append(img, play, cardBadges);
+    media.append(img, play, topBadges);
 
     const info = document.createElement('div');
     info.className = 'info';
@@ -139,13 +140,22 @@ window.__INITIAL_CATEGORIES__ = {{ initial_categories|default([])|tojson }};
     title.className = 'title';
     title.textContent = p.title || 'Untitled';
 
+    const metaRow = document.createElement('div');
+    metaRow.className = 'card-meta-row';
     const meta = document.createElement('div');
     meta.className = 'meta';
     const year = (p.release_date || p.first_air_date || '').toString().slice(0, 4);
-    const isSeries = String(p.media_type || '').toLowerCase() === 'tv';
-    meta.textContent = year || (isSeries ? 'SERIES' : 'MOVIE');
+    const kind = String(p.media_type || '').toLowerCase() === 'tv' ? 'SERIES' : 'MOVIE';
+    meta.textContent = [year, kind].filter(Boolean).join(' · ');
+    metaRow.appendChild(meta);
+    if (Array.isArray(p.genres) && p.genres.length) {
+      const g = document.createElement('span');
+      g.className = 'badge-genre';
+      g.textContent = String(p.genres[0]).toUpperCase();
+      metaRow.appendChild(g);
+    }
 
-    info.append(title, meta);
+    info.append(title, metaRow);
     a.append(media, info);
     return a;
   }

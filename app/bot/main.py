@@ -24,6 +24,7 @@ from app.database.connection import (
     settings,
     db,
     get_active_cloudflare_url,
+    get_admin_base_url,
     get_active_vercel_website_url,
     get_active_website_url,
     get_watch_page_base_url,
@@ -2735,68 +2736,65 @@ def register_handlers(bot):
             )
         args = (message.text or "").split(maxsplit=1)
         if len(args) < 2:
-            current_cf = (await get_active_cloudflare_url()) or settings.BASE_URL
+            admin_url = await get_admin_base_url()
+            current_cf = admin_url or (await get_active_cloudflare_url()) or settings.BASE_URL
+            mode = "Admin Override (`/baseurl`)" if admin_url else "Auto-detected"
             return await message.reply(
-                "🌐 **ngrok / Base URL Management**\n\n"
-                f"> 🔗 **Current Active ngrok URL:** `{current_cf}`\n"
+                "🌐 **Base URL Management**\n\n"
+                f"> 🔗 **Active Base URL:** `{current_cf}`\n"
+                f"> ⚙️ **Mode:** {mode}\n"
                 f"> 📢 **Updates Channel:** `{settings.UPDATE_CHANNEL_URL}`\n\n"
-                "*(ngrok URL is set automatically on startup, or override with `/baseurl https://your-ngrok-domain.ngrok-free.app`)*"
+                "Set a custom URL everywhere (bot, FileStore bot, watch & download links):\n"
+                "`/baseurl https://your-domain.com`\n"
+                "Or reset to auto-detection: `/baseurl off`"
             )
-        new_url = args[1].strip()
+        raw_arg = args[1].strip()
+        if raw_arg.lower() in ("off", "clear", "reset", "auto"):
+            await settings_col.delete_one({"key": "admin_base_url"})
+            fallback = (await get_active_cloudflare_url()) or settings.BASE_URL
+            return await message.reply(
+                "🔄 **Admin Base URL Override Cleared**\n\n"
+                f"> 🔗 **Active URL:** `{fallback}`\n"
+                "*(Reverted to automatic tunnel / environment detection.)*"
+            )
         try:
-            new_url = normalize_public_base_url(new_url)
+            new_url = normalize_public_base_url(raw_arg)
         except ValueError as exc:
             return await message.reply(
                 "❌ **Invalid public Base URL**\n\n"
                 f"> {html.escape(str(exc))}\n\n"
-                "Use your public URL, for example: `/baseurl https://your-ngrok-domain.ngrok-free.app`"
+                "Use your public URL, for example: `/baseurl https://your-domain.com`"
             )
         try:
             now = datetime.datetime.utcnow()
+            for key_name in ("admin_base_url", "base_url", "backend_url", "cloudflare_url", "vercel_url", "ngrok_url"):
+                await settings_col.update_one(
+                    {"key": key_name},
+                    {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}},
+                    upsert=True,
+                )
             await settings_col.update_one(
-                {"key": "base_url"},
-                {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}},
+                {"key": "website_urls"},
+                {"$addToSet": {"value": new_url}, "$set": {"updated_at": now}},
                 upsert=True,
             )
             settings.BASE_URL = new_url
+            settings.BACKEND_URL = new_url
+            settings.WEBSITE_URL = new_url
             os.environ["BASE_URL"] = new_url
-            rewritten = 0
-            if is_trycloudflare_url(new_url) or is_duckdns_url(new_url) or (not is_vercel_url(new_url) and (not settings.BACKEND_URL or is_trycloudflare_url(settings.BACKEND_URL))):
-                settings.BACKEND_URL = new_url
-                await settings_col.update_one(
-                    {"key": "backend_url"},
-                    {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}},
-                    upsert=True,
-                )
-                await settings_col.update_one(
-                    {"key": "cloudflare_url"},
-                    {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}},
-                    upsert=True,
-                )
-                if is_duckdns_url(new_url):
-                    await settings_col.update_one({"key": "vercel_url"}, {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}}, upsert=True)
-                rewritten = await rewrite_all_stored_catalog_buttons(new_url)
-            else:
-                await settings_col.update_one(
-                    {"key": "vercel_url"},
-                    {"$set": {"value": new_url, "updated_by": user.id, "updated_at": now}},
-                    upsert=True,
-                )
-                await settings_col.update_one(
-                    {"key": "website_urls"},
-                    {"$addToSet": {"value": new_url}, "$set": {"updated_at": now}},
-                    upsert=True,
-                )
+            os.environ["WEBSITE_URL"] = new_url
+            rewritten = await rewrite_all_stored_catalog_buttons(new_url)
             await message.reply(
-                "🌐 **Base URL Updated Successfully!**\n\n"
-                f"> 🔗 **New URL:** `{new_url}`\n"
+                "🌐 **Base URL Updated Everywhere!**\n\n"
+                f"> 🔗 **Active Base URL:** `{new_url}`\n"
                 f"> 🔄 **Catalog Pages Rewritten:** `{rewritten}`\n"
                 f"> 👤 **Updated By:** `{user.id}`\n\n"
-                "✨ *All download links, stream links, and website button URLs now use this ngrok URL.*"
+                "✨ *Bot links, FileStore bot buttons, download links, stream links, and catalog pages now use this Base URL.*"
             )
         except Exception as e:
             logger.error("Error updating baseurl: %s", e)
             await message.reply(f"❌ **Error updating Base URL:** `{e}`")
+
 
     @bot.on_message(filters.command("filestore") & filters.private)
     async def filestore_handler(client, message: Message):

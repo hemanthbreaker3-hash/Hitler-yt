@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     BACKEND_URL: Optional[str] = None
     WEBSITE_URL: Optional[str] = None
     CHANNEL_ID: Optional[int] = None
-    UPDATE_CHANNEL_URL: str = "https://t.me/hitlerytofficial"
+    UPDATE_CHANNEL_URL: str = "https://t.me/HiTLERYT"
     PORT: int = 8000
     DEBUG: bool = False
     SESSIONS: str = ""
@@ -146,11 +146,24 @@ def _valid_public_candidate(value: str | None) -> str | None:
         return None
 
 
+async def get_admin_base_url() -> str | None:
+    """Return the explicit admin-configured Base URL (/baseurl) if set in MongoDB."""
+    try:
+        doc = await settings_col.find_one({"key": "admin_base_url"}, {"value": 1})
+        val = doc.get("value") if isinstance(doc, dict) else None
+        return _valid_public_candidate(str(val) if val else None)
+    except Exception:
+        return None
+
+
 async def get_active_cloudflare_url() -> str | None:
     """
     Resolve the active ngrok tunnel URL (https://*.ngrok-free.app) used exclusively
     for download links (/dl/), stream/watch links (/watch/, /stream/, /remux/), and catalog button URLs.
     """
+    admin_url = await get_admin_base_url()
+    if admin_url:
+        return admin_url.rstrip("/")
     try:
         rows = await settings_col.find(
             {"key": {"$in": ["ngrok_url", "cloudflare_url", "backend_url", "base_url"]}},
@@ -193,6 +206,9 @@ async def get_active_vercel_website_url() -> str | None:
     """
     Resolve the Vercel website URL strictly for the website (catalog, search, title pages, panel).
     """
+    admin_url = await get_admin_base_url()
+    if admin_url:
+        return admin_url.rstrip("/")
     try:
         rows = await settings_col.find(
             {"key": {"$in": ["vercel_url", "website_urls", "base_url"]}},
@@ -228,6 +244,9 @@ async def get_active_website_url() -> str | None:
     """
     Return the active Vercel website URL if configured, otherwise fallback to any configured public URL.
     """
+    admin_url = await get_admin_base_url()
+    if admin_url:
+        return admin_url.rstrip("/")
     vercel_site = await get_active_vercel_website_url()
     if vercel_site:
         return vercel_site
@@ -245,6 +264,9 @@ async def get_watch_page_base_url() -> str | None:
     rate-limited; Vercel proxies /stream|/dl|/remux to the VPS backend.
     Fall back to the media tunnel URL, then BASE_URL.
     """
+    admin_url = await get_admin_base_url()
+    if admin_url:
+        return admin_url.rstrip("/")
     site = await get_active_vercel_website_url()
     if site:
         return site.rstrip("/")

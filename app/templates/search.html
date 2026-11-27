@@ -84,13 +84,16 @@
              {% endif %}
              alt="{{ p.title }} backdrop" loading="lazy" decoding="async">
         <div class="play-hint"><span>▶</span></div>
+        <div class="card-top-badges">
+          <span class="badge-quality">1080P</span>
+          {% if p.rating is not none and p.rating > 0 %}<span class="badge-rating">★ {{ '%.1f'|format(p.rating|float) }}</span>{% endif %}
+        </div>
       </div>
       <div class="info">
         <div class="title">{{ p.title }}</div>
-        <div class="meta">{% if p.release_date %}{{ p.release_date[:4] }}{% endif %}{% if p.media_type %} · {{ p.media_type|upper }}{% endif %}</div>
-        <div class="badge-row">
-          {% if p.genres %}<span class="badge badge-genre">{{ p.genres[0]|upper }}</span>{% endif %}
-          {% if p.rating is not none %}<span class="badge badge-rating">★ {{ p.rating }}</span>{% endif %}
+        <div class="card-meta-row">
+          <div class="meta">{% if p.release_date %}{{ p.release_date[:4] }} · {% endif %}{{ 'SERIES' if (p.media_type or '')|lower == 'tv' else 'MOVIE' }}</div>
+          {% if p.genres %}<span class="badge-genre">{{ p.genres[0]|upper }}</span>{% endif %}
         </div>
       </div>
     </a>

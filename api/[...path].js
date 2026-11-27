@@ -829,6 +829,71 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     .poster-card .title{font-size:14px!important;font-weight:700!important;color:#f8fafc!important;margin-bottom:2px!important}
     .poster-card .meta{font-size:12px!important;color:#94a3b8!important}
 
+    /* Clean, larger responsive catalog cards across all devices */
+    .poster-grid{
+      display:grid!important;
+      grid-template-columns:1fr!important;
+      gap:18px!important;
+      margin-top:10px!important;
+    }
+    @media(min-width:600px){.poster-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:18px!important}}
+    @media(min-width:1024px){.poster-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:22px!important}}
+    .poster-card{
+      position:relative!important;overflow:hidden!important;border-radius:16px!important;
+      background:linear-gradient(165deg,rgba(18,24,38,.96),rgba(10,14,24,.98))!important;
+      border:1px solid rgba(255,255,255,.1)!important;
+      box-shadow:0 12px 30px rgba(0,0,0,.42)!important;
+      display:flex!important;flex-direction:column!important;
+      transition:transform .22s cubic-bezier(.22,1,.36,1),border-color .22s,box-shadow .22s!important;
+    }
+    .poster-card:hover{
+      transform:translateY(-4px)!important;
+      border-color:rgba(34,211,238,.5)!important;
+      box-shadow:0 20px 42px rgba(0,0,0,.55),0 0 24px rgba(139,92,246,.18)!important;
+    }
+    .poster-card .card-media{
+      position:relative!important;overflow:hidden!important;aspect-ratio:16/9!important;
+      background:#0e131e!important;border:0!important;border-radius:0!important;box-shadow:none!important;
+    }
+    .poster-card .card-media::after{
+      content:"";position:absolute;inset:0;pointer-events:none;z-index:1;
+      background:linear-gradient(180deg,rgba(7,9,14,.32) 0%,transparent 34%,transparent 62%,rgba(10,14,24,.72) 100%);
+    }
+    .poster-card img{width:100%;height:100%;aspect-ratio:16/9;object-fit:cover;background:#0e131e;transition:transform .35s ease}
+    .poster-card:hover img{transform:scale(1.05)}
+    .poster-card .card-top-badges{
+      position:absolute;top:10px;left:10px;right:10px;z-index:3;
+      display:flex;align-items:center;justify-content:space-between;gap:8px;pointer-events:none;
+    }
+    .poster-card .badge-quality{
+      background:rgba(7,9,14,.84);color:#f8fafc;border:1px solid rgba(255,255,255,.22);
+      border-radius:8px;padding:4px 9px;font-size:11px;font-weight:800;letter-spacing:.05em;
+      backdrop-filter:blur(8px);white-space:nowrap;
+    }
+    .poster-card .badge-rating{
+      background:rgba(7,9,14,.84);color:#fbbf24;border:1px solid rgba(251,191,36,.38);
+      border-radius:8px;padding:4px 9px;font-size:11px;font-weight:800;letter-spacing:.02em;
+      backdrop-filter:blur(8px);white-space:nowrap;margin-left:auto;
+    }
+    .poster-card .info{
+      padding:13px 15px 15px!important;display:flex!important;flex-direction:column!important;gap:8px!important;flex:1!important;background:transparent!important;
+    }
+    .poster-card .title{
+      font-family:var(--font-display)!important;font-weight:700!important;
+      font-size:clamp(14.5px,2.2vw,16.5px)!important;line-height:1.3!important;color:#f8fafc!important;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin:0!important;
+    }
+    .poster-card .card-meta-row{
+      display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:auto;
+    }
+    .poster-card .meta{font-size:12.5px!important;font-weight:600;color:#94a3b8!important;line-height:1.3;white-space:nowrap}
+    .poster-card .badge-genre{
+      background:linear-gradient(125deg,#3b82f6,#8b5cf6);color:#fff;border-radius:999px;
+      padding:3px 10px;font-size:10.5px;font-weight:800;letter-spacing:.04em;
+      box-shadow:0 4px 12px rgba(59,130,246,.28);white-space:nowrap;
+    }
+
+
     /* Polished Watch UI */
   .p4u-stage{border:1px solid rgba(99,102,241,.28)!important;box-shadow:0 24px 60px rgba(0,0,0,.68),0 0 0 1px rgba(255,255,255,.04) inset!important}
   .p4u-below-bar{background:rgba(15,20,32,.78);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:8px 10px;backdrop-filter:blur(12px)}
@@ -1089,26 +1154,34 @@ window.__INITIAL_CATEGORIES__ = ${safeJsonForScript(initialCategories)};
       const media = document.createElement('div');
       media.className = 'card-media';
       const play = document.createElement('div'); play.className = 'play-hint'; play.innerHTML = '<span>▶</span>';
-      const cardBadges = document.createElement('div');
-      cardBadges.className = 'card-badges';
+      const topBadges = document.createElement('div');
+      topBadges.className = 'card-top-badges';
       const qPill = document.createElement('span'); qPill.className = 'badge-quality'; qPill.textContent = '1080P';
-      cardBadges.appendChild(qPill);
-      if (Array.isArray(p.genres) && p.genres.length) {
-        const g = document.createElement('span'); g.className = 'badge-genre'; g.textContent = String(p.genres[0]).toUpperCase();
-        cardBadges.appendChild(g);
+      topBadges.appendChild(qPill);
+      const rVal = Number(p && p.rating);
+      if (Number.isFinite(rVal) && rVal > 0) {
+        const rPill = document.createElement('span'); rPill.className = 'badge-rating'; rPill.textContent = '★ ' + rVal.toFixed(1);
+        topBadges.appendChild(rPill);
       }
-      media.append(img, play, cardBadges);
+      media.append(img, play, topBadges);
       const info = document.createElement('div');
       info.className = 'info';
       const t = document.createElement('div');
       t.className = 'title';
       t.textContent = p.title || 'Untitled';
+      const metaRow = document.createElement('div');
+      metaRow.className = 'card-meta-row';
       const m = document.createElement('div');
       m.className = 'meta';
       const year = (p.release_date || p.first_air_date || '').toString().slice(0, 4);
-      const isSeries = String(p.media_type || '').toLowerCase() === 'tv';
-      m.textContent = year || (isSeries ? 'SERIES' : 'MOVIE');
-      info.append(t, m);
+      const kind = String(p.media_type || '').toLowerCase() === 'tv' ? 'SERIES' : 'MOVIE';
+      m.textContent = [year, kind].filter(Boolean).join(' · ');
+      metaRow.appendChild(m);
+      if (Array.isArray(p.genres) && p.genres.length) {
+        const g = document.createElement('span'); g.className = 'badge-genre'; g.textContent = String(p.genres[0]).toUpperCase();
+        metaRow.appendChild(g);
+      }
+      info.append(t, metaRow);
       a.append(media, info);
       el.append(a);
       }
