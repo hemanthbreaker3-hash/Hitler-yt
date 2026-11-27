@@ -44,7 +44,7 @@ from app.utils.helpers import (
     extract_short_code_from_media_url,
     filestore_deep_link,
 )
-from app.utils.fsub import is_user_fsubbed, get_fsub_invite_buttons, fsub_restriction_text
+from app.utils.fsub import is_user_fsubbed, get_fsub_invite_buttons, fsub_restriction_text, check_fsub_status
 from app.utils.rate_limit import check_rate_limit
 from app.utils.media_tools import (
     cleanup_dir,
@@ -345,6 +345,12 @@ async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to
                 last_err = e3
                 logger.warning("FileStore document fallback failed: %s", e3)
 
+    if copied is None and file_data.get("content_type") == "text" and file_data.get("text_content"):
+        try:
+            copied = await client.send_message(user_id, str(file_data["text_content"]))
+        except Exception as te:
+            last_err = te
+
     if copied is None:
         logger.error(
             "FileStore delivery exhausted for short_code=%s candidates=%s last_err=%s",
@@ -379,10 +385,10 @@ async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to
         streaming_enabled = runtime.get("streaming_enabled", True)
         fs_username = (runtime.get("filestore_bot_username") or "").strip().lstrip("@")
 
-        if streaming_enabled and watch_base and short_code:
+        if file_data.get("content_type") != "text" and streaming_enabled and watch_base and short_code:
             watch_url = f"{watch_base.rstrip('/')}/watch/{short_code}"
             button_rows.append(InlineKeyboardButton("🍿 Watch Online", url=watch_url))
-        if dl_base and short_code:
+        if file_data.get("content_type") != "text" and dl_base and short_code:
             if downloads_enabled:
                 dl_url = f"{dl_base.rstrip('/')}/dl/{short_code}"
                 button_rows.append(InlineKeyboardButton("⚡ Direct Download", url=dl_url))
@@ -440,150 +446,458 @@ async def stop_filestore_client():
         logger.warning("Error stopping filestore client: %s", e)
 
 
+
+_filestore_start_lock = asyncio.Lock()
+_fs_inflight_msgs: dict[tuple[int, int, int], float] = {}
+_fs_inflight_deliveries: dict[tuple[int, str], float] = {}
+_batch_cache_index_ready = False
+
+
+def _is_duplicate_fs_event(bot_obj, uid: int, msg_id: int, ttl: float = 15.0) -> bool:
+    import time as _t
+    now = _t.monotonic()
+    for k, exp in list(_fs_inflight_msgs.items()):
+        if exp < now:
+            _fs_inflight_msgs.pop(k, None)
+    key = (id(bot_obj), int(uid), int(msg_id))
+    if key in _fs_inflight_msgs:
+        return True
+    _fs_inflight_msgs[key] = now + ttl
+    return False
+
+
+def _is_duplicate_fs_delivery(uid: int, code: str, ttl: float = 4.0) -> bool:
+    import time as _t
+    now = _t.monotonic()
+    for k, exp in list(_fs_inflight_deliveries.items()):
+        if exp < now:
+            _fs_inflight_deliveries.pop(k, None)
+    key = (int(uid), str(code))
+    if key in _fs_inflight_deliveries:
+        return True
+    _fs_inflight_deliveries[key] = now + ttl
+    return False
+
+
+async def record_filestore_user(user, *, delivered: bool = False) -> None:
+    if not user or getattr(user, "is_bot", False):
+        return
+    try:
+        now = datetime.datetime.utcnow()
+        update_doc: dict = {
+            "$set": {
+                "username": getattr(user, "username", None) or "",
+                "first_name": getattr(user, "first_name", None) or "",
+                "last_seen": now,
+            },
+            "$setOnInsert": {"first_seen": now},
+        }
+        if delivered:
+            update_doc["$inc"] = {"deliveries": 1}
+        await db.filestore_users.update_one({"user_id": int(user.id)}, update_doc, upsert=True)
+    except Exception as e:
+        logger.debug("record_filestore_user failed: %s", e)
+
+
+async def build_filestore_stats_text(fallback_username: str = "") -> str:
+    now = datetime.datetime.utcnow()
+    day_ago = now - datetime.timedelta(hours=24)
+    week_ago = now - datetime.timedelta(days=7)
+    total_users = await db.filestore_users.count_documents({})
+    active_24h = await db.filestore_users.count_documents({"last_seen": {"$gte": day_ago}})
+    active_7d = await db.filestore_users.count_documents({"last_seen": {"$gte": week_ago}})
+    agg = await db.filestore_users.aggregate([
+        {"$group": {"_id": None, "total_del": {"$sum": {"$ifNull": ["$deliveries", 0]}}}}
+    ]).to_list(1)
+    total_deliveries = int(agg[0]["total_del"]) if agg else 0
+    total_files = await files_col.count_documents({})
+    cached_msgs = await db.batch_msg_cache.count_documents({})
+    runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+    fs_user = (runtime.get("filestore_bot_username") or fallback_username or "").strip().lstrip("@")
+    fsubs = await get_runtime_fsub_ids()
+    adel = await get_filestore_auto_delete_seconds()
+    adel_txt = "Off" if adel <= 0 else (f"{adel // 60} min" if adel % 60 == 0 else f"{adel} sec")
+    active_base = (await get_watch_page_base_url()) or (await get_active_cloudflare_url()) or settings.BASE_URL or "Not set"
+    return (
+        "📊 <b>FileStore &amp; Bot Statistics</b>\n\n"
+        f"👥 <b>Total FileStore Users:</b> <code>{total_users}</code>\n"
+        f"🟢 <b>Active (24h):</b> <code>{active_24h}</code> · <b>(7d):</b> <code>{active_7d}</code>\n"
+        f"📦 <b>Total Deliveries:</b> <code>{total_deliveries}</code>\n"
+        f"🗂 <b>Indexed Files:</b> <code>{total_files}</code>\n"
+        f"⚡ <b>Batch Cached Messages:</b> <code>{cached_msgs}</code>\n\n"
+        f"🤖 <b>FileStore Bot:</b> <code>@{html.escape(fs_user or 'primary')}</code>\n"
+        f"📢 <b>FSub Channels:</b> <code>{len(fsubs)}</code>\n"
+        f"⏱ <b>Auto-Delete:</b> <code>{adel_txt}</code>\n"
+        f"🌐 <b>Base URL:</b> <code>{html.escape(str(active_base))}</code>"
+    )
+
+
+async def handle_genlink_command(client, message: Message, fallback_username: str = ""):
+    user = message.from_user
+    if not user or user.is_bot:
+        return
+    await refresh_runtime_admin_cache()
+    if not _is_admin_user(user.id):
+        return await message.reply("🚫 Admins only.")
+
+    def _has_any_media(m: Message | None) -> bool:
+        if not m:
+            return False
+        return bool(m.document or m.video or m.animation or m.audio or m.voice or m.video_note or m.photo)
+
+    target = message.reply_to_message
+    if not target:
+        if _has_any_media(message):
+            target = message
+        else:
+            return await message.reply(
+                "🔗 <b>Generate Deep Link (<code>/genlink</code>)</b>\n\n"
+                "> Reply to <b>any file, video, photo, audio, or text message</b> with <code>/genlink</code>\n"
+                "> and the bot will generate a FileStore deep link so users get that exact content.",
+                parse_mode=ParseMode.HTML,
+            )
+
+    chat_id = target.chat.id if target.chat else message.chat.id
+    msg_id = target.id
+    existing = await files_col.find_one({"chat_id": chat_id, "message_id": msg_id})
+
+    if _has_any_media(target):
+        media = target.document or target.video or target.audio or target.animation or target.photo or target.voice or target.video_note
+        if target.document:
+            file_name = media.file_name or "file"
+            mime_type = media.mime_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+            file_size = getattr(media, "file_size", None) or 0
+        elif target.video:
+            file_name = getattr(media, "file_name", None) or f"video_{media.file_unique_id}.mp4"
+            mime_type = media.mime_type or "video/mp4"
+            file_size = getattr(media, "file_size", None) or 0
+        elif target.audio:
+            file_name = media.file_name or f"audio_{media.file_unique_id}.mp3"
+            mime_type = media.mime_type or "audio/mpeg"
+            file_size = getattr(media, "file_size", None) or 0
+        elif target.animation:
+            file_name = getattr(media, "file_name", None) or f"animation_{media.file_unique_id}.mp4"
+            mime_type = media.mime_type or "video/mp4"
+            file_size = getattr(media, "file_size", None) or 0
+        elif target.photo:
+            media = target.photo[-1] if isinstance(target.photo, (list, tuple)) else target.photo
+            file_name, mime_type = f"photo_{media.file_unique_id}.jpg", "image/jpeg"
+            file_size = getattr(media, "file_size", None) or 0
+        elif target.voice:
+            file_name, mime_type = f"voice_{media.file_unique_id}.ogg", media.mime_type or "audio/ogg"
+            file_size = getattr(media, "file_size", None) or 0
+        else:
+            file_name, mime_type = f"video_note_{media.file_unique_id}.mp4", "video/mp4"
+            file_size = getattr(media, "file_size", None) or 0
+        caption = getattr(target, "caption", None) or ""
+        file_name = extract_filename_from_caption(caption, file_name)
+        file_id = str(getattr(media, "file_id", "") or "")
+        file_unique_id = str(getattr(media, "file_unique_id", "") or msg_id)
+        content_type = "media"
+        text_content = caption
+    else:
+        raw_txt = (getattr(target, "text", None) or getattr(target, "caption", None) or "").strip()
+        if not raw_txt:
+            return await message.reply("❌ Replied message has no media or text content.")
+        file_name = f"Message #{msg_id}"
+        mime_type = "text/plain"
+        file_size = len(raw_txt.encode("utf-8"))
+        file_id = ""
+        file_unique_id = f"text_{chat_id}_{msg_id}"
+        content_type = "text"
+        text_content = raw_txt
+
+    if existing and existing.get("short_code"):
+        short_code = existing["short_code"]
+    else:
+        short_code = generate_short_code()
+        doc = FileMetadata(
+            file_id=file_id,
+            file_unique_id=file_unique_id,
+            filename=file_name,
+            mime_type=mime_type,
+            file_size=file_size,
+            uploader_id=user.id,
+            short_code=short_code,
+            chat_id=chat_id,
+            message_id=msg_id,
+            expiry_time=None,
+        ).dict()
+        doc["content_type"] = content_type
+        doc["text_content"] = text_content
+        await files_col.insert_one(doc)
+
+    runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+    fs_user = (runtime.get("filestore_bot_username") or fallback_username or "").strip().lstrip("@")
+    if not fs_user:
+        try:
+            me = await client.get_me()
+            fs_user = (getattr(me, "username", None) or "").strip().lstrip("@")
+        except Exception:
+            fs_user = ""
+    base_url = (
+        (await get_watch_page_base_url())
+        or (await get_active_cloudflare_url())
+        or settings.BASE_URL
+        or ""
+    ).rstrip("/")
+    deep_link = filestore_deep_link(fs_user, short_code) if fs_user else f"/start file_{short_code}"
+    lines = [
+        "✅ <b>Deep Link Generated!</b>\n",
+        f"📁 <b>Item:</b> <code>{html.escape(str(file_name))}</code>",
+        f"🔗 <b>FileStore Link:</b> <code>{html.escape(deep_link)}</code>",
+    ]
+    if content_type == "media" and base_url:
+        if runtime.get("streaming_enabled", True):
+            lines.append(f"▶️ <b>Watch:</b> <code>{html.escape(base_url + '/watch/' + short_code)}</code>")
+        if runtime.get("downloads_enabled", True):
+            lines.append(f"⬇️ <b>Download:</b> <code>{html.escape(base_url + '/dl/' + short_code)}</code>")
+    kb = _kb([[InlineKeyboardButton("📥 Open Deep Link", url=deep_link)]]) if fs_user else None
+    await message.reply("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=kb, disable_web_page_preview=True)
+
+
 async def start_filestore_client(token: str, username: str | None = None) -> dict:
     """
     Start a dedicated FileStore bot client with the given token so deep-link
     /start file_<code> is handled even when the FileStore bot is not the primary bot.
-    If the token is the same as the primary bot, do nothing (primary already handles it).
+    Includes deduplication locks, FSub Try Again auto-delivery, /stats, /genlink, /help, /ping.
     """
     global _filestore_client, _filestore_client_token
-    clean = (token or "").strip()
-    if not clean or ":" not in clean:
-        raise ValueError("Invalid bot token")
+    async with _filestore_start_lock:
+        clean = (token or "").strip()
+        if not clean or ":" not in clean:
+            raise ValueError("Invalid bot token")
 
-    if clean == (settings.BOT_TOKEN or "").strip():
+        if clean == (settings.BOT_TOKEN or "").strip():
+            await stop_filestore_client()
+            return {"same_as_primary": True, "username": username or ""}
+
+        if _filestore_client is not None and _filestore_client_token == clean:
+            me = None
+            try:
+                me = await _filestore_client.get_me()
+            except Exception:
+                pass
+            return {
+                "same_as_primary": False,
+                "username": getattr(me, "username", None) or username or "",
+                "already_running": True,
+            }
+
         await stop_filestore_client()
-        return {"same_as_primary": True, "username": username or ""}
 
-    if _filestore_client is not None and _filestore_client_token == clean:
-        me = None
-        try:
-            me = await _filestore_client.get_me()
-        except Exception:
-            pass
-        return {
-            "same_as_primary": False,
-            "username": getattr(me, "username", None) or username or "",
-            "already_running": True,
-        }
+        client = Client(
+            name=f"filestore_{clean.split(':', 1)[0]}",
+            api_id=settings.API_ID,
+            api_hash=settings.API_HASH,
+            bot_token=clean,
+            in_memory=True,
+            workers=16,
+            max_concurrent_transmissions=16,
+        )
 
-    await stop_filestore_client()
+        @client.on_message(filters.command("start") & filters.private)
+        async def filestore_start_handler(c, message: Message):
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            uid = user.id
+            if _is_duplicate_fs_event(c, uid, message.id):
+                return
+            await record_filestore_user(user, delivered=False)
 
-    client = Client(
-        name=f"HITLER YT_filestore_{clean.split(':', 1)[0]}",
-        api_id=settings.API_ID,
-        api_hash=settings.API_HASH,
-        bot_token=clean,
-        in_memory=True,
-        workers=16,
-        max_concurrent_transmissions=16,
-    )
-
-    @client.on_message(filters.command("start") & filters.private)
-    async def filestore_start_handler(c, message: Message):
-        user = message.from_user
-        if not user or user.is_bot:
-            return
-        uid = user.id
-        payload = ""
-        try:
-            parts = (message.text or "").split(maxsplit=1)
-            if len(parts) > 1:
-                payload = parts[1].strip()
-        except Exception:
             payload = ""
-        if not payload:
-            await message.reply(
-                "📦 **FileStore Bot**\n\n"
-                "Open a file deep-link from the website to receive the file here."
+            try:
+                parts = (message.text or "").split(maxsplit=1)
+                if len(parts) > 1:
+                    payload = parts[1].strip()
+            except Exception:
+                payload = ""
+            if not payload:
+                await message.reply(
+                    "📦 <b>FileStore Bot</b>\n\n"
+                    "Open a file deep-link from the website to receive the file here.\n"
+                    "Use /help to see available commands.",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            code = payload[5:] if payload.lower().startswith("file_") else payload
+            code = code.strip()
+            if not code:
+                return
+            if _is_duplicate_fs_delivery(uid, code):
+                return
+            file_data = await files_col.find_one({"short_code": code})
+            if not file_data:
+                await message.reply("❌ File not found or link expired.")
+                return
+            ok, invite_rows, body = await check_fsub_status(c, uid, payload_code=code)
+            if not ok:
+                await message.reply(
+                    body + "\n\n> Join all channels, then tap **🔄 Try Again** to get your file.",
+                    reply_markup=_kb(invite_rows) if invite_rows else None,
+                )
+                return
+            try:
+                await deliver_filestore_file(c, uid, file_data, message)
+                await record_filestore_user(user, delivered=True)
+            except Exception as e:
+                logger.exception("FileStore secondary delivery failed: %s", e)
+                err = html.escape(str(e)[:220])
+                await message.reply(
+                    "❌ <b>Could not deliver this file</b>\n\n"
+                    f"<code>{err}</code>\n\n"
+                    "> Possible causes:\n"
+                    "> • Bot cannot access the <b>source</b> channel/message (add bot as member/admin there)\n"
+                    "> • Original message was deleted from Telegram\n"
+                    "> • file_id expired — re-run <code>/batch</code> or <code>/genlink</code> on the source",
+                    parse_mode=ParseMode.HTML,
+                )
+
+        @client.on_callback_query(filters.regex(r"^fsub:check(?::(.+))?$"))
+        async def filestore_fsub_check(c, callback: CallbackQuery):
+            user = callback.from_user
+            if not user or user.is_bot:
+                return
+            uid = user.id
+            code = (callback.matches[0].group(1) or "").strip() if getattr(callback, "matches", None) else ""
+            ok, invite_rows, body = await check_fsub_status(c, uid, payload_code=code or None)
+            if not ok:
+                try:
+                    await callback.answer("Still missing a channel — join all, then Try Again.", show_alert=True)
+                except Exception:
+                    pass
+                try:
+                    await callback.message.edit_text(body, reply_markup=_kb(invite_rows) if invite_rows else None)
+                except Exception:
+                    pass
+                return
+            try:
+                await callback.answer("✅ Verified!", show_alert=False)
+            except Exception:
+                pass
+            if code and not _is_duplicate_fs_delivery(uid, code):
+                file_data = await files_col.find_one({"short_code": code})
+                if file_data:
+                    try:
+                        await callback.message.edit_text("✅ **Verified!** Sending your file…")
+                    except Exception:
+                        pass
+                    try:
+                        await deliver_filestore_file(c, uid, file_data, callback.message)
+                        await record_filestore_user(user, delivered=True)
+                        return
+                    except Exception as e:
+                        await callback.message.reply(f"❌ Delivery failed: `{e}`")
+                        return
+            try:
+                await callback.message.edit_text("✅ **Access granted!** Open your link again.")
+            except Exception:
+                pass
+
+        @client.on_message(filters.command("help") & filters.private)
+        async def filestore_help(c, message: Message):
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            await refresh_runtime_admin_cache()
+            is_adm = _is_admin_user(user.id)
+            txt = (
+                "📖 <b>FileStore Bot Help</b>\n\n"
+                "• Click any <b>Get in Telegram</b> button on the website to receive files here.\n"
+                "• <code>/ping</code> — Check bot response speed\n"
+                "• <code>/about</code> — Bot information\n"
             )
-            return
-        code = payload
-        if code.lower().startswith("file_"):
-            code = code[5:]
-        code = code.strip()
-        if not code:
-            return
-        file_data = await files_col.find_one({"short_code": code})
-        if not file_data:
-            await message.reply("❌ File not found or link expired.")
-            return
-        if not await is_user_fsubbed(c, uid):
-            invite_rows = await get_fsub_invite_buttons(c, uid)
-            body = await fsub_restriction_text(c, uid)
+            if is_adm:
+                txt += (
+                    "\n<b>Admin Commands:</b>\n"
+                    "• <code>/genlink</code> — Reply to any file, media, or message to create a deep link\n"
+                    "• <code>/stats</code> — View FileStore users, deliveries &amp; cache stats\n"
+                    "• <code>/fspanel</code> — View admins, FSub channels &amp; auto-delete settings"
+                )
+            await message.reply(txt, parse_mode=ParseMode.HTML)
+
+        @client.on_message(filters.command("ping") & filters.private)
+        async def filestore_ping(c, message: Message):
+            import time as _t
+            t0 = _t.monotonic()
+            m = await message.reply("🏓 Pinging…")
+            ms = int((_t.monotonic() - t0) * 1000)
+            await m.edit_text(f"🏓 <b>Pong!</b> <code>{ms} ms</code>", parse_mode=ParseMode.HTML)
+
+        @client.on_message(filters.command("about") & filters.private)
+        async def filestore_about(c, message: Message):
             await message.reply(
-                body + "\n\n> Then open the download link again.",
-                reply_markup=_kb(invite_rows) if invite_rows else None,
-            )
-            return
-        try:
-            await deliver_filestore_file(c, uid, file_data, message)
-        except Exception as e:
-            logger.exception("FileStore secondary delivery failed: %s", e)
-            err = html.escape(str(e)[:220])
-            await message.reply(
-                "❌ **Could not deliver this file**\n\n"
-                f"<code>{err}</code>\n\n"
-                "> Possible causes:\n"
-                "> • Bot cannot access the **source** channel/message (add bot as member/admin there)\n"
-                "> • Original message was deleted from Telegram\n"
-                "> • file_id expired — re-run `/batch` or `/link` on the source\n\n"
-                "> Storage channel (`CHANNEL_ID`) is **optional**. Access to the source chat is enough.",
+                "🤖 <b>Dedicated FileStore Delivery Bot</b>\n\n"
+                "> Fast, direct file &amp; message delivery with FSub and auto-delete support.",
                 parse_mode=ParseMode.HTML,
             )
 
-    await client.start()
-    try:
-        me = await client.get_me()
-        resolved_username = getattr(me, "username", None) or username or ""
-    except Exception as e:
+        @client.on_message(filters.command("stats") & filters.private)
+        async def filestore_stats(c, message: Message):
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            await refresh_runtime_admin_cache()
+            if not _is_admin_user(user.id):
+                return await message.reply("🚫 Admins only.")
+            txt = await build_filestore_stats_text(fallback_username=resolved_username)
+            await message.reply(txt, parse_mode=ParseMode.HTML)
+
+        @client.on_message(filters.command("genlink"))
+        async def filestore_genlink(c, message: Message):
+            await handle_genlink_command(c, message, fallback_username=resolved_username)
+
+        @client.on_message(filters.command("fspanel") & filters.private)
+        async def secondary_fspanel(c, message: Message):
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            await refresh_runtime_admin_cache()
+            if not _is_admin_user(user.id):
+                return await message.reply("🚫 Admins only.")
+            runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
+            admins = await get_runtime_admins()
+            fsubs = await get_runtime_fsub_ids()
+            adel = await get_filestore_auto_delete_seconds()
+            fs_user = (runtime.get("filestore_bot_username") or resolved_username or "").strip().lstrip("@")
+            adel_txt = "off" if adel <= 0 else (f"{adel // 60} min" if adel % 60 == 0 else f"{adel} sec")
+            await message.reply(
+                "🛠 **FileStore Panel**\n\n"
+                f"> Bot: `@{fs_user}`\n"
+                f"> Auto-delete: `{adel_txt}`\n"
+                f"> Admins: {', '.join('`'+str(a)+'`' for a in admins)}\n"
+                f"> FSub IDs: {', '.join('`'+str(x)+'`' for x in fsubs) or '*(none)*'}\n\n"
+                "Use primary bot `/fspanel` to edit settings, or `/stats` and `/genlink` right here."
+            )
+
+        await client.start()
         try:
-            await client.stop()
-        except Exception:
-            pass
-        raise RuntimeError(f"FileStore bot getMe failed: {e}") from e
+            me = await client.get_me()
+            resolved_username = getattr(me, "username", None) or username or ""
+        except Exception as e:
+            try:
+                await client.stop()
+            except Exception:
+                pass
+            raise RuntimeError(f"FileStore bot getMe failed: {e}") from e
 
-    # Minimal admin commands on secondary FileStore bot
-    try:
-        await client.set_bot_commands([
-            BotCommand("start", "Get file from deep link"),
-            BotCommand("fspanel", "Manage admins, fsub, auto-delete"),
-        ])
-    except Exception as e:
-        logger.debug("Could not set FileStore bot commands: %s", e)
+        try:
+            await client.set_bot_commands([
+                BotCommand("start", "Get file from deep link"),
+                BotCommand("help", "Show help & commands"),
+                BotCommand("genlink", "Reply to file/message for deep link (admin)"),
+                BotCommand("stats", "FileStore users & stats (admin)"),
+                BotCommand("fspanel", "genlink", "stats", "Manage admins, fsub, auto-delete (admin)"),
+                BotCommand("ping", "Check bot latency"),
+            ])
+        except Exception as e:
+            logger.debug("Could not set FileStore bot commands: %s", e)
 
-    # Register /fspanel on secondary client (reuse same logic via message routing is hard;
-    # re-bind a compact panel handler here)
-    @client.on_message(filters.command("fspanel") & filters.private)
-    async def secondary_fspanel(c, message: Message):
-        user = message.from_user
-        if not user or user.is_bot:
-            return
-        await refresh_runtime_admin_cache()
-        if not _is_admin_user(user.id):
-            return await message.reply("🚫 Admins only.")
-        runtime = await db.site_settings.find_one({"_id": "runtime"}) or {}
-        admins = await get_runtime_admins()
-        fsubs = await get_runtime_fsub_ids()
-        adel = await get_filestore_auto_delete_seconds()
-        fs_user = (runtime.get("filestore_bot_username") or resolved_username or "").strip().lstrip("@")
-        adel_txt = "off" if adel <= 0 else (f"{adel // 60} min" if adel % 60 == 0 else f"{adel} sec")
-        await message.reply(
-            "🛠 **FileStore Panel**\n\n"
-            f"> Bot: `@{fs_user}`\n"
-            f"> Auto-delete: `{adel_txt}`\n"
-            f"> Admins: {', '.join('`'+str(a)+'`' for a in admins)}\n"
-            f"> FSub IDs: {', '.join('`'+str(x)+'`' for x in fsubs) or '*(none)*'}\n\n"
-            "Use the primary bot `/fspanel` with buttons to add/remove admins, FSub channels, and auto-delete time.\n"
-            "Or send commands here:\n"
-            "• `/fspanel` — show status\n"
-            "Manage changes are stored in the shared database."
-        )
-
-    _filestore_client = client
-    _filestore_client_token = clean
-    logger.info("FileStore secondary bot started as @%s", resolved_username)
-    return {"same_as_primary": False, "username": resolved_username, "already_running": False}
+        _filestore_client = client
+        _filestore_client_token = clean
+        logger.info("FileStore secondary bot started as @%s", resolved_username)
+        return {"same_as_primary": False, "username": resolved_username, "already_running": False}
 
 
 async def resolve_bot_username_from_token(token: str) -> str:
@@ -923,6 +1237,8 @@ async def setup_bot_commands(bot):
             BotCommand("ip", "Get VPS public IP for DuckDNS (admin)"),
             BotCommand("filestore", "Set FileStore bot for deep-link downloads (admin)"),
             BotCommand("fspanel", "FileStore panel: admins, fsub, auto-delete (admin)"),
+            BotCommand("genlink", "Reply to file/message for deep link (admin)"),
+            BotCommand("stats", "FileStore & bot statistics (admin)"),
             BotCommand("categories", "Manage categories (admin)"),
             BotCommand("edit", "Open page editor (admin)"),
             BotCommand("search", "Search catalog (admin)"),
@@ -1143,16 +1459,19 @@ def register_handlers(bot):
             if code:
                 file_data = await files_col.find_one({"short_code": code})
                 if file_data:
-                    if not await is_user_fsubbed(client, user_id):
-                        invite_rows = await get_fsub_invite_buttons(client, user_id)
-                        body = await fsub_restriction_text(client, user_id)
+                    if _is_duplicate_fs_delivery(user_id, code):
+                        return
+                    await record_filestore_user(message.from_user, delivered=False)
+                    fsub_ok, invite_rows, body = await check_fsub_status(client, user_id, payload_code=code)
+                    if not fsub_ok:
                         return await message.reply(
-                            body + "\n\n> Then open the download link again.",
+                            body + "\n\n> Join all channels, then tap **🔄 Try Again** to get your file.",
                             reply_markup=_kb(invite_rows) if invite_rows else None,
                         )
                     try:
                         ok = await deliver_filestore_file(client, user_id, file_data, message)
                         if ok:
+                            await record_filestore_user(message.from_user, delivered=True)
                             return
                         return await message.reply(
                             "❌ **Could not deliver this file**\n\n"
@@ -3056,18 +3375,47 @@ def register_handlers(bot):
         return text, kb
 
 
-    @bot.on_callback_query(filters.regex(r"^fsub:check$"))
+    @bot.on_message(filters.command("stats") & filters.private)
+    async def primary_stats_handler(client, message: Message):
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        await refresh_runtime_admin_cache()
+        if not _is_admin_user(user.id):
+            return await message.reply("🚫 Admins only.")
+        await message.reply(await build_filestore_stats_text(), parse_mode=ParseMode.HTML)
+
+    @bot.on_message(filters.command("genlink"))
+    async def primary_genlink_handler(client, message: Message):
+        await handle_genlink_command(client, message)
+
+    @bot.on_callback_query(filters.regex(r"^fsub:check(?::(.+))?$"))
     async def fsub_try_again_callback(client, callback: CallbackQuery):
         """Try Again after joining force-sub channels."""
         user = callback.from_user
         if not user or user.is_bot:
             return
-        ok = await is_user_fsubbed(client, user.id)
+        code = (callback.matches[0].group(1) or "").strip() if getattr(callback, "matches", None) else ""
+        ok, invite_rows, body = await check_fsub_status(client, user.id, payload_code=code or None)
         if ok:
             try:
-                await callback.answer("✅ Verified! You can use the bot now.", show_alert=True)
+                await callback.answer("✅ Verified!", show_alert=False)
             except Exception:
                 pass
+            if code and not _is_duplicate_fs_delivery(user.id, code):
+                file_data = await files_col.find_one({"short_code": code})
+                if file_data:
+                    try:
+                        await callback.message.edit_text("✅ **Verified!** Sending your file…")
+                    except Exception:
+                        pass
+                    try:
+                        await deliver_filestore_file(client, user.id, file_data, callback.message)
+                        await record_filestore_user(user, delivered=True)
+                        return
+                    except Exception as e:
+                        await callback.message.reply(f"❌ Delivery failed: `{e}`")
+                        return
             try:
                 await callback.message.edit_text(
                     "✅ **Access granted**\n\n"
@@ -4166,19 +4514,21 @@ def register_handlers(bot):
 
     @bot.on_message(filters.command("batch") & filters.private)
     async def batch_command(client, message: Message):
-        """Generate download/watch links for a range of messages in any channel/group
-        the bot can access. Does NOT require CHANNEL_ID / storage channel for generation.
+        """Ultra-fast batch link generator with persistent MongoDB message-ID cache,
+        -new flag to force fresh scan, and .txt export when output exceeds 3 split messages.
         """
+        global _batch_cache_index_ready
         user = message.from_user
         if not user or not _is_admin_user(user.id):
             return await message.reply("🚫 Admins only.")
 
-        # Immediate ack so the user always sees the command was received
         status = await message.reply("⏳ Parsing batch range…")
-        text = (message.text or message.caption or "").strip()
+        raw_text = (message.text or message.caption or "").strip()
 
         try:
-            # --- parse links / range -------------------------------------------------
+            force_new = bool(re.search(r"(?:^|\s)-new(?=\s|$)", raw_text, re.I))
+            text = re.sub(r"(?:^|\s)-new(?=\s|$)", " ", raw_text, flags=re.I).strip()
+
             link_re = re.compile(
                 r"https?://t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))(?:\?[^\s]*)?",
                 re.I,
@@ -4190,7 +4540,7 @@ def register_handlers(bot):
                 re.I,
             )
 
-            chat_ref = None  # str "@name" or int -100...
+            chat_ref = None
             start_id = end_id = None
 
             range_m = range_re.search(text)
@@ -4243,21 +4593,17 @@ def register_handlers(bot):
                 return await status.edit_text(
                     "📌 <b>Usage</b>\n\n"
                     "<code>/batch https://t.me/username/14816-https://t.me/username/14851</code>\n\n"
-                    "Or compact:\n"
-                    "<code>/batch https://t.me/c/1234567890/2081-2083 The Ramparts of Ice</code>\n\n"
-                    "• Add an optional filename filter after the range (case-insensitive)\n"
-                    "• Works with public (@username) and private (c/ID) links\n"
-                    "• No hard-coded range cap; large ranges are fetched in chunks\n"
-                    "• Bot only needs to be a member/admin of the source channel\n"
-                    "• <b>No storage channel (CHANNEL_ID) required</b> for generating links\n"
-                    "• Query params like <code>?single</code> are fine",
+                    "Or with filename filter &amp; <code>-new</code> flag:\n"
+                    "<code>/batch -new https://t.me/c/1234567890/2081-2083 The Ramparts of Ice</code>\n\n"
+                    "• <b>Persistent Cache:</b> Reuses previously scanned message IDs automatically\n"
+                    "• <b><code>-new</code> flag:</b> Bypasses cache and forces a fresh scan\n"
+                    "• <b>Large Output:</b> &gt;3 split messages are exported cleanly as a <code>.txt</code> file",
                     parse_mode=ParseMode.HTML,
                 )
 
             if end_id < start_id:
                 start_id, end_id = end_id, start_id
 
-            # --- resolve peer so get_messages is reliable for public channels ------
             try:
                 chat_obj = await client.get_chat(chat_ref)
                 resolved_chat_id = chat_obj.id
@@ -4266,30 +4612,17 @@ def register_handlers(bot):
                 return await status.edit_text(
                     f"❌ Cannot access chat <code>{html.escape(str(chat_ref))}</code>\n\n"
                     f"<code>{html.escape(type(e).__name__)}: {html.escape(str(e)[:200])}</code>\n\n"
-                    "Add the bot as a member (or admin) of that channel/group and try again.\n"
-                    "No storage channel is required — only access to the source chat.",
+                    "Add the bot as a member (or admin) of that channel/group and try again.",
                     parse_mode=ParseMode.HTML,
                 )
 
-            # Everything after the message range is an optional filename/title filter.
-            # Remove command syntax and Telegram URLs while preserving the user's words.
             filter_text = re.sub(r"^\s*/batch\b", "", text, flags=re.I)
             filter_text = re.sub(r"https?://t\.me/(?:c/\d+|[A-Za-z0-9_]+)/\d+(?:\?[^\s]*)?", " ", filter_text, flags=re.I)
-            # Also strip the compact second endpoint in /batch <link>-<message_id>.
             filter_text = re.sub(r"(?<!\w)[-–]\s*\d+\b", " ", filter_text, count=1)
             filter_text = re.sub(r"\b\d+\s*[-–]\s*\d+\b", " ", filter_text, count=1)
             filter_text = re.sub(r"\s+", " ", filter_text).strip(" \t\r\n-–|:")
             filter_key = filter_text.casefold()
 
-            await status.edit_text(
-                f"🔄 Batch processing <b>{html.escape(str(chat_title))}</b>\n"
-                f"Messages <code>{start_id}</code>–<code>{end_id}</code>…\n"
-                + (f"Filename filter: <b>{html.escape(filter_text)}</b>\n" if filter_text else "")
-                + "<i>Storage channel not required for link generation.</i>",
-                parse_mode=ParseMode.HTML,
-            )
-
-            # Prefer Vercel website for Watch Online links (stream proxied to VPS)
             base_url = (
                 (await get_watch_page_base_url())
                 or (await get_active_cloudflare_url())
@@ -4299,131 +4632,85 @@ def register_handlers(bot):
             )
             base_url = str(base_url or "").rstrip("/")
             if not base_url:
-                return await status.edit_text(
-                    "❌ No public website URL configured. "
-                    "Set WEBSITE_URL / BASE_URL to your Vercel site "
-                    "(e.g. https://animovieszoneflix.vercel.app) or start the tunnel."
-                )
+                return await status.edit_text("❌ No public website URL configured. Set /baseurl and retry.")
 
             runtime_cfg = await db.site_settings.find_one({"_id": "runtime"}) or {}
             downloads_enabled = runtime_cfg.get("downloads_enabled", True)
             streaming_enabled = runtime_cfg.get("streaming_enabled", True)
             fs_username = (runtime_cfg.get("filestore_bot_username") or "").strip().lstrip("@")
 
-            results: list[str] = []
-            errors: list[str] = []
-            idx = 0
-            total = end_id - start_id + 1
-
-            # Split range automatically into 5–10 parts based on total range size
-            import math as _math
-            import time as _time
-            if total <= 50:
-                num_parts = min(5, total)
-            else:
-                num_parts = min(10, max(5, _math.ceil(total / 200)))
-
-            part_ranges: list[tuple[int, int, int]] = []
-            base_size, rem = divmod(total, num_parts)
-            cur = start_id
-            for p_idx in range(num_parts):
-                p_len = base_size + (1 if p_idx < rem else 0)
-                if p_len <= 0:
-                    continue
-                part_ranges.append((p_idx, cur, cur + p_len - 1))
-                cur += p_len
-
-            part_state = {
-                p_idx: {"done": 0, "total": (pe - ps + 1), "status": "queued"}
-                for p_idx, ps, pe in part_ranges
-            }
-            last_ui_at = 0.0
-
-            def _render_progress(force: bool = False) -> str | None:
-                nonlocal last_ui_at
-                now_ts = _time.monotonic()
-                if not force and (now_ts - last_ui_at) < 1.5:
-                    return None
-                last_ui_at = now_ts
-                done_sum = sum(v["done"] for v in part_state.values())
-                pct = min(100, int((done_sum / max(1, total)) * 100))
-                filled = int(round((pct / 100) * 16))
-                bar = "█" * filled + "░" * (16 - filled)
-                done_parts = sum(1 for v in part_state.values() if v["status"] == "done")
-                active_parts = sum(1 for v in part_state.values() if v["status"] == "running")
-                part_badges = []
-                for p_i in sorted(part_state):
-                    st = part_state[p_i]
-                    if st["status"] == "done":
-                        part_badges.append(f"P{p_i + 1} ✅")
-                    elif st["status"] == "running":
-                        ppct = int((st["done"] / max(1, st["total"])) * 100)
-                        part_badges.append(f"P{p_i + 1} ⚡{ppct}%")
-                    else:
-                        part_badges.append(f"P{p_i + 1} ⏳")
-                return (
-                    f"⚡ <b>Batch Processing ({len(part_ranges)} parts · 5 parallel)</b>\n"
-                    f"<code>[{bar}]</code> <b>{pct}%</b> ({done_sum}/{total})\n"
-                    f"Done: {done_parts}/{len(part_ranges)} · Active: {active_parts}\n"
-                    + " · ".join(part_badges)
-                )
-
-            async def _push_progress(force: bool = False):
-                txt = _render_progress(force=force)
-                if not txt:
-                    return
+            if not _batch_cache_index_ready:
                 try:
-                    await status.edit_text(txt, parse_mode=ParseMode.HTML)
+                    await db.batch_msg_cache.create_index([("chat_id", 1), ("msg_id", 1)], unique=True)
                 except Exception:
                     pass
+                _batch_cache_index_ready = True
 
-            part_sem = asyncio.Semaphore(5)
+            total = end_id - start_id + 1
+            cached_map: dict[int, dict] = {}
+            if not force_new:
+                async for cdoc in db.batch_msg_cache.find(
+                    {"chat_id": resolved_chat_id, "msg_id": {"$gte": start_id, "$lte": end_id}},
+                    {"_id": 0},
+                ):
+                    mid_val = cdoc.get("msg_id")
+                    if mid_val is not None:
+                        cached_map[int(mid_val)] = cdoc
 
-            async def run_part(p_idx: int, p_start: int, p_end: int):
-                async with part_sem:
-                    part_state[p_idx]["status"] = "running"
-                    await _push_progress()
-                    out = []
-                    for cs in range(p_start, p_end + 1, 200):
-                        chunk_ids = list(range(cs, min(cs + 200, p_end + 1)))
-                        try:
-                            fetched = await client.get_messages(resolved_chat_id, chunk_ids)
-                            if not isinstance(fetched, list):
-                                fetched = [fetched]
-                            by_id = {getattr(item, "id", None): item for item in fetched if item is not None}
-                            for mid in chunk_ids:
-                                out.append((mid, by_id.get(mid)))
-                        except Exception as batch_error:
-                            logger.warning("batch part %s chunk %s-%s failed, falling back: %s", p_idx + 1, chunk_ids[0], chunk_ids[-1], batch_error)
-                            for mid in chunk_ids:
-                                try:
-                                    item = await client.get_messages(resolved_chat_id, mid)
-                                    if isinstance(item, list):
-                                        item = item[0] if item else None
-                                except Exception as item_error:
-                                    logger.warning("batch msg %s fetch failed: %s", mid, item_error)
-                                    item = None
-                                out.append((mid, item))
-                        part_state[p_idx]["done"] += len(chunk_ids)
-                        await _push_progress()
-                    part_state[p_idx]["status"] = "done"
-                    await _push_progress()
-                    return out
+            missing_ids = [mid for mid in range(start_id, end_id + 1) if mid not in cached_map]
+            cache_hits = len(cached_map)
 
-            await _push_progress(force=True)
-            part_outputs = await asyncio.gather(*(run_part(pi, ps, pe) for pi, ps, pe in part_ranges))
-            await _push_progress(force=True)
+            if force_new:
+                scan_note = f"🔄 <b>Fresh scan (<code>-new</code>)</b>: scanning all <code>{total}</code> messages (cache bypassed)…"
+            elif cache_hits > 0 and missing_ids:
+                scan_note = (
+                    f"⚡ <b>Using cached data</b> for <code>{cache_hits}/{total}</code> messages — "
+                    f"scanning only <code>{len(missing_ids)}</code> missing message IDs…"
+                )
+            elif cache_hits > 0 and not missing_ids:
+                scan_note = f"⚡ <b>100% Cache Hit</b> (<code>{cache_hits}/{total}</code> messages) — building links instantly…"
+            else:
+                scan_note = f"⚡ Scanning <code>{total}</code> messages at max speed…"
 
-            all_items = []
-            for part_pairs in part_outputs:
-                all_items.extend(part_pairs)
+            await status.edit_text(
+                f"🔄 Batch processing <b>{html.escape(str(chat_title))}</b>\n"
+                f"Range: <code>{start_id}</code>–<code>{end_id}</code>\n"
+                + (f"Filter: <b>{html.escape(filter_text)}</b>\n" if filter_text else "")
+                + scan_note,
+                parse_mode=ParseMode.HTML,
+            )
 
-            # Extract media metadata in memory first
-            prepared = []
-            for msg_id, source_msg in all_items:
-                try:
+            import time as _time
+            errors: list[str] = []
+            newly_scanned: dict[int, dict] = {}
+
+            if missing_ids:
+                chunks_to_fetch = [missing_ids[i : i + 200] for i in range(0, len(missing_ids), 200)]
+                done_missing = 0
+                total_missing = len(missing_ids)
+                last_ui_at = _time.monotonic()
+                fetch_sem = asyncio.Semaphore(8)
+
+                async def _push_scan_progress(force: bool = False):
+                    nonlocal last_ui_at
+                    now_ts = _time.monotonic()
+                    if not force and (now_ts - last_ui_at) < 1.2:
+                        return
+                    last_ui_at = now_ts
+                    pct = min(100, int((done_missing / max(1, total_missing)) * 100))
+                    filled = int(round((pct / 100) * 16))
+                    bar = "█" * filled + "░" * (16 - filled)
+                    try:
+                        await status.edit_text(
+                            f"{scan_note}\n<code>[{bar}]</code> <b>{pct}%</b> ({done_missing}/{total_missing} missing)",
+                            parse_mode=ParseMode.HTML,
+                        )
+                    except Exception:
+                        pass
+
+                def _extract_cache_entry(mid: int, source_msg) -> dict:
                     if not source_msg or getattr(source_msg, "empty", False) or not _is_media_message(source_msg):
-                        continue
+                        return {"chat_id": resolved_chat_id, "msg_id": mid, "has_media": False}
                     media = (
                         source_msg.document or source_msg.video or source_msg.audio
                         or source_msg.animation or source_msg.photo or source_msg.voice
@@ -4458,31 +4745,101 @@ def register_handlers(bot):
 
                     caption = getattr(source_msg, "caption", None) or getattr(source_msg, "text", None) or ""
                     file_name = extract_filename_from_caption(caption, file_name)
-                    searchable_name = f"{file_name}\n{caption}".casefold()
-                    if filter_key and filter_key not in searchable_name:
-                        continue
-
                     file_id = getattr(media, "file_id", None)
                     if not file_id:
-                        continue
-
+                        return {"chat_id": resolved_chat_id, "msg_id": mid, "has_media": False}
                     src_chat_id = source_msg.chat.id if source_msg.chat else resolved_chat_id
-                    prepared.append({
-                        "msg_id": source_msg.id,
-                        "chat_id": src_chat_id,
+                    return {
+                        "chat_id": resolved_chat_id,
+                        "src_chat_id": src_chat_id,
+                        "msg_id": mid,
+                        "has_media": True,
                         "file_id": file_id,
-                        "file_unique_id": str(getattr(media, "file_unique_id", source_msg.id)),
+                        "file_unique_id": str(getattr(media, "file_unique_id", mid)),
                         "filename": file_name,
                         "mime_type": mime_type,
-                        "file_size": file_size or 0,
-                    })
-                except Exception as e:
-                    err_txt = f"{type(e).__name__}: {e}"
-                    logger.warning("batch msg %s failed: %s", msg_id, err_txt)
-                    if len(errors) < 6:
-                        errors.append(f"• msg {msg_id}: {html.escape(err_txt[:140])}")
+                        "file_size": int(file_size or 0),
+                        "caption": caption[:1000],
+                    }
 
-            # Bulk MongoDB lookup + bulk insert (2 DB round-trips total instead of 2*N)
+                async def _fetch_chunk(chunk_ids: list[int]):
+                    nonlocal done_missing
+                    async with fetch_sem:
+                        by_id = {}
+                        for attempt in range(2):
+                            try:
+                                fetched = await client.get_messages(resolved_chat_id, chunk_ids)
+                                if not isinstance(fetched, list):
+                                    fetched = [fetched]
+                                by_id = {getattr(item, "id", None): item for item in fetched if item is not None}
+                                break
+                            except Exception as batch_error:
+                                wait_sec = getattr(batch_error, "value", None)
+                                if wait_sec and attempt == 0:
+                                    await asyncio.sleep(min(int(wait_sec) + 1, 30))
+                                    continue
+                                logger.warning("batch chunk %s-%s fallback: %s", chunk_ids[0], chunk_ids[-1], batch_error)
+                                for mid in chunk_ids:
+                                    try:
+                                        item = await client.get_messages(resolved_chat_id, mid)
+                                        if isinstance(item, list):
+                                            item = item[0] if item else None
+                                        if item is not None:
+                                            by_id[mid] = item
+                                    except Exception as item_err:
+                                        if len(errors) < 6:
+                                            errors.append(f"• msg {mid}: {html.escape(str(item_err)[:120])}")
+                                break
+                        for mid in chunk_ids:
+                            newly_scanned[mid] = _extract_cache_entry(mid, by_id.get(mid))
+                        done_missing += len(chunk_ids)
+                        await _push_scan_progress()
+
+                await asyncio.gather(*(_fetch_chunk(ch) for ch in chunks_to_fetch))
+                await _push_scan_progress(force=True)
+
+                # Persist newly scanned entries in MongoDB cache (single bulk_write)
+                if newly_scanned:
+                    try:
+                        from pymongo import UpdateOne
+                        now_dt = datetime.datetime.utcnow()
+                        ops = [
+                            UpdateOne(
+                                {"chat_id": resolved_chat_id, "msg_id": mid},
+                                {"$set": {**entry, "updated_at": now_dt}},
+                                upsert=True,
+                            )
+                            for mid, entry in newly_scanned.items()
+                        ]
+                        for i in range(0, len(ops), 500):
+                            await db.batch_msg_cache.bulk_write(ops[i : i + 500], ordered=False)
+                    except Exception as cache_err:
+                        logger.warning("batch_msg_cache write failed: %s", cache_err)
+
+            # Merge cached + newly scanned in exact message ID order
+            prepared: list[dict] = []
+            for mid in range(start_id, end_id + 1):
+                entry = newly_scanned.get(mid) if force_new else (cached_map.get(mid) or newly_scanned.get(mid))
+                if not entry or not entry.get("has_media"):
+                    continue
+                file_name = entry.get("filename") or "file"
+                caption = entry.get("caption") or ""
+                if filter_key and filter_key not in f"{file_name}\n{caption}".casefold():
+                    continue
+                prepared.append({
+                    "msg_id": mid,
+                    "chat_id": entry.get("src_chat_id") or resolved_chat_id,
+                    "file_id": entry.get("file_id") or "",
+                    "file_unique_id": str(entry.get("file_unique_id") or mid),
+                    "filename": file_name,
+                    "mime_type": entry.get("mime_type") or "application/octet-stream",
+                    "file_size": int(entry.get("file_size") or 0),
+                })
+
+            results: list[str] = []
+            plain_results: list[str] = []
+            idx = 0
+
             if prepared:
                 by_chat: dict[int, list[int]] = {}
                 for item in prepared:
@@ -4503,10 +4860,7 @@ def register_handlers(bot):
                     if ex:
                         item["short_code"] = ex["short_code"]
                         if ex.get("filename") != item["filename"]:
-                            await files_col.update_one(
-                                {"_id": ex["_id"]},
-                                {"$set": {"filename": item["filename"]}},
-                            )
+                            await files_col.update_one({"_id": ex["_id"]}, {"$set": {"filename": item["filename"]}})
                     else:
                         sc = generate_short_code()
                         item["short_code"] = sc
@@ -4538,16 +4892,21 @@ def register_handlers(bot):
                         f"📦 Size: {size_str}\n\n"
                         f"🔗 Generated Links\n\n"
                     )
+                    pblock = f"{idx}. File: {file_name}\nSize: {size_str}\n"
                     if downloads_enabled and base_url:
                         dl = f"{base_url}/dl/{short_code}"
                         block += f"⬇️ Direct Download: <code>{html.escape(dl)}</code>\n\n"
+                        pblock += f"Download: {dl}\n"
                     elif fs_username:
                         dl = f"https://t.me/{fs_username}?start=file_{short_code}"
                         block += f"📥 Get File in Bot: <code>{html.escape(dl)}</code>\n\n"
+                        pblock += f"Get File in Bot: {dl}\n"
                     if streaming_enabled and base_url:
                         watch = f"{base_url}/watch/{short_code}"
                         block += f"▶️ Watch / Stream: <code>{html.escape(watch)}</code>\n"
+                        pblock += f"Watch: {watch}\n"
                     results.append(block)
+                    plain_results.append(pblock)
 
             if not results:
                 err_block = ("\n\n" + "\n".join(errors)) if errors else ""
@@ -4559,12 +4918,16 @@ def register_handlers(bot):
                     "Checklist:\n"
                     "• Bot is a member/admin of the channel\n"
                     "• Message IDs are correct and contain media\n"
-                    "• Filename filter matches the file caption/name\n"
-                    "• No storage channel is required for this command",
+                    "• Filename filter matches the file caption/name",
                     parse_mode=ParseMode.HTML,
                 )
 
-            header = f"✅ <b>Batch Generated</b> ({idx} file{'s' if idx != 1 else ''})\n\n"
+            cache_summary = (
+                f"Fresh scan (-new): {total}"
+                if force_new
+                else f"Cached: {cache_hits} · Scanned: {len(missing_ids)}"
+            )
+            header = f"✅ <b>Batch Generated</b> ({idx} file{'s' if idx != 1 else ''} · {cache_summary})\n\n"
             chunks: list[str] = []
             current = header
             for block in results:
@@ -4580,8 +4943,31 @@ def register_handlers(bot):
                 await status.delete()
             except Exception:
                 pass
-            for chunk in chunks:
-                await message.reply(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+            if len(chunks) > 3:
+                import io as _io
+                txt_body = (
+                    f"Batch Generated ({idx} files | {cache_summary})\n"
+                    f"Chat: {chat_title} ({start_id}-{end_id})\n"
+                    + (f"Filter: {filter_text}\n" if filter_text else "")
+                    + "=" * 48
+                    + "\n\n"
+                    + "\n".join(plain_results)
+                )
+                buf = _io.BytesIO(txt_body.encode("utf-8"))
+                buf.name = f"batch_{start_id}_{end_id}.txt"
+                await message.reply_document(
+                    document=buf,
+                    caption=(
+                        f"✅ <b>Batch Generated ({idx} files)</b>\n"
+                        f"> {cache_summary}\n"
+                        f"> Output exceeded 3 messages, sent as <code>.txt</code>."
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                for chunk in chunks:
+                    await message.reply(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
         except Exception as e:
             logger.exception("batch_command failed: %s", e)
@@ -4596,6 +4982,7 @@ def register_handlers(bot):
                     await message.reply(f"Batch failed: {type(e).__name__}: {e}")
                 except Exception:
                     pass
+
 
     def _is_media_message(msg: Message) -> bool:
         if not msg:
