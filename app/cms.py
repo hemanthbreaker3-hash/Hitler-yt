@@ -374,7 +374,7 @@ async def catalog(category: str | None = None, q: str | None = None):
         ]
     try:
         cf_base = await get_active_cloudflare_url()
-        rows = await pages.find(query, {'_id': 0}).sort('created_at', -1).to_list(100)
+        rows = await pages.find(query, {'_id': 0}).sort([('updated_at', -1), ('created_at', -1)]).to_list(100)
         items = [serialize_catalog_doc(row, cf_base) for row in rows]
         return {'items': items, 'cloudflare_url': cf_base or ''}
     except Exception as exc:
@@ -428,7 +428,7 @@ async def search_page(
         ]
 
     cf_base = await get_active_cloudflare_url()
-    raw_rows = await pages.find(query, {'_id': 0}).sort('created_at', -1).to_list(100)
+    raw_rows = await pages.find(query, {'_id': 0}).sort([('updated_at', -1), ('created_at', -1)]).to_list(100)
     rows = [serialize_catalog_doc(r, cf_base) for r in raw_rows]
     cats = await categories.find({}, {'_id': 0}).sort('name', 1).to_list(None)
 

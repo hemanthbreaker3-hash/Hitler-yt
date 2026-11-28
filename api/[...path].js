@@ -829,7 +829,8 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     .poster-card .title{font-size:14px!important;font-weight:700!important;color:#f8fafc!important;margin-bottom:2px!important}
     .poster-card .meta{font-size:12px!important;color:#94a3b8!important}
 
-    /* Clean, larger responsive catalog cards across all devices */
+    /* Clean, neat 2-per-row responsive catalog cards with instant mobile tap */
+    a,button,.btn,.chip,.poster-card{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
     .poster-grid{
       display:grid!important;
       grid-template-columns:repeat(2,minmax(0,1fr))!important;
@@ -838,13 +839,70 @@ function renderBaseLayout({ title = 'HITLER YT', headExtra = '', content = '' })
     }
     @media(min-width:600px){.poster-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:18px!important}}
     @media(min-width:1024px){.poster-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:22px!important}}
+    .poster-card{
+      position:relative!important;overflow:hidden!important;border-radius:14px!important;
+      background:linear-gradient(165deg,rgba(18,24,38,.96),rgba(10,14,24,.98))!important;
+      border:1px solid rgba(255,255,255,.1)!important;
+      box-shadow:0 10px 26px rgba(0,0,0,.38)!important;
+      display:flex!important;flex-direction:column!important;cursor:pointer!important;
+      transition:transform .18s cubic-bezier(.22,1,.36,1),border-color .2s,box-shadow .2s!important;
+    }
+    .poster-card:hover{
+      transform:translateY(-3px)!important;
+      border-color:rgba(34,211,238,.5)!important;
+      box-shadow:0 18px 36px rgba(0,0,0,.5),0 0 20px rgba(139,92,246,.16)!important;
+    }
+    .poster-card:active{transform:scale(.985)!important}
+    .poster-card .card-media{
+      position:relative!important;overflow:hidden!important;aspect-ratio:16/9!important;
+      background:#0e131e!important;border:0!important;border-radius:0!important;box-shadow:none!important;
+    }
+    .poster-card .card-media::after{
+      content:"";position:absolute;inset:0;pointer-events:none;z-index:1;
+      background:linear-gradient(180deg,rgba(7,9,14,.28) 0%,transparent 35%,transparent 68%,rgba(10,14,24,.6) 100%);
+    }
+    .poster-card img{width:100%;height:100%;aspect-ratio:16/9;object-fit:cover;background:#0e131e;transition:transform .3s ease}
+    .poster-card:hover img{transform:scale(1.04)}
+    @media(hover:none){.poster-card .play-hint{display:none!important}}
+    .poster-card .card-top-badges{
+      position:absolute;top:8px;left:8px;right:8px;z-index:3;
+      display:flex;align-items:center;justify-content:space-between;gap:6px;pointer-events:none;
+    }
+    .poster-card .badge-quality{
+      background:rgba(7,9,14,.78);color:#f8fafc;border:1px solid rgba(255,255,255,.2);
+      border-radius:6px;padding:3px 7px;font-size:10px;font-weight:800;letter-spacing:.04em;
+      backdrop-filter:blur(8px);white-space:nowrap;
+    }
+    .poster-card .badge-rating{
+      background:rgba(7,9,14,.78);color:#fbbf24;border:1px solid rgba(251,191,36,.35);
+      border-radius:6px;padding:3px 7px;font-size:10px;font-weight:800;letter-spacing:.02em;
+      backdrop-filter:blur(8px);white-space:nowrap;margin-left:auto;
+    }
+    .poster-card .info{
+      padding:11px 13px 13px!important;display:flex!important;flex-direction:column!important;gap:6px!important;flex:1!important;background:transparent!important;
+    }
+    .poster-card .title{
+      font-family:var(--font-display)!important;font-weight:700!important;
+      font-size:clamp(13.5px,2.1vw,15.5px)!important;line-height:1.28!important;color:#f8fafc!important;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin:0!important;
+    }
+    .poster-card .card-meta-row{
+      display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:nowrap;margin-top:auto;min-width:0;
+    }
+    .poster-card .meta{font-size:12px!important;font-weight:600;color:#94a3b8!important;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .poster-card .badge-genre{
+      background:linear-gradient(125deg,#3b82f6,#8b5cf6);color:#fff;border-radius:999px;
+      padding:3px 9px;font-size:10px;font-weight:800;letter-spacing:.03em;
+      box-shadow:0 3px 10px rgba(59,130,246,.25);white-space:nowrap;max-width:54%;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;
+    }
     @media(max-width:599px){
-      .poster-card .card-top-badges{top:7px;left:7px;right:7px;gap:4px}
-      .poster-card .badge-quality,.poster-card .badge-rating{padding:3px 6px;font-size:9.5px}
-      .poster-card .info{padding:10px 10px 11px!important;gap:6px!important}
-      .poster-card .title{font-size:13px!important}
-      .poster-card .meta{font-size:11px!important}
-      .poster-card .badge-genre{padding:2px 7px;font-size:9.5px}
+      .poster-card{border-radius:12px!important}
+      .poster-card .card-top-badges{top:6px;left:6px;right:6px;gap:4px}
+      .poster-card .badge-quality,.poster-card .badge-rating{padding:2px 6px;font-size:9px;border-radius:5px}
+      .poster-card .info{padding:9px 10px 10px!important;gap:5px!important}
+      .poster-card .title{font-size:12.5px!important}
+      .poster-card .meta{font-size:10.5px!important}
+      .poster-card .badge-genre{padding:2px 7px;font-size:9px}
     }
     .poster-card{
       position:relative!important;overflow:hidden!important;border-radius:16px!important;
@@ -4388,7 +4446,7 @@ export default async function handler(req, res) {
       const rawItems = await db
         .collection('catalog_pages')
         .find(query, { projection: { _id: 0 } })
-        .sort({ created_at: -1 })
+        .sort({ updated_at: -1, created_at: -1 })
         .limit(100)
         .toArray();
       const items = rawItems.map((item) => serializeCatalogDoc(item, cloudflareUrl));
@@ -4659,7 +4717,7 @@ export default async function handler(req, res) {
               ],
             }
           : {};
-        const rows = await db.collection('catalog_pages').find(query, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(300).toArray();
+        const rows = await db.collection('catalog_pages').find(query, { projection: { _id: 0 } }).sort({ updated_at: -1, created_at: -1 }).limit(300).toArray();
         sendJson(res, 200, { items: rows.map((r) => serializeCatalogDoc(r, cloudflareUrl)) });
         return;
       }
@@ -4747,7 +4805,7 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET' && pathname === '/') {
       const [rawItems, rawCats] = await Promise.all([
-        db.collection('catalog_pages').find({ published: true }, { projection: { _id: 0, overview: 0 } }).sort({ created_at: -1 }).limit(1000).toArray(),
+        db.collection('catalog_pages').find({ published: true }, { projection: { _id: 0, overview: 0 } }).sort({ updated_at: -1, created_at: -1 }).limit(1000).toArray(),
         db.collection('catalog_categories').find({}, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
       ]);
       const initialItems = rawItems.map((item) => { const s = serializeCatalogDoc(item, cloudflareUrl); delete s.groups; return s; });
@@ -4785,7 +4843,7 @@ export default async function handler(req, res) {
       }
 
       const [rawRows, cats, genreDocs] = await Promise.all([
-        db.collection('catalog_pages').find(query, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(1000).toArray(),
+        db.collection('catalog_pages').find(query, { projection: { _id: 0 } }).sort({ updated_at: -1, created_at: -1 }).limit(1000).toArray(),
         db.collection('catalog_categories').find({}, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
         db.collection('catalog_pages').find({ published: true, genres: { $exists: true } }, { projection: { genres: 1 } }).toArray(),
       ]);

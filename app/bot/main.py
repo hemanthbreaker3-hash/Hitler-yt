@@ -82,6 +82,7 @@ _awaiting_restore: set[int] = set()
 
 # /fspanel await states: user_id -> action
 _awaiting_fspanel: dict[int, str] = {}
+_awaiting_autoupdate: dict[int, dict] = {}
 
 # FileStore secondary bot (when admin sets a different bot token via /filestore)
 _filestore_client: Optional[Client] = None
@@ -408,13 +409,13 @@ async def deliver_filestore_file(client, user_id: int, file_data: dict, reply_to
             del_txt = f"{delay_sec // 60} minute(s)"
         else:
             del_txt = f"{delay_sec} second(s)"
-        auto_line = f"⏱ This message will auto-delete in **{del_txt}**.\nSave the file above before it disappears."
+        auto_line = f"⏱ This message will auto-delete in <b>{del_txt}</b>.\nSave the file above before it disappears."
     else:
         auto_line = "Save the file from the message above."
 
     info_msg = await client.send_message(
         user_id,
-        f"✅ **File delivered**\n\n📂 `{html.escape(str(fname))}`\n\n{auto_line}",
+        f"✅ <b>File delivered</b>\n\n📂 <code>{html.escape(str(fname))}</code>\n\n{auto_line}",
         parse_mode=ParseMode.HTML,
         reply_markup=kb,
         reply_to_message_id=getattr(copied, "id", None) if copied else None,
@@ -887,8 +888,9 @@ async def start_filestore_client(token: str, username: str | None = None) -> dic
                 BotCommand("start", "Get file from deep link"),
                 BotCommand("help", "Show help & commands"),
                 BotCommand("genlink", "Reply to file/message for deep link (admin)"),
+            BotCommand("autoubdate", "Auto-post new/updated pages to channels (admin)"),
                 BotCommand("stats", "FileStore users & stats (admin)"),
-                BotCommand("fspanel", "genlink", "stats", "Manage admins, fsub, auto-delete (admin)"),
+                BotCommand("fspanel", "genlink", "stats", "autoubdate", "autoupdate", "Manage admins, fsub, auto-delete (admin)"),
                 BotCommand("ping", "Check bot latency"),
             ])
         except Exception as e:
@@ -1485,13 +1487,12 @@ def register_handlers(bot):
                         logger.exception("FileStore delivery failed for short_code=%s: %s", code, e)
                         err = html.escape(str(e)[:220])
                         return await message.reply(
-                            "❌ **Could not deliver this file**\n\n"
+                            "❌ <b>Could not deliver this file</b>\n\n"
                             f"<code>{err}</code>\n\n"
-                            "> Possible causes:\n"
-                            "> • Bot cannot access the **source** channel/message (add bot as member/admin there)\n"
-                            "> • Original message was deleted from Telegram\n"
-                            "> • file_id expired — re-run `/batch` or `/link` on the source\n\n"
-                            "> Storage channel (`CHANNEL_ID`) is **optional**. Access to the source chat is enough.",
+                            "Possible causes:\n"
+                            "• Bot cannot access the <b>source</b> channel/message (add bot as member/admin there)\n"
+                            "• Original message was deleted from Telegram\n"
+                            "• file_id expired — re-run <code>/batch</code> or <code>/genlink</code> on the source",
                             parse_mode=ParseMode.HTML,
                         )
                 else:
@@ -1936,6 +1937,9 @@ def register_handlers(bot):
         if raw_override is None and user.id in _awaiting_fspanel and _is_admin_user(user.id):
             await _handle_fspanel_text_input(client, message, user)
             return
+        if raw_override is None and user.id in _awaiting_autoupdate and _is_admin_user(user.id):
+            await _handle_autoupdate_text_input(client, message, user)
+            return
         raw = (raw_override if raw_override is not None else (message.text or "")).strip()
         pending = _awaiting_shortener.get(user.id) if raw_override is None else None
         if pending and _is_admin_user(user.id):
@@ -2059,9 +2063,9 @@ def register_handlers(bot):
                                     )
                         watch_url = f"{base_url}/watch/{sc}"
                         return await status.edit_text(
-                            f"✅ **Download link is working!**\n\n"
-                            f"📁 File: `{rec.get('filename') or 'Media'}`\n"
-                            f"▶️ **Watch Link:** <code>{html.escape(watch_url)}</code>",
+                            f"✅ <b>Download link is working!</b>\n\n"
+                            f"📁 File: <code>{html.escape(str(rec.get('filename') or 'Media'))}</code>\n"
+                            f"▶️ <b>Watch Link:</b> <code>{html.escape(watch_url)}</code>",
                             parse_mode=ParseMode.HTML,
                             disable_web_page_preview=True,
                         )
@@ -2124,10 +2128,10 @@ def register_handlers(bot):
                     watch_url = f"{base_url}/watch/{sc}"
                     size_str = format_bytes(fsize) if fsize else "Unknown"
                     return await status.edit_text(
-                        f"✅ **Download link is working!**\n\n"
-                        f"📁 File: `{html.escape(fname)}`\n"
-                        f"📦 Size: `{size_str}`\n"
-                        f"▶️ **Watch Link:** <code>{html.escape(watch_url)}</code>\n\n"
+                        f"✅ <b>Download link is working!</b>\n\n"
+                        f"📁 File: <code>{html.escape(fname)}</code>\n"
+                        f"📦 Size: <code>{size_str}</code>\n"
+                        f"▶️ <b>Watch Link:</b> <code>{html.escape(watch_url)}</code>\n\n"
                         f"<i>Note: Watch link stays synced — if the download link dies, watch will also stop working.</i>",
                         parse_mode=ParseMode.HTML,
                         disable_web_page_preview=True,
@@ -3375,16 +3379,6 @@ def register_handlers(bot):
         return text, kb
 
 
-    @bot.on_message(filters.command("stats") & filters.private)
-    async def primary_stats_handler(client, message: Message):
-        user = message.from_user
-        if not user or user.is_bot:
-            return
-        await refresh_runtime_admin_cache()
-        if not _is_admin_user(user.id):
-            return await message.reply("🚫 Admins only.")
-        await message.reply(await build_filestore_stats_text(), parse_mode=ParseMode.HTML)
-
     @bot.on_message(filters.command("genlink"))
     async def primary_genlink_handler(client, message: Message):
         await handle_genlink_command(client, message)
@@ -3444,6 +3438,189 @@ def register_handlers(bot):
             await callback.message.reply(
                 body,
                 reply_markup=_kb(invite_rows) if invite_rows else None,
+            )
+
+
+    async def _autoupdate_panel_text_kb():
+        from app.utils.autoupdate import get_autoupdate_config
+        cfg = await get_autoupdate_config()
+        enabled = cfg["enabled"]
+        channels = cfg["channels"]
+        st_txt = "✅ Enabled" if enabled else "❌ Disabled"
+        if channels:
+            ch_lines = "\n".join(
+                f"• <b>{html.escape(str(c['title']))}</b> (<code>{c['chat_id']}</code>)"
+                + (f" @{html.escape(str(c['username']))}" if c.get("username") else "")
+                for c in channels
+            )
+        else:
+            ch_lines = "<i>(No channels added yet)</i>"
+        text = (
+            "📣 <b>Auto-Update Channel Settings</b>\n\n"
+            f"<b>Status:</b> {st_txt}\n"
+            f"<b>Channels ({len(channels)}):</b>\n{ch_lines}\n\n"
+            "<i>When enabled, creating or updating groups/pages on the website automatically posts the formatted update to all added channels.</i>"
+        )
+        toggle_btn = InlineKeyboardButton(
+            "❌ Disable" if enabled else "✅ Enable",
+            callback_data="autoub:toggle",
+        )
+        rows = [
+            [toggle_btn, InlineKeyboardButton("➕ Add Channel", callback_data="autoub:add")],
+        ]
+        if channels:
+            rows.append([
+                InlineKeyboardButton("🔄 Replace Channel", callback_data="autoub:replace"),
+                InlineKeyboardButton("➖ Remove Channel", callback_data="autoub:remove"),
+            ])
+        rows.append([InlineKeyboardButton("🔄 Refresh", callback_data="autoub:refresh")])
+        return text, _kb(rows)
+
+    async def _handle_autoupdate_text_input(client, message: Message, user):
+        from app.utils.autoupdate import get_autoupdate_config, save_autoupdate_config, verify_channel_post_permission
+        state = _awaiting_autoupdate.pop(user.id, None)
+        if not state:
+            return
+        raw = (message.text or "").strip()
+        if raw.lower() in ("/cancel", "cancel"):
+            return await message.reply("Cancelled.")
+
+        fwd_chat = getattr(message, "forward_from_chat", None)
+        chat_ref = None
+        if fwd_chat and getattr(fwd_chat, "id", None):
+            chat_ref = int(fwd_chat.id)
+        else:
+            tok = raw.split()[0].strip() if raw else ""
+            if "t.me/" in tok:
+                part = tok.split("t.me/", 1)[1].split("/", 1)[0].split("?", 1)[0]
+                if part and not part.startswith("+"):
+                    tok = "@" + part.lstrip("@")
+            if tok.lstrip("-").isdigit():
+                chat_ref = int(tok)
+            elif tok:
+                chat_ref = tok if tok.startswith("@") else ("@" + tok)
+
+        if not chat_ref:
+            return await message.reply("❌ Invalid channel. Send `@username`, `-100...` ID, `https://t.me/...`, or forward a message from the channel.")
+
+        status = await message.reply("🔍 Checking bot permissions in channel…")
+        ok, info, err = await verify_channel_post_permission(client, chat_ref)
+        if not ok or not info:
+            return await status.edit_text(f"❌ <b>Cannot add channel</b>\n\n{err}", parse_mode=ParseMode.HTML)
+
+        cfg = await get_autoupdate_config()
+        channels = list(cfg["channels"])
+        action = state.get("action")
+        if action == "replace":
+            target_cid = state.get("target_cid")
+            channels = [c for c in channels if c["chat_id"] != target_cid and c["chat_id"] != info["chat_id"]]
+            channels.append(info)
+        else:
+            if not any(c["chat_id"] == info["chat_id"] for c in channels):
+                channels.append(info)
+
+        await save_autoupdate_config(cfg["enabled"], channels)
+        text, kb = await _autoupdate_panel_text_kb()
+        await status.edit_text(
+            f"✅ <b>Saved channel:</b> {html.escape(info['title'])} (<code>{info['chat_id']}</code>)\n\n" + text,
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML,
+        )
+
+    @bot.on_message(filters.command(["autoubdate", "autoupdate"]) & filters.private)
+    async def autoubdate_handler(client, message: Message):
+        user = message.from_user
+        if not user or user.is_bot:
+            return
+        await refresh_runtime_admin_cache()
+        if not _is_admin_user(user.id):
+            return await message.reply("🚫 Admins only.")
+        _awaiting_autoupdate.pop(user.id, None)
+        text, kb = await _autoupdate_panel_text_kb()
+        await message.reply(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+    @bot.on_callback_query(filters.regex(r"^autoub:"))
+    async def autoubdate_callback(client, callback: CallbackQuery):
+        from app.utils.autoupdate import get_autoupdate_config, save_autoupdate_config
+        user = callback.from_user
+        if not user or not _is_admin_user(user.id):
+            return await callback.answer("Admins only", show_alert=True)
+        action = (callback.data or "").split(":", 1)[-1]
+        cfg = await get_autoupdate_config()
+
+        if action == "refresh":
+            text, kb = await _autoupdate_panel_text_kb()
+            try:
+                await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+            return await callback.answer("Refreshed")
+
+        if action == "toggle":
+            new_enabled = not cfg["enabled"]
+            await save_autoupdate_config(new_enabled, cfg["channels"])
+            text, kb = await _autoupdate_panel_text_kb()
+            try:
+                await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+            return await callback.answer("Enabled" if new_enabled else "Disabled")
+
+        if action == "add":
+            _awaiting_autoupdate[user.id] = {"action": "add"}
+            await callback.answer()
+            return await callback.message.reply(
+                "➕ <b>Add Auto-Update Channel</b>\n\n"
+                "Send the channel <code>@username</code>, <code>-100...</code> ID, <code>https://t.me/...</code> link, or <b>forward any message</b> from that channel.\n"
+                "<i>Bot must be an admin with Post Messages permission. Send /cancel to abort.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+
+        if action == "remove":
+            if not cfg["channels"]:
+                return await callback.answer("No channels to remove", show_alert=True)
+            rows = [
+                [InlineKeyboardButton(f"🗑 {c['title']} ({c['chat_id']})", callback_data=f"autoub:del:{c['chat_id']}")]
+                for c in cfg["channels"]
+            ]
+            rows.append([InlineKeyboardButton("⬅️ Back", callback_data="autoub:refresh")])
+            await callback.answer()
+            return await callback.message.edit_text(
+                "➖ <b>Select a channel to remove:</b>",
+                reply_markup=_kb(rows),
+                parse_mode=ParseMode.HTML,
+            )
+
+        if action.startswith("del:"):
+            cid = int(action.split(":", 1)[1])
+            channels = [c for c in cfg["channels"] if c["chat_id"] != cid]
+            await save_autoupdate_config(cfg["enabled"], channels)
+            text, kb = await _autoupdate_panel_text_kb()
+            await callback.answer("Channel removed")
+            return await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+        if action == "replace":
+            if not cfg["channels"]:
+                return await callback.answer("No channels to replace", show_alert=True)
+            rows = [
+                [InlineKeyboardButton(f"🔄 {c['title']} ({c['chat_id']})", callback_data=f"autoub:rep:{c['chat_id']}")]
+                for c in cfg["channels"]
+            ]
+            rows.append([InlineKeyboardButton("⬅️ Back", callback_data="autoub:refresh")])
+            await callback.answer()
+            return await callback.message.edit_text(
+                "🔄 <b>Select a channel to replace:</b>",
+                reply_markup=_kb(rows),
+                parse_mode=ParseMode.HTML,
+            )
+
+        if action.startswith("rep:"):
+            cid = int(action.split(":", 1)[1])
+            _awaiting_autoupdate[user.id] = {"action": "replace", "target_cid": cid}
+            await callback.answer()
+            return await callback.message.reply(
+                f"🔄 Send the new channel <code>@username</code>, <code>-100...</code> ID, or forward a message to replace <code>{cid}</code>.",
+                parse_mode=ParseMode.HTML,
             )
 
     @bot.on_message(filters.command("fspanel") & filters.private)
@@ -3714,15 +3891,14 @@ def register_handlers(bot):
         user = message.from_user
         if not user or user.is_bot or not _is_admin_user(user.id):
             return
-        total_files = await files_col.count_documents({})
         total_users = await users_col.count_documents({})
+        fs_stats = await build_filestore_stats_text()
         await message.reply(
-            f"📊 **System Statistics**\n\n"
-            f"> 👥 **Total Users:** `{total_users}`\n"
-            f"> 📁 **Total Files Generated:** `{total_files}`\n"
-            f"> 🤖 **Active Booster Clients:** `{len(session_manager.get_all_clients())}` (`{len(session_manager.helper_bots)}` helper bots)\n"
-            f"> ⚡ **System Status:** `Online & High-Speed`\n"
-            f"> 🔧 **Engine:** `wzgram[fast]`"
+            f"📊 <b>System &amp; Bot Statistics</b>\n\n"
+            f"👤 <b>Main Bot Users:</b> <code>{total_users}</code>\n"
+            f"🤖 <b>Booster Clients:</b> <code>{len(session_manager.get_all_clients())}</code> (<code>{len(session_manager.helper_bots)}</code> helper bots)\n\n"
+            + fs_stats,
+            parse_mode=ParseMode.HTML,
         )
 
     @bot.on_message(filters.command("broadcast"))
@@ -3955,8 +4131,8 @@ def register_handlers(bot):
         ])
         title = page.get("title") or page_slug
         await message.reply(
-            f"📁 **Add Groups** for **{html.escape(str(title))}**\n"
-            f"`/title/{html.escape(page_slug)}`\n\n"
+            f"📁 <b>Add Groups</b> for <b>{html.escape(str(title))}</b>\n"
+            f"<code>/title/{html.escape(page_slug)}</code>\n\n"
             f"Choose which section to configure:",
             reply_markup=kb,
             parse_mode=ParseMode.HTML,
@@ -4060,6 +4236,13 @@ def register_handlers(bot):
             {"$set": {"groups": merged, "updated_at": datetime.datetime.now(datetime.timezone.utc)}},
         )
         _awaiting_addgroups.pop(user.id, None)
+        try:
+            updated_doc = await target_coll.find_one({"slug": page_slug}, {"_id": 0})
+            if updated_doc:
+                from app.utils.autoupdate import broadcast_autoupdate
+                await broadcast_autoupdate(updated_doc, client=client)
+        except Exception as _au_err:
+            logger.debug("autoupdate on /done failed: %s", _au_err)
         total_btns = sum(len(g.get("buttons") or []) for g in added_groups)
         return await message.reply(
             f"✅ **All collected groups saved** for `/{page_slug}`\n\n"
